@@ -2,6 +2,15 @@
   "name": "d365-fno-mcp-server",
   "version": "0.1.0",
   "description": "MCP server for D365 Finance & Operations developers",
+  "keywords": [
+    "d365",
+    "fno",
+    "mcp",
+    "modelcontextprotocol",
+    "x++",
+    "dynamics365",
+    "finance-and-operations"
+  ],
   "bin": {
     "d365-fno-mcp-server": "dist/src/index.js"
   },
@@ -11,6 +20,9 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "clean": "rm -rf dist",
+    "prebuild": "npm run clean",
+    "prepack": "npm run build",
     "typecheck": "tsc --noEmit",
     "dev": "tsx watch src/index.ts",
     "start": "node dist/src/index.js",
