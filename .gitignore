@@ -10,3 +10,4 @@ coverage/
 logs/
 tests/.tmp-packages-*
 *.icloudbak
+tests/.tmp-cli-*

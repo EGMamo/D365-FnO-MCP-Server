@@ -1,82 +1,72 @@
-import 'dotenv/config';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { config, VERSION } from './config.js';
-import { openDb } from './indexer/db.js';
-import { buildIndex } from './indexer/buildIndex.js';
-import { startHttpServer } from './server/httpTransport.js';
-import { startStdioServer } from './server/stdioTransport.js';
-import { logger } from './utils/logger.js';
-import { registerMetadataTools } from './tools/metadata.js';
-import { registerLabelsTools } from './tools/labels.js';
-import { registerGeneratorTools } from './tools/generators.js';
+#!/usr/bin/env node
+import { parseArgs, flagString, HELP_TEXT } from './cli/args.js';
+
+const CLI_VERSION = '0.1.0';
+
+export interface CliResult {
+  code: number;
+  /** True when the command owns the process lifecycle (the server keeps running). */
+  keepAlive?: boolean;
+}
+
+export async function run(argv: string[]): Promise<CliResult> {
+  const { command, flags } = parseArgs(argv);
+
+  if (flags.help === true || flags.h === true || command === 'help') {
+    console.log(HELP_TEXT);
+    return { code: 0 };
+  }
+  if (flags.version === true || flags.v === true || command === 'version') {
+    console.log(CLI_VERSION);
+    return { code: 0 };
+  }
+
+  switch (command) {
+    case 'serve': {
+      // Imported lazily so `index`/`doctor`/`setup` never load the MCP server,
+      // its transports, or the strict runtime config validation.
+      const { startServer } = await import('./server/start.js');
+      await startServer();
+      return { code: 0, keepAlive: true };
+    }
+    case 'index': {
+      const { indexCommand } = await import('./cli/index-command.js');
+      return { code: await indexCommand({ force: flags.force === true || flags.force === 'true' }) };
+    }
+    case 'doctor': {
+      const { doctorCommand } = await import('./cli/doctor.js');
+      return { code: await doctorCommand() };
+    }
+    case 'setup': {
+      const { setupCommand } = await import('./cli/setup.js');
+      const code = await setupCommand({
+        nonInteractive: flags['non-interactive'] === true || flags['non-interactive'] === 'true',
+        packagesDir: flagString(flags, 'packages-dir'),
+        apiKey: flagString(flags, 'api-key'),
+        dbPath: flagString(flags, 'db-path'),
+        transport: flagString(flags, 'transport'),
+      });
+      return { code };
+    }
+    default:
+      console.error(`Unknown command: ${command}\n`);
+      console.error(HELP_TEXT);
+      return { code: 1 };
+  }
+}
 
 async function main() {
-  logger.info('Starting D365 FnO MCP Server', { version: VERSION, transport: config.transport });
+  const { config } = await import('dotenv');
+  config();
 
-  // Open shared SQLite index database
-  const db = openDb(config.indexDbPath);
-  logger.info('Opened SQLite DB', { path: config.indexDbPath });
-
-  /**
-   * Factory: create a new McpServer instance with all tools registered.
-   * Called once per MCP client session. All sessions share the same `db`
-   * connection (better-sqlite3 is synchronous and safe for shared reads).
-   */
-  function createMcpServer(): McpServer {
-    const server = new McpServer({ name: 'd365-fno-mcp-server', version: VERSION });
-
-    registerMetadataTools(server, db);
-    registerLabelsTools(server, db);
-    registerGeneratorTools(server, db);
-
-    return server;
+  const result = await run(process.argv.slice(2));
+  // `serve` keeps the event loop alive on its own; exiting here would kill it.
+  if (!result.keepAlive || result.code !== 0) {
+    process.exit(result.code);
   }
-
-  function startBackgroundIndexing() {
-    buildIndex(db, config.packagesDir, false)
-      .then((stats) => {
-        logger.info('Background indexing complete', { ...stats });
-      })
-      .catch((err: unknown) => {
-        logger.error('Background indexing failed', { message: String(err) });
-      });
-  }
-
-  if (config.transport === 'stdio') {
-    await startStdioServer(createMcpServer, {
-      version: VERSION,
-      onShutdown: () => db.close(),
-    });
-    // stdio clients own the process lifecycle; only index when explicitly asked.
-    if (config.indexOnStart) startBackgroundIndexing();
-    return;
-  }
-
-  startHttpServer(createMcpServer, {
-    port: config.port,
-    mcpApiKey: config.mcpApiKey,
-    version: VERSION,
-    rateLimitMaxRequests: config.rateLimitMaxRequests,
-    rateLimitWindowMs: config.rateLimitWindowMs,
-    requestTimeoutMs: config.requestTimeoutMs,
-    trustProxyHops: config.trustProxyHops,
-    maxConcurrentSessions: config.maxConcurrentSessions,
-    sessionIdleTimeoutMs: config.sessionIdleTimeoutMs,
-  });
-
-  startBackgroundIndexing();
-
-  const shutdown = () => {
-    logger.info('Shutting down...');
-    db.close();
-    process.exit(0);
-  };
-
-  process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
 }
 
 main().catch((err: unknown) => {
-  logger.fatal('Initialization failed', { message: String(err) });
+  console.error(`Fatal: ${String(err)}`);
   process.exit(1);
 });

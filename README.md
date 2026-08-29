@@ -13,6 +13,19 @@ An MCP server for Dynamics 365 Finance & Operations developers, providing tools 
 4. Build project: `npm run build`
 5. Start server: `npm start`
 
+## CLI
+
+After building (or via `npx d365-fno-mcp-server`):
+
+```
+d365-fno-mcp-server serve                  # start the MCP server (default command)
+d365-fno-mcp-server index [--force]        # foreground indexing pass; --force rebuilds the DB
+d365-fno-mcp-server doctor                 # validate environment, exits 1 on failures
+d365-fno-mcp-server setup                  # interactive .env creation
+d365-fno-mcp-server setup --non-interactive \
+    --packages-dir <dir> --api-key <key> [--db-path ./d365_index.db]
+```
+
 ## Tools Provided
 - search_symbols
 - get_table_schema
