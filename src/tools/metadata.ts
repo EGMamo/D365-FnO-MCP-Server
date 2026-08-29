@@ -213,10 +213,13 @@ export function registerMetadataTools(server: McpServer, db: Database) {
 
   server.tool(
     'get_index_staleness',
-    'List indexed objects whose source file changed on disk or no longer exists',
-    { limit: z.number().max(100).default(100) },
-    async ({ limit }) => {
-      const stale = dbUtils.getIndexStaleness(db, limit);
+    'List indexed objects whose source file changed on disk or no longer exists (examines up to 1000 rows)',
+    {
+      limit: z.number().max(100).default(100),
+      maxScan: z.number().max(5000).default(1000),
+    },
+    async ({ limit, maxScan }) => {
+      const stale = await dbUtils.getIndexStaleness(db, limit, maxScan);
       return { content: [{ type: 'text', text: JSON.stringify(stale, null, 2) }] };
     }
   );

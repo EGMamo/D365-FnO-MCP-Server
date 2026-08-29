@@ -20,6 +20,10 @@ function fail(lines: string | string[]): ToolResult {
   return { content: [{ type: 'text', text }], isError: true };
 }
 
+function isNodeError(err: unknown): err is NodeJS.ErrnoException {
+  return err instanceof Error && 'code' in err;
+}
+
 export interface WriterOptions {
   /** Master feature flag. Tools are only registered when true. */
   enableWriteTools: boolean;
@@ -61,7 +65,7 @@ export function registerWriterTools(server: McpServer, db: Database, options: Wr
         })
         .optional(),
     },
-    async ({ tableName, extensionName, packageName, modelName, fields }) => {
+    async ({ tableName, extensionName, packageName, modelName, fields, properties }) => {
       const extNaming = validateNaming(extensionName);
       if (!extNaming.ok) return fail(`Invalid extension name: ${extNaming.error}`);
 
@@ -76,7 +80,14 @@ export function registerWriterTools(server: McpServer, db: Database, options: Wr
       const generated = generateTableExtensionXml(db, {
         targetTable: tableName,
         extensionName,
-        fields: fields.map((f) => ({ name: f.name, edt: f.edt, label: f.labelId })),
+        fields: fields.map((f) => ({
+          name: f.name,
+          edt: f.edt,
+          label: f.labelId,
+          mandatory: f.mandatory,
+          allowEdit: f.allowEdit,
+        })),
+        properties,
       });
       if (generated.isError) return generated;
       const xml = generated.content[0]?.text ?? '';
@@ -100,14 +111,13 @@ export function registerWriterTools(server: McpServer, db: Database, options: Wr
         );
       }
 
-      if (fs.existsSync(targetPath)) {
-        return fail(`Write rejected: '${targetPath}' already exists. Refusing to overwrite.`);
-      }
-
       try {
         fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-        fs.writeFileSync(targetPath, xml, 'utf-8');
+        fs.writeFileSync(targetPath, xml, { encoding: 'utf-8', flag: 'wx' });
       } catch (err) {
+        if (isNodeError(err) && err.code === 'EEXIST') {
+          return fail(`Write rejected: '${targetPath}' already exists. Refusing to overwrite.`);
+        }
         return fail(`Write failed: ${err instanceof Error ? err.message : String(err)}`);
       }
 

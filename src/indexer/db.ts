@@ -519,18 +519,26 @@ export interface StaleEntry {
 /**
  * Compares indexed `file_mtime` values against the files on disk, reporting
  * objects whose source changed since indexing or whose file is gone.
+ *
+ * `limit` caps the number of stale entries returned. `maxScan` caps how many
+ * rows are examined so a healthy large index does not block the event loop.
  */
-export function getIndexStaleness(db: Database, limit: number = 100): StaleEntry[] {
+export async function getIndexStaleness(
+  db: Database,
+  limit: number = 100,
+  maxScan: number = 1000
+): Promise<StaleEntry[]> {
   const rows = db
-    .prepare(`SELECT name, type, file_path, file_mtime FROM ax_objects ORDER BY name`)
-    .all() as { name: string; type: string; file_path: string; file_mtime: number }[];
+    .prepare(`SELECT name, type, file_path, file_mtime FROM ax_objects ORDER BY name LIMIT ?`)
+    .all(maxScan) as { name: string; type: string; file_path: string; file_mtime: number }[];
 
   const stale: StaleEntry[] = [];
   for (const row of rows) {
     if (stale.length >= limit) break;
     let fsMtime: number | 'missing';
     try {
-      fsMtime = Math.floor(fs.statSync(row.file_path).mtimeMs);
+      const stat = await fs.promises.stat(row.file_path);
+      fsMtime = Math.floor(stat.mtimeMs);
     } catch {
       fsMtime = 'missing';
     }

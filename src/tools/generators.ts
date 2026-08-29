@@ -49,6 +49,8 @@ export interface TableExtensionFieldSpec {
   name: string;
   edt: string;
   label?: string;
+  mandatory?: boolean;
+  allowEdit?: boolean;
 }
 
 export interface TableExtensionIndexSpec {
@@ -57,11 +59,17 @@ export interface TableExtensionIndexSpec {
   allowDuplicates?: boolean;
 }
 
+export interface TableExtensionProperties {
+  labelId?: string;
+  saveDataPerCompany?: boolean;
+}
+
 export interface TableExtensionSpec {
   targetTable: string;
   extensionName: string;
   fields?: TableExtensionFieldSpec[];
   indexes?: TableExtensionIndexSpec[];
+  properties?: TableExtensionProperties;
 }
 
 /**
@@ -70,7 +78,7 @@ export interface TableExtensionSpec {
  */
 export function generateTableExtensionXml(
   db: Database,
-  { targetTable, extensionName, fields, indexes }: TableExtensionSpec
+  { targetTable, extensionName, fields, indexes, properties }: TableExtensionSpec
 ): ToolResult {
     const naming = validateNaming(extensionName);
     if (!naming.ok) return fail(`Invalid extension name: ${naming.error}`);
@@ -163,6 +171,8 @@ export function generateTableExtensionXml(
           `    <AxTableField xmlns=""  i:type="AxTableField${edtType}">`,
           `      <Name>${xmlEscape(f.name)}</Name>`,
           f.label ? `      <Label>${xmlEscape(f.label)}</Label>` : '',
+          f.mandatory === true ? `      <Mandatory>Yes</Mandatory>` : '',
+          f.allowEdit === false ? `      <AllowEdit>No</AllowEdit>` : '',
           `      <ExtendedDataType>${xmlEscape(f.edt)}</ExtendedDataType>`,
           `    </AxTableField>`,
         ]
@@ -196,6 +206,10 @@ export function generateTableExtensionXml(
       ...edtWarnings.map((w) => `<!-- WARNING: ${xmlCommentSafe(w)} -->`),
       `<AxTableExtension xmlns:i="http://www.w3.org/2001/XMLSchema-instance">`,
       `  <Name>${xmlEscape(targetTable)}.${xmlEscape(extensionName)}</Name>`,
+      properties?.labelId ? `  <LabelId>${xmlEscape(properties.labelId)}</LabelId>` : '',
+      properties?.saveDataPerCompany !== undefined
+        ? `  <SaveDataPerCompany>${properties.saveDataPerCompany ? 'Yes' : 'No'}</SaveDataPerCompany>`
+        : '',
       `  <Fields>`,
       fieldXml,
       `  </Fields>`,
@@ -355,7 +369,15 @@ export function registerGeneratorTools(server: McpServer, db: Database) {
       targetTable: z.string(),
       extensionName: z.string(),
       fields: z
-        .array(z.object({ name: z.string(), edt: z.string().min(1), label: z.string().optional() }))
+        .array(
+          z.object({
+            name: z.string(),
+            edt: z.string().min(1),
+            label: z.string().optional(),
+            mandatory: z.boolean().optional(),
+            allowEdit: z.boolean().optional(),
+          })
+        )
         .optional(),
       indexes: z
         .array(
@@ -366,9 +388,15 @@ export function registerGeneratorTools(server: McpServer, db: Database) {
           })
         )
         .optional(),
+      properties: z
+        .object({
+          labelId: z.string().optional(),
+          saveDataPerCompany: z.boolean().optional(),
+        })
+        .optional(),
     },
-    async ({ targetTable, extensionName, fields, indexes }) =>
-      generateTableExtensionXml(db, { targetTable, extensionName, fields, indexes })
+    async ({ targetTable, extensionName, fields, indexes, properties }) =>
+      generateTableExtensionXml(db, { targetTable, extensionName, fields, indexes, properties })
   );
 
   server.tool(
