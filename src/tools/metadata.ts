@@ -215,8 +215,8 @@ export function registerMetadataTools(server: McpServer, db: Database) {
     'get_index_staleness',
     'List indexed objects whose source file changed on disk or no longer exists (examines up to 1000 rows)',
     {
-      limit: z.number().max(100).default(100),
-      maxScan: z.number().max(5000).default(1000),
+      limit: z.number().int().min(1).max(100).default(100),
+      maxScan: z.number().int().min(1).max(5000).default(1000),
     },
     async ({ limit, maxScan }) => {
       const stale = await dbUtils.getIndexStaleness(db, limit, maxScan);
