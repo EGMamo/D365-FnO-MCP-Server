@@ -11,3 +11,4 @@ logs/
 tests/.tmp-packages-*
 *.icloudbak
 tests/.tmp-cli-*
+tests/.tmp-metadata-*

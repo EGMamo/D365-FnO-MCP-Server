@@ -9,6 +9,7 @@ import { logger } from '../utils/logger.js';
 import { registerMetadataTools } from '../tools/metadata.js';
 import { registerLabelsTools } from '../tools/labels.js';
 import { registerGeneratorTools } from '../tools/generators.js';
+import { registerKnowledgeResources } from '../tools/knowledge.js';
 
 /** Boots the MCP server on the configured transport. */
 export async function startServer(): Promise<void> {
@@ -29,6 +30,7 @@ export async function startServer(): Promise<void> {
     registerMetadataTools(server, db);
     registerLabelsTools(server, db);
     registerGeneratorTools(server, db);
+    registerKnowledgeResources(server);
 
     return server;
   }

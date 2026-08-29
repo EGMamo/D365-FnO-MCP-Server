@@ -54,6 +54,8 @@
   "license": "MIT",
   "files": [
     "dist",
+    "d365-fno-assistant-knowledge/README.md",
+    "d365-fno-assistant-knowledge/resources/*.md",
     ".env.example",
     "README.md",
     "LICENSE"

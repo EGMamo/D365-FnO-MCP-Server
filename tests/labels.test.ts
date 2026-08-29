@@ -1,0 +1,63 @@
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import type { Database } from 'better-sqlite3';
+import { collectLabelsTools, seedDb, type ToolResult } from './helpers/toolHarness.js';
+
+let db: Database;
+let tools: Map<string, (args: Record<string, unknown>) => Promise<ToolResult>>;
+
+function call(name: string, args: Record<string, unknown> = {}) {
+  const handler = tools.get(name);
+  if (!handler) throw new Error(`Tool ${name} not registered`);
+  return handler(args);
+}
+
+beforeAll(() => {
+  db = seedDb(
+    [{ type: 'Table', name: 'CustTable' }],
+    [
+      { labelId: 'SYS1', value: 'Customer account', language: 'en-US' },
+      { labelId: 'SYS1', value: 'Kundenkonto', language: 'de' },
+      { labelId: 'SYS2', value: 'Sales order line', language: 'en-US' },
+    ]
+  );
+  tools = collectLabelsTools(db);
+});
+
+afterAll(() => {
+  db.close();
+});
+
+describe('resolve_label_by_language', () => {
+  it('defaults to en-US when no language is given', async () => {
+    const res = await call('resolve_label_by_language', { labelId: 'SYS1', language: 'en-US' });
+    expect(res.content[0].text).toBe('Customer account');
+  });
+
+  it('resolves a non-default language and strips a leading @', async () => {
+    const res = await call('resolve_label_by_language', { labelId: '@SYS1', language: 'de' });
+    expect(res.content[0].text).toBe('Kundenkonto');
+  });
+
+  it('returns "not found" for an unknown language', async () => {
+    const res = await call('resolve_label_by_language', { labelId: 'SYS1', language: 'fr' });
+    expect(res.content[0].text).toBe('not found');
+  });
+});
+
+describe('search_labels_fts', () => {
+  it('finds labels by value across languages', async () => {
+    const res = await call('search_labels_fts', { query: 'Customer', limit: 20 });
+    const hits = JSON.parse(res.content[0].text);
+    expect(hits.map((h: { label_id: string }) => h.label_id)).toContain('SYS1');
+  });
+
+  it('filters by language', async () => {
+    const res = await call('search_labels_fts', { query: 'Kundenkonto', language: 'en-US', limit: 20 });
+    expect(JSON.parse(res.content[0].text)).toEqual([]);
+  });
+
+  it('respects the limit', async () => {
+    const res = await call('search_labels_fts', { query: 'e', limit: 1 });
+    expect(JSON.parse(res.content[0].text).length).toBeLessThanOrEqual(1);
+  });
+});

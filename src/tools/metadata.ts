@@ -192,6 +192,36 @@ export function registerMetadataTools(server: McpServer, db: Database) {
   );
 
   server.tool(
+    'list_packages',
+    'List distinct packages present in the index',
+    {},
+    async () => {
+      const results = dbUtils.listPackages(db);
+      return { content: [{ type: 'text', text: JSON.stringify(results, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    'list_models',
+    'List distinct models present in the index',
+    {},
+    async () => {
+      const results = dbUtils.listModels(db);
+      return { content: [{ type: 'text', text: JSON.stringify(results, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    'get_index_staleness',
+    'List indexed objects whose source file changed on disk or no longer exists',
+    { limit: z.number().max(100).default(100) },
+    async ({ limit }) => {
+      const stale = dbUtils.getIndexStaleness(db, limit);
+      return { content: [{ type: 'text', text: JSON.stringify(stale, null, 2) }] };
+    }
+  );
+
+  server.tool(
     'get_index_stats',
     'Index status',
     {},

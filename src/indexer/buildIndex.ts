@@ -272,6 +272,7 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
 
   logger.info('Rebuilding FTS index');
   dbUtils.rebuildFts(db);
+  dbUtils.rebuildLabelsFts(db);
 
   stats.durationMs = Date.now() - startTime;
   logger.info('Indexing complete', { ...stats });

@@ -1,4 +1,5 @@
 import DatabaseConstructor, { Database } from 'better-sqlite3';
+import fs from 'fs';
 
 export interface Xref {
   id?: number | bigint;
@@ -103,6 +104,9 @@ export function openDb(dbPath: string): Database {
 
     CREATE VIRTUAL TABLE IF NOT EXISTS ax_fts
       USING fts5(name, type, package, content=ax_objects, content_rowid=id);
+
+    CREATE VIRTUAL TABLE IF NOT EXISTS ax_labels_fts
+      USING fts5(value, content=ax_labels, content_rowid=id);
   `);
 
   // Lightweight migrations for databases created by earlier versions.
@@ -405,6 +409,142 @@ export function rebuildFts(db: Database) {
   db.exec(`
     INSERT INTO ax_fts(ax_fts) VALUES('rebuild');
   `);
+}
+
+export function rebuildLabelsFts(db: Database) {
+  db.exec(`
+    INSERT INTO ax_labels_fts(ax_labels_fts) VALUES('rebuild');
+  `);
+}
+
+/** Distinct package names currently present in the index. */
+export function listPackages(db: Database): { package: string; objectCount: number }[] {
+  return db
+    .prepare(
+      `SELECT package AS "package", COUNT(*) AS objectCount
+       FROM ax_objects
+       WHERE package <> ''
+       GROUP BY package
+       ORDER BY package`
+    )
+    .all() as { package: string; objectCount: number }[];
+}
+
+/** Distinct model names currently present in the index. */
+export function listModels(db: Database): { model: string; objectCount: number }[] {
+  return db
+    .prepare(
+      `SELECT model AS "model", COUNT(*) AS objectCount
+       FROM ax_objects
+       WHERE model <> ''
+       GROUP BY model
+       ORDER BY model`
+    )
+    .all() as { model: string; objectCount: number }[];
+}
+
+/** Resolves a label ID for a specific language. Returns null when absent. */
+export function resolveLabelByLanguage(
+  db: Database,
+  labelId: string,
+  language: string
+): { label_id: string; language: string; value: string } | null {
+  const cleanId = labelId.startsWith('@') ? labelId.substring(1) : labelId;
+  const row = db
+    .prepare(`SELECT label_id, language, value FROM ax_labels WHERE label_id = ? AND language = ? LIMIT 1`)
+    .get(cleanId, language) as { label_id: string; language: string; value: string } | undefined;
+  return row ?? null;
+}
+
+export interface LabelHit {
+  label_id: string;
+  language: string;
+  value: string;
+}
+
+/**
+ * Full-text label search backed by `ax_labels_fts`, falling back to a LIKE scan
+ * when the FTS table is unavailable or the query has no usable tokens.
+ */
+export function searchLabelsFts(
+  db: Database,
+  query: string,
+  language?: string,
+  limit: number = 20
+): LabelHit[] {
+  const likeSearch = (): LabelHit[] => {
+    let sql = `SELECT label_id, language, value FROM ax_labels WHERE value LIKE ?`;
+    const params: unknown[] = [`%${query}%`];
+    if (language) {
+      sql += ` AND language = ?`;
+      params.push(language);
+    }
+    sql += ` LIMIT ?`;
+    params.push(limit);
+    return db.prepare(sql).all(...params) as LabelHit[];
+  };
+
+  if (!/[A-Za-z0-9]/.test(query)) return likeSearch();
+
+  try {
+    const ftsQuery = `"${query.replace(/"/g, '""')}"`;
+    let sql = `
+      SELECT l.label_id, l.language, l.value
+      FROM ax_labels_fts f
+      JOIN ax_labels l ON l.id = f.rowid
+      WHERE f.ax_labels_fts MATCH ?
+    `;
+    const params: unknown[] = [ftsQuery];
+    if (language) {
+      sql += ` AND l.language = ?`;
+      params.push(language);
+    }
+    sql += ` ORDER BY rank LIMIT ?`;
+    params.push(limit);
+    const rows = db.prepare(sql).all(...params) as LabelHit[];
+    return rows.length > 0 ? rows : likeSearch();
+  } catch {
+    return likeSearch();
+  }
+}
+
+export interface StaleEntry {
+  name: string;
+  type: string;
+  file_path: string;
+  db_mtime: number;
+  fs_mtime: number | 'missing';
+}
+
+/**
+ * Compares indexed `file_mtime` values against the files on disk, reporting
+ * objects whose source changed since indexing or whose file is gone.
+ */
+export function getIndexStaleness(db: Database, limit: number = 100): StaleEntry[] {
+  const rows = db
+    .prepare(`SELECT name, type, file_path, file_mtime FROM ax_objects ORDER BY name`)
+    .all() as { name: string; type: string; file_path: string; file_mtime: number }[];
+
+  const stale: StaleEntry[] = [];
+  for (const row of rows) {
+    if (stale.length >= limit) break;
+    let fsMtime: number | 'missing';
+    try {
+      fsMtime = Math.floor(fs.statSync(row.file_path).mtimeMs);
+    } catch {
+      fsMtime = 'missing';
+    }
+    if (fsMtime === 'missing' || fsMtime > row.file_mtime) {
+      stale.push({
+        name: row.name,
+        type: row.type,
+        file_path: row.file_path,
+        db_mtime: row.file_mtime,
+        fs_mtime: fsMtime,
+      });
+    }
+  }
+  return stale;
 }
 
 export function searchSymbols(db: Database, query: string, type?: string, limit: number = 20) {

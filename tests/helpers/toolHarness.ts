@@ -7,8 +7,12 @@ import {
   upsertMethods,
   upsertProperties,
   upsertLabels,
+  rebuildFts,
+  rebuildLabelsFts,
 } from '../../src/indexer/db.js';
 import { registerGeneratorTools } from '../../src/tools/generators.js';
+import { registerMetadataTools } from '../../src/tools/metadata.js';
+import { registerLabelsTools } from '../../src/tools/labels.js';
 
 export interface ToolResult {
   content: { type: string; text: string }[];
@@ -30,10 +34,39 @@ export function collectGeneratorTools(db: Database): Map<string, Handler> {
   return handlers;
 }
 
+/** Same stand-in, but for the metadata tool registrations. */
+export function collectMetadataTools(db: Database): Map<string, Handler> {
+  const handlers = new Map<string, Handler>();
+  const fakeServer = {
+    tool: (name: string, _desc: string, _schema: unknown, handler: Handler) => {
+      handlers.set(name, handler);
+    },
+  } as unknown as McpServer;
+
+  registerMetadataTools(fakeServer, db);
+  return handlers;
+}
+
+/** Same stand-in, but for the labels tool registrations. */
+export function collectLabelsTools(db: Database): Map<string, Handler> {
+  const handlers = new Map<string, Handler>();
+  const fakeServer = {
+    tool: (name: string, _desc: string, _schema: unknown, handler: Handler) => {
+      handlers.set(name, handler);
+    },
+  } as unknown as McpServer;
+
+  registerLabelsTools(fakeServer, db);
+  return handlers;
+}
+
 export interface SeedObject {
   type: string;
   name: string;
   package?: string;
+  model?: string;
+  file_path?: string;
+  file_mtime?: number;
   raw_xml?: string;
   fields?: { name: string; type?: string; edt?: string }[];
   methods?: {
@@ -48,7 +81,7 @@ export interface SeedObject {
 
 export function seedDb(
   objects: SeedObject[],
-  labels: { labelId: string; value: string }[] = []
+  labels: { labelId: string; value: string; language?: string }[] = []
 ): Database {
   const db = openDb(':memory:');
   for (const obj of objects) {
@@ -56,15 +89,17 @@ export function seedDb(
       type: obj.type,
       name: obj.name,
       package: obj.package ?? 'TestPackage',
-      model: 'TestModel',
-      file_path: `/fake/${obj.name}.xml`,
+      model: obj.model ?? 'TestModel',
+      file_path: obj.file_path ?? `/fake/${obj.name}.xml`,
       raw_xml: obj.raw_xml ?? `<${obj.type}><Name>${obj.name}</Name></${obj.type}>`,
-      file_mtime: 1,
+      file_mtime: obj.file_mtime ?? 1,
     });
     upsertFields(db, id, obj.fields ?? []);
     upsertMethods(db, id, obj.methods ?? []);
     upsertProperties(db, id, obj.properties ?? {});
   }
   if (labels.length > 0) upsertLabels(db, labels);
+  rebuildFts(db);
+  rebuildLabelsFts(db);
   return db;
 }
