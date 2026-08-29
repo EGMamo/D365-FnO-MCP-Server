@@ -45,6 +45,174 @@ function xmlCommentSafe(value: string): string {
     .replace(/[\r\n]+/g, ' ');
 }
 
+export interface TableExtensionFieldSpec {
+  name: string;
+  edt: string;
+  label?: string;
+}
+
+export interface TableExtensionIndexSpec {
+  name: string;
+  fields: string[];
+  allowDuplicates?: boolean;
+}
+
+export interface TableExtensionSpec {
+  targetTable: string;
+  extensionName: string;
+  fields?: TableExtensionFieldSpec[];
+  indexes?: TableExtensionIndexSpec[];
+}
+
+/**
+ * Pure generator for AxTableExtension XML. Performs all grounding/validation and
+ * returns a ToolResult whose text is either the XML or the failure message.
+ */
+export function generateTableExtensionXml(
+  db: Database,
+  { targetTable, extensionName, fields, indexes }: TableExtensionSpec
+): ToolResult {
+    const naming = validateNaming(extensionName);
+    if (!naming.ok) return fail(`Invalid extension name: ${naming.error}`);
+
+    const table = dbUtils.getObjectByName(db, targetTable, 'Table');
+    if (!table) {
+      return fail(
+        `Grounding failed: target table '${targetTable}' was not found in the index. Cannot generate a table extension for a non-existent table.`
+      );
+    }
+
+    const fieldList = fields ?? [];
+    const seenNames = new Map<string, string>();
+    const duplicates: string[] = [];
+    for (const f of fieldList) {
+      const key = f.name.toLowerCase();
+      if (seenNames.has(key)) duplicates.push(f.name);
+      else seenNames.set(key, f.name);
+    }
+    if (duplicates.length > 0) {
+      return fail(
+        `Grounding failed: duplicate field name(s) ${duplicates
+          .map((n) => `'${n}'`)
+          .join(', ')} were requested more than once in this extension.`
+      );
+    }
+
+    const fieldCheck = validateTableFieldEdts(db, fieldList);
+    if (!fieldCheck.ok) return fail(['Grounding failed:', ...fieldCheck.errors]);
+
+    const existingFields = new Set(
+      (table.fields as { name: string }[]).map((f) => f.name.toLowerCase())
+    );
+    const collisions = fieldList.filter((f) => existingFields.has(f.name.toLowerCase()));
+    if (collisions.length > 0) {
+      return fail(
+        `Grounding failed: field(s) ${collisions
+          .map((f) => `'${f.name}'`)
+          .join(', ')} already exist on table '${targetTable}'.`
+      );
+    }
+
+    const labelErrors: string[] = [];
+    for (const f of fieldList) {
+      if (f.label && f.label.startsWith('@') && !resolveLabel(db, f.label)) {
+        labelErrors.push(`Field '${f.name}': label '${f.label}' was not found in the label index.`);
+      }
+    }
+    if (labelErrors.length > 0) return fail(['Grounding failed:', ...labelErrors]);
+
+    const idxList = indexes ?? [];
+    const knownAfterExtension = new Set([
+      ...existingFields,
+      ...fieldList.map((f) => f.name.toLowerCase()),
+    ]);
+    const idxErrors: string[] = [];
+    for (const idx of idxList) {
+      const idxNaming = validateNaming(idx.name);
+      if (!idxNaming.ok) idxErrors.push(`Index '${idx.name}': ${idxNaming.error}`);
+      if (!idx.fields || idx.fields.length === 0) {
+        idxErrors.push(`Index '${idx.name}': at least one field is required.`);
+      }
+      for (const fn of idx.fields ?? []) {
+        if (!knownAfterExtension.has(fn.toLowerCase())) {
+          idxErrors.push(
+            `Index '${idx.name}': field '${fn}' does not exist on '${targetTable}' and is not added by this extension.`
+          );
+        }
+      }
+    }
+    if (idxErrors.length > 0) return fail(['Grounding failed:', ...idxErrors]);
+
+    const VALID_FIELD_TYPES = new Set([
+      'String', 'Int', 'Int64', 'Real', 'Date', 'Time', 'UtcDateTime', 'Enum', 'Guid',
+      'Container', 'Memo', 'Blob', 'Boolean',
+    ]);
+    const edtWarnings: string[] = [];
+    const fieldXml = fieldList
+      .map((f) => {
+        const edt = resolveEdt(db, f.edt);
+        const rawType = (edt?.properties?.edtType || '').trim();
+        let edtType = rawType;
+        if (!edtType || edtType === 'Unknown' || !VALID_FIELD_TYPES.has(edtType)) {
+          edtWarnings.push(
+            `Field '${f.name}': EDT '${f.edt}' has an unresolved base type${rawType ? ` ('${rawType}')` : ''}; defaulted to String. Verify before deployment.`
+          );
+          edtType = 'String';
+        }
+        return [
+          `    <AxTableField xmlns=""  i:type="AxTableField${edtType}">`,
+          `      <Name>${xmlEscape(f.name)}</Name>`,
+          f.label ? `      <Label>${xmlEscape(f.label)}</Label>` : '',
+          `      <ExtendedDataType>${xmlEscape(f.edt)}</ExtendedDataType>`,
+          `    </AxTableField>`,
+        ]
+          .filter(Boolean)
+          .join('\n');
+      })
+      .join('\n');
+
+    const indexXml = idxList
+      .map((idx) => {
+        const idxFields = idx.fields
+          .map(
+            (fn) =>
+              `        <AxTableIndexField>\n          <DataField>${xmlEscape(fn)}</DataField>\n        </AxTableIndexField>`
+          )
+          .join('\n');
+        return [
+          `    <AxTableIndex>`,
+          `      <Name>${xmlEscape(idx.name)}</Name>`,
+          `      <AllowDuplicates>${idx.allowDuplicates ? 'Yes' : 'No'}</AllowDuplicates>`,
+          `      <Fields>`,
+          idxFields,
+          `      </Fields>`,
+          `    </AxTableIndex>`,
+        ].join('\n');
+      })
+      .join('\n');
+
+    const xml = [
+      `<?xml version="1.0" encoding="utf-8"?>`,
+      ...edtWarnings.map((w) => `<!-- WARNING: ${xmlCommentSafe(w)} -->`),
+      `<AxTableExtension xmlns:i="http://www.w3.org/2001/XMLSchema-instance">`,
+      `  <Name>${xmlEscape(targetTable)}.${xmlEscape(extensionName)}</Name>`,
+      `  <Fields>`,
+      fieldXml,
+      `  </Fields>`,
+      `  <FullTextIndexes />`,
+      `  <Indexes>`,
+      indexXml,
+      `  </Indexes>`,
+      `  <Mappings />`,
+      `  <Relations />`,
+      `</AxTableExtension>`,
+    ]
+      .filter((line) => line !== '')
+      .join('\n');
+
+    return ok(xml);
+}
+
 export function registerGeneratorTools(server: McpServer, db: Database) {
   server.tool(
     'create_coc_extension',
@@ -199,147 +367,8 @@ export function registerGeneratorTools(server: McpServer, db: Database) {
         )
         .optional(),
     },
-    async ({ targetTable, extensionName, fields, indexes }) => {
-      const naming = validateNaming(extensionName);
-      if (!naming.ok) return fail(`Invalid extension name: ${naming.error}`);
-
-      const table = dbUtils.getObjectByName(db, targetTable, 'Table');
-      if (!table) {
-        return fail(
-          `Grounding failed: target table '${targetTable}' was not found in the index. Cannot generate a table extension for a non-existent table.`
-        );
-      }
-
-      const fieldList = fields ?? [];
-      const seenNames = new Map<string, string>();
-      const duplicates: string[] = [];
-      for (const f of fieldList) {
-        const key = f.name.toLowerCase();
-        if (seenNames.has(key)) duplicates.push(f.name);
-        else seenNames.set(key, f.name);
-      }
-      if (duplicates.length > 0) {
-        return fail(
-          `Grounding failed: duplicate field name(s) ${duplicates
-            .map((n) => `'${n}'`)
-            .join(', ')} were requested more than once in this extension.`
-        );
-      }
-
-      const fieldCheck = validateTableFieldEdts(db, fieldList);
-      if (!fieldCheck.ok) return fail(['Grounding failed:', ...fieldCheck.errors]);
-
-      const existingFields = new Set(
-        (table.fields as { name: string }[]).map((f) => f.name.toLowerCase())
-      );
-      const collisions = fieldList.filter((f) => existingFields.has(f.name.toLowerCase()));
-      if (collisions.length > 0) {
-        return fail(
-          `Grounding failed: field(s) ${collisions
-            .map((f) => `'${f.name}'`)
-            .join(', ')} already exist on table '${targetTable}'.`
-        );
-      }
-
-      const labelErrors: string[] = [];
-      for (const f of fieldList) {
-        if (f.label && f.label.startsWith('@') && !resolveLabel(db, f.label)) {
-          labelErrors.push(`Field '${f.name}': label '${f.label}' was not found in the label index.`);
-        }
-      }
-      if (labelErrors.length > 0) return fail(['Grounding failed:', ...labelErrors]);
-
-      const idxList = indexes ?? [];
-      const knownAfterExtension = new Set([
-        ...existingFields,
-        ...fieldList.map((f) => f.name.toLowerCase()),
-      ]);
-      const idxErrors: string[] = [];
-      for (const idx of idxList) {
-        const idxNaming = validateNaming(idx.name);
-        if (!idxNaming.ok) idxErrors.push(`Index '${idx.name}': ${idxNaming.error}`);
-        if (!idx.fields || idx.fields.length === 0) {
-          idxErrors.push(`Index '${idx.name}': at least one field is required.`);
-        }
-        for (const fn of idx.fields ?? []) {
-          if (!knownAfterExtension.has(fn.toLowerCase())) {
-            idxErrors.push(
-              `Index '${idx.name}': field '${fn}' does not exist on '${targetTable}' and is not added by this extension.`
-            );
-          }
-        }
-      }
-      if (idxErrors.length > 0) return fail(['Grounding failed:', ...idxErrors]);
-
-      const VALID_FIELD_TYPES = new Set([
-        'String', 'Int', 'Int64', 'Real', 'Date', 'Time', 'UtcDateTime', 'Enum', 'Guid',
-        'Container', 'Memo', 'Blob', 'Boolean',
-      ]);
-      const edtWarnings: string[] = [];
-      const fieldXml = fieldList
-        .map((f) => {
-          const edt = resolveEdt(db, f.edt);
-          const rawType = (edt?.properties?.edtType || '').trim();
-          let edtType = rawType;
-          if (!edtType || edtType === 'Unknown' || !VALID_FIELD_TYPES.has(edtType)) {
-            edtWarnings.push(
-              `Field '${f.name}': EDT '${f.edt}' has an unresolved base type${rawType ? ` ('${rawType}')` : ''}; defaulted to String. Verify before deployment.`
-            );
-            edtType = 'String';
-          }
-          return [
-            `    <AxTableField xmlns=""  i:type="AxTableField${edtType}">`,
-            `      <Name>${xmlEscape(f.name)}</Name>`,
-            f.label ? `      <Label>${xmlEscape(f.label)}</Label>` : '',
-            `      <ExtendedDataType>${xmlEscape(f.edt)}</ExtendedDataType>`,
-            `    </AxTableField>`,
-          ]
-            .filter(Boolean)
-            .join('\n');
-        })
-        .join('\n');
-
-      const indexXml = idxList
-        .map((idx) => {
-          const idxFields = idx.fields
-            .map(
-              (fn) =>
-                `        <AxTableIndexField>\n          <DataField>${xmlEscape(fn)}</DataField>\n        </AxTableIndexField>`
-            )
-            .join('\n');
-          return [
-            `    <AxTableIndex>`,
-            `      <Name>${xmlEscape(idx.name)}</Name>`,
-            `      <AllowDuplicates>${idx.allowDuplicates ? 'Yes' : 'No'}</AllowDuplicates>`,
-            `      <Fields>`,
-            idxFields,
-            `      </Fields>`,
-            `    </AxTableIndex>`,
-          ].join('\n');
-        })
-        .join('\n');
-
-      const xml = [
-        `<?xml version="1.0" encoding="utf-8"?>`,
-        ...edtWarnings.map((w) => `<!-- WARNING: ${xmlCommentSafe(w)} -->`),
-        `<AxTableExtension xmlns:i="http://www.w3.org/2001/XMLSchema-instance">`,
-        `  <Name>${xmlEscape(targetTable)}.${xmlEscape(extensionName)}</Name>`,
-        `  <Fields>`,
-        fieldXml,
-        `  </Fields>`,
-        `  <FullTextIndexes />`,
-        `  <Indexes>`,
-        indexXml,
-        `  </Indexes>`,
-        `  <Mappings />`,
-        `  <Relations />`,
-        `</AxTableExtension>`,
-      ]
-        .filter((line) => line !== '')
-        .join('\n');
-
-      return ok(xml);
-    }
+    async ({ targetTable, extensionName, fields, indexes }) =>
+      generateTableExtensionXml(db, { targetTable, extensionName, fields, indexes })
   );
 
   server.tool(

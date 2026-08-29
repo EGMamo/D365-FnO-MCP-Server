@@ -65,6 +65,8 @@ Configuration comes from environment variables (a `.env` file in the working dir
 | `D365_PACKAGES_DIR` | _(required)_ | Path to `PackagesLocalDirectory`. |
 | `D365_INDEX_DB_PATH` | `./d365_index.db` | Location of the SQLite index file. |
 | `D365_INDEX_ON_START` | `0` | Set to `1` to run a background indexing pass on startup (also enables indexing on start in stdio mode). |
+| `D365_ENABLE_WRITE_TOOLS` | `0` | Set to `1` to register write tools (e.g. `write_table_extension`). Requires `D365_PROJECT_DIR`. |
+| `D365_PROJECT_DIR` | _(empty)_ | Root directory write tools are allowed to write into. Required when `D365_ENABLE_WRITE_TOOLS=1`. |
 | `D365_BYPASS_PRUNE_GUARD` | `0` | Set to `1` to skip the "scan must overlap at least half of the previously indexed objects" prune guard. The zero-scan and parse-error guards still apply. Use only for an intentional large deletion. |
 | `RATE_LIMIT_MAX_REQUESTS` | `500` | Max requests per client IP per rate-limit window. |
 | `RATE_LIMIT_WINDOW_MS` | `900000` | Rate-limit window in milliseconds (15 minutes). |
