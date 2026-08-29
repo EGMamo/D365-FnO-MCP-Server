@@ -38,7 +38,23 @@ beforeAll(() => {
           },
         ],
       },
-      { type: 'Class', name: 'SalesLineTypeBase' },
+      {
+        type: 'Class',
+        name: 'SalesLineTypeBase',
+        methods: [
+          {
+            name: 'baseOnly',
+            accessModifier: 'public',
+            returnType: 'str',
+            params: [{ name: '_arg', type: 'int' }],
+          },
+        ],
+      },
+      {
+        type: 'Class',
+        name: 'SalesLineTypeDerived',
+        properties: { extends: 'SalesLineType' },
+      },
       { type: 'Class', name: 'SysPackable' },
       {
         type: 'Table',
@@ -49,6 +65,7 @@ beforeAll(() => {
       { type: 'Edt', name: 'CustAccount', properties: { edtType: 'String' } },
       { type: 'Edt', name: 'AmountMST', properties: { edtType: 'Real' } },
       { type: 'Edt', name: 'MysteryEdt', properties: { edtType: 'Unknown' } },
+      { type: 'Edt', name: 'HostileEdt', properties: { edtType: '--><Evil/>' } },
       { type: 'Table', name: 'NotAClass' },
     ],
     [{ labelId: 'SYS1', value: 'Account' }]
@@ -168,6 +185,31 @@ describe('create_coc_extension', () => {
     expect(res.content[0].text).toContain('tableStr(CustTable)');
   });
 
+  it('fails when the same method is requested twice', async () => {
+    const res = await call('create_coc_extension', {
+      targetClass: 'SalesLineType',
+      extensionName: 'MySalesLineType_Extension',
+      methods: [{ name: 'insert' }, { name: 'INSERT' }],
+    });
+    expect(res.isError).toBe(true);
+    expect(res.content[0].text).toContain('duplicate');
+    expect(res.content[0].text).not.toContain('[ExtensionOf');
+  });
+
+  it('wraps a method inherited from a base class', async () => {
+    const res = await call('create_coc_extension', {
+      targetClass: 'SalesLineTypeDerived',
+      extensionName: 'MyDerived_Extension',
+      methods: [{ name: 'baseOnly' }],
+    });
+    expect(res.isError).toBeUndefined();
+    const text = res.content[0].text;
+    expect(text).toContain('[ExtensionOf(classStr(SalesLineTypeDerived))]');
+    expect(text).toContain('public str baseOnly(int _arg)');
+    expect(text).toContain('next baseOnly(_arg);');
+    expect(text).toContain('inherited from SalesLineTypeBase');
+  });
+
   it('rejects targeting an existing extension class', async () => {
     const res = await call('create_coc_extension', {
       targetClass: 'SomeThing_Extension',
@@ -262,6 +304,30 @@ describe('create_table_extension', () => {
     expect(xml).not.toContain('AxTableFieldUnknown');
     expect(xml).toContain('AxTableFieldString');
     expect(xml).toContain('WARNING');
+  });
+
+  it('cannot be tricked into closing an XML comment through a warning', async () => {
+    const res = await call('create_table_extension', {
+      targetTable: 'CustTable',
+      extensionName: 'Ext',
+      fields: [{ name: 'MyHostile', edt: 'HostileEdt' }],
+    });
+    expect(res.isError).toBeUndefined();
+    const xml = res.content[0].text;
+    const comment = xml.split('\n').find((l) => l.startsWith('<!--')) as string;
+    expect(comment).toBeDefined();
+    expect(comment.slice(4, -3)).not.toContain('--');
+    expect(xml).not.toContain('<Evil/>');
+  });
+
+  it('rejects a blank EDT value', async () => {
+    const res = await call('create_table_extension', {
+      targetTable: 'CustTable',
+      extensionName: 'Ext',
+      fields: [{ name: 'MyBlank', edt: '   ' }],
+    });
+    expect(res.isError).toBe(true);
+    expect(res.content[0].text).toContain('EDT');
   });
 
   it('fails on an unknown label reference', async () => {

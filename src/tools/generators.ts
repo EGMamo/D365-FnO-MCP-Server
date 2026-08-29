@@ -35,6 +35,16 @@ function xmlEscape(value: string): string {
     .replace(/"/g, '&quot;');
 }
 
+function xmlCommentSafe(value: string): string {
+  // Angle brackets are escaped and every '-' is padded, so neither '--' nor '-->'
+  // can ever be formed inside the generated comment.
+  return value
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/-/g, '- ')
+    .replace(/[\r\n]+/g, ' ');
+}
+
 export function registerGeneratorTools(server: McpServer, db: Database) {
   server.tool(
     'create_coc_extension',
@@ -67,6 +77,21 @@ export function registerGeneratorTools(server: McpServer, db: Database) {
         .map((x) => `Method '${x.m.name}': ${x.r.error}`);
       if (nameErrors.length > 0) return fail(['Grounding failed:', ...nameErrors]);
 
+      const seenMethodNames = new Map<string, string>();
+      const duplicateMethods: string[] = [];
+      for (const m of methods) {
+        const key = m.name.toLowerCase();
+        if (seenMethodNames.has(key)) duplicateMethods.push(m.name);
+        else seenMethodNames.set(key, m.name);
+      }
+      if (duplicateMethods.length > 0) {
+        return fail(
+          `Grounding failed: duplicate method name(s) ${duplicateMethods
+            .map((n) => `'${n}'`)
+            .join(', ')} were requested more than once; the generated class would not compile.`
+        );
+      }
+
       const obj = target.object;
       const wrapperKind = obj.type === 'Table' ? 'tableStr' : obj.type === 'Form' ? 'formStr' : 'classStr';
 
@@ -75,7 +100,7 @@ export function registerGeneratorTools(server: McpServer, db: Database) {
         const existing = validateMethodSignature(db, targetClass, m.name);
         if (!existing) {
           signatureErrors.push(
-            `Method '${m.name}' does not exist on ${obj.type} ${obj.name}. Chain of Command can only wrap existing methods; 'next ${m.name}(...)' would not compile.`
+            `Method '${m.name}' does not exist on ${obj.type} ${obj.name} or any of its base classes. Chain of Command can only wrap existing methods; 'next ${m.name}(...)' would not compile.`
           );
           return null;
         }
@@ -89,7 +114,7 @@ export function registerGeneratorTools(server: McpServer, db: Database) {
           const supplied = extractParamNames(m.params);
           if (supplied.length !== indexedParams.length) {
             signatureErrors.push(
-              `Method '${m.name}': supplied ${supplied.length} parameter(s) but ${obj.name}.${existing.name} declares ${indexedParams.length}.`
+              `Method '${m.name}': supplied ${supplied.length} parameter(s) but ${existing.declaring_object ?? obj.name}.${existing.name} declares ${indexedParams.length}.`
             );
             return null;
           }
@@ -113,7 +138,9 @@ export function registerGeneratorTools(server: McpServer, db: Database) {
       const methodsCode = resolved
         .map((r) => {
           const m = r as NonNullable<typeof r>;
-          const marker = `        // Wraps ${obj.name}.${m.existing.name} (${m.existing.access_modifier || 'public'} ${m.returnType})`;
+          const declaredOn = m.existing.declaring_object ?? obj.name;
+          const inheritedNote = declaredOn.toLowerCase() === obj.name.toLowerCase() ? '' : ` inherited from ${declaredOn}`;
+          const marker = `        // Wraps ${obj.name}.${m.existing.name}${inheritedNote} (${m.existing.access_modifier || 'public'} ${m.returnType})`;
           const args = extractParamNames(m.params).join(', ');
           const nextCall = `next ${m.name}(${args});`;
           const body =
@@ -149,7 +176,7 @@ export function registerGeneratorTools(server: McpServer, db: Database) {
       targetTable: z.string(),
       extensionName: z.string(),
       fields: z
-        .array(z.object({ name: z.string(), edt: z.string(), label: z.string().optional() }))
+        .array(z.object({ name: z.string(), edt: z.string().min(1), label: z.string().optional() }))
         .optional(),
       indexes: z
         .array(
@@ -283,7 +310,7 @@ export function registerGeneratorTools(server: McpServer, db: Database) {
 
       const xml = [
         `<?xml version="1.0" encoding="utf-8"?>`,
-        ...edtWarnings.map((w) => `<!-- WARNING: ${w.replace(/--/g, '- -')} -->`),
+        ...edtWarnings.map((w) => `<!-- WARNING: ${xmlCommentSafe(w)} -->`),
         `<AxTableExtension xmlns:i="http://www.w3.org/2001/XMLSchema-instance">`,
         `  <Name>${xmlEscape(targetTable)}.${xmlEscape(extensionName)}</Name>`,
         `  <Fields>`,

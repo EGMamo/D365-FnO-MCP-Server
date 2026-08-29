@@ -32,7 +32,21 @@ beforeAll(() => {
           },
         ],
       },
-      { type: 'Class', name: 'SalesLineTypeBase' },
+      {
+        type: 'Class',
+        name: 'SalesLineTypeBase',
+        methods: [
+          {
+            name: 'baseOnly',
+            accessModifier: 'public',
+            returnType: 'str',
+            params: [{ name: '_arg', type: 'int' }],
+          },
+        ],
+      },
+      { type: 'Class', name: 'SalesLineTypeDerived', properties: { extends: 'SalesLineType' } },
+      { type: 'Class', name: 'CycleA', properties: { extends: 'CycleB' } },
+      { type: 'Class', name: 'CycleB', properties: { extends: 'CycleA' } },
       {
         type: 'Class',
         name: 'MentionsExtensionOf',
@@ -124,6 +138,24 @@ describe('validateMethodSignature', () => {
     expect(validateMethodSignature(db, 'SalesLineType', 'nope')).toBeNull();
     expect(validateMethodSignature(db, 'Nope', 'insert')).toBeNull();
   });
+  it('resolves methods inherited from a base class', () => {
+    const m = validateMethodSignature(db, 'SalesLineTypeDerived', 'baseOnly');
+    expect(m?.name).toBe('baseOnly');
+    expect(m?.declaring_object).toBe('SalesLineTypeBase');
+    expect(m?.return_type).toBe('str');
+  });
+  it('reports the target itself as the declaring object for own methods', () => {
+    expect(validateMethodSignature(db, 'SalesLineType', 'insert')?.declaring_object).toBe(
+      'SalesLineType'
+    );
+  });
+  it('honours expected parameter count on inherited methods', () => {
+    expect(validateMethodSignature(db, 'SalesLineTypeDerived', 'baseOnly', 1)).not.toBeNull();
+    expect(validateMethodSignature(db, 'SalesLineTypeDerived', 'baseOnly', 2)).toBeNull();
+  });
+  it('terminates on cyclic inheritance chains', () => {
+    expect(validateMethodSignature(db, 'CycleA', 'nope')).toBeNull();
+  });
 });
 
 describe('validateCoCTarget', () => {
@@ -151,6 +183,11 @@ describe('validateTableFieldEdts', () => {
     const res = validateTableFieldEdts(db, [{ name: 'MyField', edt: 'GhostEdt' }]);
     expect(res.ok).toBe(false);
     expect(res.errors[0]).toContain('GhostEdt');
+  });
+  it('rejects blank EDT values', () => {
+    const res = validateTableFieldEdts(db, [{ name: 'MyField', edt: '   ' }]);
+    expect(res.ok).toBe(false);
+    expect(res.errors[0]).toContain('must not be empty');
   });
   it('rejects invalid field names', () => {
     expect(validateTableFieldEdts(db, [{ name: '1Bad', edt: 'CustAccount' }]).ok).toBe(false);

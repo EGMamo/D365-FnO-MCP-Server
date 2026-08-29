@@ -8,6 +8,8 @@ export interface AxMethod {
   params?: unknown[];
   is_static?: number;
   is_abstract?: number;
+  /** Name of the object the method was declared on, when inherited from a base class. */
+  declaring_object?: string;
 }
 
 export interface AxObject {
@@ -91,9 +93,22 @@ export function resolveLabel(db: Database, labelId: string): string | null {
   return row ? row.value : null;
 }
 
+/** Maximum number of base classes walked when resolving an inherited method. */
+const MAX_INHERITANCE_DEPTH = 10;
+
+function findMethodOn(obj: AxObject, methodName: string): AxMethod | undefined {
+  return obj.methods?.find((m) => m.name.toLowerCase() === methodName.toLowerCase());
+}
+
+function baseNameOf(obj: AxObject): string {
+  const value = obj.properties?.extends ?? obj.properties?.Extends ?? '';
+  return typeof value === 'string' ? value.trim() : '';
+}
+
 /**
- * Find a method on a class or table. When expectedParamCount is supplied the
- * method only matches if its indexed parameter count agrees.
+ * Find a method on a class or table, walking the `extends` chain (bounded depth)
+ * so Chain of Command on inherited methods resolves. When expectedParamCount is
+ * supplied the method only matches if its indexed parameter count agrees.
  */
 export function validateMethodSignature(
   db: Database,
@@ -101,15 +116,34 @@ export function validateMethodSignature(
   methodName: string,
   expectedParamCount?: number
 ): AxMethod | null {
-  const obj = resolveClassOrTable(db, classOrTableName) ?? get(db, classOrTableName, 'Form');
+  let obj = resolveClassOrTable(db, classOrTableName) ?? get(db, classOrTableName, 'Form');
   if (!obj) return null;
-  const method = obj.methods.find((m) => m.name.toLowerCase() === methodName.toLowerCase());
+
+  let method: AxMethod | undefined;
+  let declaringObject = obj.name;
+  const visited = new Set<string>([obj.name.toLowerCase()]);
+
+  for (let depth = 0; depth <= MAX_INHERITANCE_DEPTH; depth++) {
+    const found = findMethodOn(obj, methodName);
+    if (found) {
+      method = found;
+      declaringObject = obj.name;
+      break;
+    }
+    const baseName = baseNameOf(obj);
+    if (!baseName || visited.has(baseName.toLowerCase())) break;
+    visited.add(baseName.toLowerCase());
+    const base = resolveClassOrTable(db, baseName);
+    if (!base) break;
+    obj = base;
+  }
+
   if (!method) return null;
   if (expectedParamCount !== undefined) {
     const actual = Array.isArray(method.params) ? method.params.length : 0;
     if (actual !== expectedParamCount) return null;
   }
-  return method;
+  return { ...method, declaring_object: declaringObject };
 }
 
 export interface CoCTargetResult {
@@ -200,8 +234,12 @@ export function validateTableFieldEdts(db: Database, fields: FieldSpec[]): Field
   for (const field of fields ?? []) {
     const naming = validateNaming(field.name);
     if (!naming.ok) errors.push(`Field '${field.name}': ${naming.error}`);
-    if (field.edt) {
-      if (!resolveEdt(db, field.edt)) {
+    if (field.edt !== undefined) {
+      if (field.edt.trim() === '') {
+        errors.push(
+          `Field '${field.name}': EDT must not be empty. Supply a valid Extended Data Type name.`
+        );
+      } else if (!resolveEdt(db, field.edt)) {
         errors.push(`Field '${field.name}': EDT '${field.edt}' was not found in the index.`);
       }
     }
