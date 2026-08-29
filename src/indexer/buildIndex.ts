@@ -60,24 +60,112 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
       const xrefs: any[] = [];
 
       switch (file.type) {
-        case 'Table':
+        case 'Table': {
           parsed = parser.parseAxTable(content, file.name, file.package);
           dbUtils.upsertFields(db, objectId, parsed.fields);
           dbUtils.upsertMethods(db, objectId, parsed.methods);
+          dbUtils.upsertProperties(db, objectId, {
+            label: parsed.label,
+            extends: parsed.extends,
+            saveDataPerCompany: parsed.saveDataPerCompany,
+            indexes: parsed.indexes.join(','),
+          });
           if (parsed.extends) {
             xrefs.push({ fromType: 'Table', fromName: file.name, toType: 'Table', toName: parsed.extends, xrefKind: 'extends' });
           }
+          for (const f of parsed.fields) {
+            if (f.edt) {
+              xrefs.push({ fromType: 'Table', fromName: file.name, toType: 'Edt', toName: f.edt, xrefKind: 'uses' });
+            }
+          }
           break;
-        case 'Class':
+        }
+        case 'Class': {
           parsed = parser.parseAxClass(content, file.name, file.package);
           dbUtils.upsertMethods(db, objectId, parsed.methods);
+          dbUtils.upsertProperties(db, objectId, {
+            extends: parsed.extends,
+            implements: parsed.implements.join(','),
+            isAbstract: parsed.isAbstract,
+            isFinal: parsed.isFinal,
+          });
           if (parsed.extends) {
             xrefs.push({ fromType: 'Class', fromName: file.name, toType: 'Class', toName: parsed.extends, xrefKind: 'extends' });
           }
+          for (const iface of parsed.implements) {
+            xrefs.push({ fromType: 'Class', fromName: file.name, toType: 'Class', toName: iface, xrefKind: 'implements' });
+          }
           break;
+        }
+        case 'Enum': {
+          parsed = parser.parseAxEnum(content, file.name, file.package);
+          dbUtils.upsertEnumValues(db, objectId, parsed.values);
+          dbUtils.upsertProperties(db, objectId, { label: parsed.label, isExtensible: parsed.isExtensible });
+          break;
+        }
+        case 'Form': {
+          parsed = parser.parseAxForm(content, file.name, file.package);
+          dbUtils.upsertDataSources(db, objectId, parsed.dataSources);
+          dbUtils.upsertFormControls(db, objectId, parsed.controls);
+          dbUtils.upsertProperties(db, objectId, {
+            pattern: parsed.pattern,
+            patternVersion: parsed.patternVersion,
+            caption: parsed.caption,
+          });
+          for (const ds of parsed.dataSources) {
+            if (ds.table) {
+              xrefs.push({ fromType: 'Form', fromName: file.name, toType: 'Table', toName: ds.table, xrefKind: 'datasource' });
+            }
+          }
+          break;
+        }
+        case 'Query': {
+          parsed = parser.parseAxQuery(content, file.name, file.package);
+          dbUtils.upsertDataSources(db, objectId, parsed.dataSources);
+          dbUtils.upsertProperties(db, objectId, { title: parsed.title });
+          for (const ds of parsed.dataSources) {
+            if (ds.table) {
+              xrefs.push({ fromType: 'Query', fromName: file.name, toType: 'Table', toName: ds.table, xrefKind: 'datasource' });
+            }
+          }
+          break;
+        }
+        case 'DataEntity': {
+          parsed = parser.parseAxDataEntity(content, file.name, file.package);
+          dbUtils.upsertFields(db, objectId, parsed.fields);
+          dbUtils.upsertDataSources(db, objectId, parsed.dataSources);
+          dbUtils.upsertProperties(db, objectId, {
+            publicEntityName: parsed.publicEntityName,
+            publicCollectionName: parsed.publicCollectionName,
+            stagingTable: parsed.stagingTable,
+            primaryKey: parsed.primaryKey,
+            isPublic: parsed.isPublic,
+          });
+          for (const ds of parsed.dataSources) {
+            if (ds.table) {
+              xrefs.push({ fromType: 'DataEntity', fromName: file.name, toType: 'Table', toName: ds.table, xrefKind: 'datasource' });
+            }
+          }
+          break;
+        }
+        case 'Edt': {
+          parsed = parser.parseAxEdt(content, file.name, file.package);
+          dbUtils.upsertProperties(db, objectId, {
+            extends: parsed.extends,
+            label: parsed.labelId,
+            helpText: parsed.helpText,
+            stringSize: parsed.stringSize,
+            edtType: parsed.edtType,
+          });
+          if (parsed.extends) {
+            xrefs.push({ fromType: 'Edt', fromName: file.name, toType: 'Edt', toName: parsed.extends, xrefKind: 'extends' });
+          }
+          break;
+        }
       }
       
       if (xrefs.length > 0) {
+        dbUtils.deleteXrefsFrom(db, file.type, file.name);
         dbUtils.upsertXref(db, xrefs);
       }
 
@@ -92,7 +180,15 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
 
   stats.durationMs = Date.now() - startTime;
   console.log(`[D365-MCP] ${new Date().toISOString()} INFO Indexing complete. Added: ${stats.added}, Updated: ${stats.updated}, Skipped: ${stats.skipped}, Errors: ${stats.errors} in ${stats.durationMs}ms`);
-  
+
+  const summary = getIndexStats(db);
+  const byType = Object.entries(summary.byType)
+    .map(([t, c]) => `${t}=${c}`)
+    .join(', ');
+  console.log(
+    `[D365-MCP] ${new Date().toISOString()} INFO Index summary: ${summary.totalObjects} objects (${byType || 'none'}), ${summary.totalLabels} labels`
+  );
+
   return stats;
 }
 

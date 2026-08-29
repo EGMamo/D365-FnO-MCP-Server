@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AxEnum>
+  <Name>SampleEnum</Name>
+  <Label>@SYS999</Label>
+  <IsExtensible>Yes</IsExtensible>
+  <EnumValues>
+    <AxEnumValue>
+      <Name>None</Name>
+      <Value>0</Value>
+      <Label>@SYS1000</Label>
+    </AxEnumValue>
+    <AxEnumValue>
+      <Name>Open</Name>
+      <Value>1</Value>
+    </AxEnumValue>
+    <AxEnumValue>
+      <Name>Closed</Name>
+      <Value>2</Value>
+    </AxEnumValue>
+  </EnumValues>
+</AxEnum>

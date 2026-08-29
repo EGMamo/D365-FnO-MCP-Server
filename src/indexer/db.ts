@@ -34,7 +34,9 @@ export function openDb(dbPath: string): Database {
       edt TEXT,
       label_id TEXT,
       mandatory INTEGER DEFAULT 0,
-      allow_edit INTEGER DEFAULT 1
+      allow_edit INTEGER DEFAULT 1,
+      data_source TEXT DEFAULT '',
+      data_field TEXT DEFAULT ''
     );
 
     CREATE TABLE IF NOT EXISTS ax_methods (
@@ -65,9 +67,47 @@ export function openDb(dbPath: string): Database {
       xref_kind TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS ax_enum_values (
+      id INTEGER PRIMARY KEY,
+      object_id INTEGER REFERENCES ax_objects(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      value TEXT,
+      label_id TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS ax_datasources (
+      id INTEGER PRIMARY KEY,
+      object_id INTEGER REFERENCES ax_objects(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      table_name TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS ax_form_controls (
+      id INTEGER PRIMARY KEY,
+      object_id INTEGER REFERENCES ax_objects(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      type TEXT,
+      parent_name TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS ax_properties (
+      id INTEGER PRIMARY KEY,
+      object_id INTEGER REFERENCES ax_objects(id) ON DELETE CASCADE,
+      key TEXT NOT NULL,
+      value TEXT,
+      UNIQUE(object_id, key)
+    );
+
     CREATE VIRTUAL TABLE IF NOT EXISTS ax_fts
       USING fts5(name, type, package, content=ax_objects, content_rowid=id);
   `);
+
+  // Lightweight migrations for databases created by earlier versions.
+  const fieldCols = new Set(
+    (db.prepare(`PRAGMA table_info(ax_fields)`).all() as { name: string }[]).map((c) => c.name)
+  );
+  if (!fieldCols.has('data_source')) db.exec(`ALTER TABLE ax_fields ADD COLUMN data_source TEXT DEFAULT ''`);
+  if (!fieldCols.has('data_field')) db.exec(`ALTER TABLE ax_fields ADD COLUMN data_field TEXT DEFAULT ''`);
 
   return db;
 }
@@ -88,24 +128,126 @@ export function upsertObject(db: Database, obj: any): number | bigint {
   return result.id;
 }
 
-export function upsertFields(db: Database, objectId: number | bigint, fields: any[]) {
+export interface FieldInput {
+  name: string;
+  type?: string;
+  edt?: string;
+  labelId?: string;
+  mandatory?: boolean;
+  allowEdit?: boolean;
+  dataSource?: string;
+  dataField?: string;
+}
+
+export function upsertFields(db: Database, objectId: number | bigint, fields: FieldInput[]) {
   const deleteStmt = db.prepare(`DELETE FROM ax_fields WHERE object_id = ?`);
   deleteStmt.run(objectId);
 
   if (!fields || fields.length === 0) return;
 
   const insertStmt = db.prepare(`
-    INSERT INTO ax_fields (object_id, name, type, edt, label_id, mandatory, allow_edit)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO ax_fields (object_id, name, type, edt, label_id, mandatory, allow_edit, data_source, data_field)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
-  const insertMany = db.transaction((items) => {
+  const insertMany = db.transaction((items: FieldInput[]) => {
     for (const item of items) {
-      insertStmt.run(objectId, item.name, item.type || '', item.edt || '', item.labelId || '', item.mandatory ? 1 : 0, item.allowEdit === false ? 0 : 1);
+      insertStmt.run(
+        objectId,
+        item.name,
+        item.type || '',
+        item.edt || '',
+        item.labelId || '',
+        item.mandatory ? 1 : 0,
+        item.allowEdit === false ? 0 : 1,
+        item.dataSource || '',
+        item.dataField || ''
+      );
     }
   });
 
   insertMany(fields);
+}
+
+export interface EnumValueInput {
+  name: string;
+  value?: number | string;
+  labelId?: string;
+}
+
+export function upsertEnumValues(db: Database, objectId: number | bigint, values: EnumValueInput[]) {
+  db.prepare(`DELETE FROM ax_enum_values WHERE object_id = ?`).run(objectId);
+  if (!values || values.length === 0) return;
+
+  const stmt = db.prepare(
+    `INSERT INTO ax_enum_values (object_id, name, value, label_id) VALUES (?, ?, ?, ?)`
+  );
+  const insertMany = db.transaction((items: EnumValueInput[]) => {
+    for (const item of items) {
+      stmt.run(objectId, item.name, item.value === undefined ? '' : String(item.value), item.labelId || '');
+    }
+  });
+  insertMany(values);
+}
+
+export interface DataSourceInput {
+  name: string;
+  table?: string;
+}
+
+export function upsertDataSources(db: Database, objectId: number | bigint, dataSources: DataSourceInput[]) {
+  db.prepare(`DELETE FROM ax_datasources WHERE object_id = ?`).run(objectId);
+  if (!dataSources || dataSources.length === 0) return;
+
+  const stmt = db.prepare(`INSERT INTO ax_datasources (object_id, name, table_name) VALUES (?, ?, ?)`);
+  const insertMany = db.transaction((items: DataSourceInput[]) => {
+    for (const item of items) {
+      stmt.run(objectId, item.name, item.table || '');
+    }
+  });
+  insertMany(dataSources);
+}
+
+export interface ControlInput {
+  name: string;
+  type?: string;
+  children?: ControlInput[];
+}
+
+export function upsertFormControls(db: Database, objectId: number | bigint, controls: ControlInput[]) {
+  db.prepare(`DELETE FROM ax_form_controls WHERE object_id = ?`).run(objectId);
+  if (!controls || controls.length === 0) return;
+
+  const stmt = db.prepare(
+    `INSERT INTO ax_form_controls (object_id, name, type, parent_name) VALUES (?, ?, ?, ?)`
+  );
+  const insertMany = db.transaction((items: ControlInput[]) => {
+    const walk = (list: ControlInput[], parent: string) => {
+      for (const c of list) {
+        stmt.run(objectId, c.name, c.type || '', parent);
+        if (c.children && c.children.length > 0) walk(c.children, c.name);
+      }
+    };
+    walk(items, '');
+  });
+  insertMany(controls);
+}
+
+export function upsertProperties(db: Database, objectId: number | bigint, props: Record<string, unknown>) {
+  db.prepare(`DELETE FROM ax_properties WHERE object_id = ?`).run(objectId);
+  const entries = Object.entries(props).filter(([, v]) => v !== undefined && v !== null && v !== '');
+  if (entries.length === 0) return;
+
+  const stmt = db.prepare(
+    `INSERT INTO ax_properties (object_id, key, value) VALUES (?, ?, ?)
+     ON CONFLICT(object_id, key) DO UPDATE SET value = excluded.value`
+  );
+  const insertMany = db.transaction((items: [string, unknown][]) => {
+    for (const [key, value] of items) {
+      stmt.run(objectId, key, String(value));
+    }
+  });
+  insertMany(entries);
 }
 
 export function upsertMethods(db: Database, objectId: number | bigint, methods: any[]) {
@@ -164,6 +306,10 @@ export function upsertXref(db: Database, xrefs: any[]) {
   insertMany(xrefs);
 }
 
+export function deleteXrefsFrom(db: Database, fromType: string, fromName: string) {
+  db.prepare(`DELETE FROM ax_xref WHERE from_type = ? AND from_name = ?`).run(fromType, fromName);
+}
+
 export function rebuildFts(db: Database) {
   db.exec(`
     INSERT INTO ax_fts(ax_fts) VALUES('rebuild');
@@ -201,8 +347,29 @@ export function getObjectByName(db: Database, name: string, type: string) {
 
   const fields = db.prepare(`SELECT * FROM ax_fields WHERE object_id = ?`).all(obj.id);
   const methods = db.prepare(`SELECT * FROM ax_methods WHERE object_id = ?`).all(obj.id);
+  const enumValues = db.prepare(`SELECT name, value, label_id FROM ax_enum_values WHERE object_id = ?`).all(obj.id);
+  const dataSources = db
+    .prepare(`SELECT name, table_name FROM ax_datasources WHERE object_id = ?`)
+    .all(obj.id);
+  const controls = db
+    .prepare(`SELECT name, type, parent_name FROM ax_form_controls WHERE object_id = ?`)
+    .all(obj.id);
+  const propRows = db.prepare(`SELECT key, value FROM ax_properties WHERE object_id = ?`).all(obj.id) as {
+    key: string;
+    value: string;
+  }[];
+  const properties: Record<string, string> = {};
+  for (const row of propRows) properties[row.key] = row.value;
 
-  return { ...obj, fields, methods: methods.map((m: any) => ({ ...m, params: JSON.parse(m.params) })) };
+  return {
+    ...obj,
+    fields,
+    methods: methods.map((m: any) => ({ ...m, params: JSON.parse(m.params || '[]') })),
+    enumValues,
+    dataSources,
+    controls,
+    properties,
+  };
 }
 
 export function getXrefsTo(db: Database, name: string, type: string): Xref[] {

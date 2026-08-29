@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AxEdt xmlns:i="http://www.w3.org/2001/XMLSchema-instance" i:type="AxEdtString">
+  <Name>SampleEdt</Name>
+  <Extends>CustAccount</Extends>
+  <Label>@SYS4001</Label>
+  <HelpText>@SYS4002</HelpText>
+  <StringSize>30</StringSize>
+</AxEdt>

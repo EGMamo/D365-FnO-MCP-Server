@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AxQuery>
+  <Name>SampleQuery</Name>
+  <Title>@SYS77</Title>
+  <DataSources>
+    <AxQuerySimpleRootDataSource>
+      <Name>SampleTable</Name>
+      <Table>SampleTable</Table>
+      <DataSources>
+        <AxQuerySimpleEmbeddedDataSource>
+          <Name>ChildTable</Name>
+          <Table>ChildTable</Table>
+        </AxQuerySimpleEmbeddedDataSource>
+      </DataSources>
+    </AxQuerySimpleRootDataSource>
+  </DataSources>
+</AxQuery>

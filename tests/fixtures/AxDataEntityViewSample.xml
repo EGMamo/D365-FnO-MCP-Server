@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AxDataEntityView xmlns:i="http://www.w3.org/2001/XMLSchema-instance">
+  <Name>SampleEntity</Name>
+  <PublicEntityName>SampleEntity</PublicEntityName>
+  <PublicCollectionName>SampleEntities</PublicCollectionName>
+  <DataManagementStagingTable>SampleEntityStaging</DataManagementStagingTable>
+  <PrimaryKey>SampleEntityKey</PrimaryKey>
+  <IsPublic>Yes</IsPublic>
+  <Fields>
+    <AxDataEntityViewField>
+      <Name>AccountNum</Name>
+      <DataSource>SampleTable</DataSource>
+      <DataField>AccountNum</DataField>
+      <Mandatory>Yes</Mandatory>
+    </AxDataEntityViewField>
+    <AxDataEntityViewField>
+      <Name>Amount</Name>
+      <DataSource>SampleTable</DataSource>
+      <DataField>Amount</DataField>
+    </AxDataEntityViewField>
+  </Fields>
+  <ViewMetadata>
+    <DataSources>
+      <AxQuerySimpleRootDataSource>
+        <Name>SampleTable</Name>
+        <Table>SampleTable</Table>
+      </AxQuerySimpleRootDataSource>
+    </DataSources>
+  </ViewMetadata>
+</AxDataEntityView>

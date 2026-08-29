@@ -81,7 +81,14 @@ export function registerMetadataTools(server: McpServer, db: Database) {
     async ({ enumName }) => {
       const obj = dbUtils.getObjectByName(db, enumName, 'Enum');
       if (!obj) return { content: [{ type: 'text', text: `Enum ${enumName} not found.` }] };
-      return { content: [{ type: 'text', text: JSON.stringify(obj, null, 2) }] };
+      const result = {
+        name: obj.name,
+        package: obj.package,
+        label: obj.properties.label ?? '',
+        isExtensible: obj.properties.isExtensible === 'true',
+        values: obj.enumValues,
+      };
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     }
   );
 
@@ -92,7 +99,16 @@ export function registerMetadataTools(server: McpServer, db: Database) {
     async ({ edtName }) => {
       const obj = dbUtils.getObjectByName(db, edtName, 'Edt');
       if (!obj) return { content: [{ type: 'text', text: `Edt ${edtName} not found.` }] };
-      return { content: [{ type: 'text', text: JSON.stringify(obj, null, 2) }] };
+      const result = {
+        name: obj.name,
+        package: obj.package,
+        extends: obj.properties.extends ?? '',
+        label: obj.properties.label ?? '',
+        helpText: obj.properties.helpText ?? '',
+        stringSize: Number(obj.properties.stringSize ?? 0),
+        edtType: obj.properties.edtType ?? '',
+      };
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     }
   );
 
@@ -103,7 +119,54 @@ export function registerMetadataTools(server: McpServer, db: Database) {
     async ({ formName }) => {
       const obj = dbUtils.getObjectByName(db, formName, 'Form');
       if (!obj) return { content: [{ type: 'text', text: `Form ${formName} not found.` }] };
-      return { content: [{ type: 'text', text: JSON.stringify(obj, null, 2) }] };
+      const result = {
+        name: obj.name,
+        package: obj.package,
+        pattern: obj.properties.pattern ?? '',
+        caption: obj.properties.caption ?? '',
+        dataSources: obj.dataSources,
+        controls: obj.controls,
+      };
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    'get_query_datasources',
+    'Query datasource info',
+    { queryName: z.string() },
+    async ({ queryName }) => {
+      const obj = dbUtils.getObjectByName(db, queryName, 'Query');
+      if (!obj) return { content: [{ type: 'text', text: `Query ${queryName} not found.` }] };
+      const result = {
+        name: obj.name,
+        package: obj.package,
+        title: obj.properties.title ?? '',
+        dataSources: obj.dataSources,
+      };
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    'get_data_entity_details',
+    'Data entity fields and datasources',
+    { entityName: z.string() },
+    async ({ entityName }) => {
+      const obj = dbUtils.getObjectByName(db, entityName, 'DataEntity');
+      if (!obj) return { content: [{ type: 'text', text: `DataEntity ${entityName} not found.` }] };
+      const result = {
+        name: obj.name,
+        package: obj.package,
+        publicEntityName: obj.properties.publicEntityName ?? '',
+        publicCollectionName: obj.properties.publicCollectionName ?? '',
+        stagingTable: obj.properties.stagingTable ?? '',
+        primaryKey: obj.properties.primaryKey ?? '',
+        isPublic: obj.properties.isPublic === 'true',
+        fields: obj.fields,
+        dataSources: obj.dataSources,
+      };
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     }
   );
 

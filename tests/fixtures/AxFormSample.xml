@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AxForm xmlns:i="http://www.w3.org/2001/XMLSchema-instance">
+  <Name>SampleForm</Name>
+  <DataSources>
+    <AxFormDataSource>
+      <Name>SampleTable</Name>
+      <Table>SampleTable</Table>
+    </AxFormDataSource>
+  </DataSources>
+  <Design>
+    <Caption>@SYS55</Caption>
+    <Pattern>SimpleListDetails</Pattern>
+    <PatternVersion>1.1</PatternVersion>
+    <Controls>
+      <AxFormControl i:type="AxFormGroupControl">
+        <Name>MainGroup</Name>
+        <Controls>
+          <AxFormControl i:type="AxFormStringControl">
+            <Name>AccountNum</Name>
+          </AxFormControl>
+        </Controls>
+      </AxFormControl>
+      <AxFormControl i:type="AxFormGridControl">
+        <Name>Grid</Name>
+      </AxFormControl>
+    </Controls>
+  </Design>
+</AxForm>

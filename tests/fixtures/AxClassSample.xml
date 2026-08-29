@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AxClass xmlns:i="http://www.w3.org/2001/XMLSchema-instance">
+  <Name>SampleClass</Name>
+  <Extends>RunBaseBatch</Extends>
+  <Implements>
+    <AxClassImplement>
+      <Name>SysPackable</Name>
+    </AxClassImplement>
+  </Implements>
+  <SourceCode>
+    <Declaration><![CDATA[
+class SampleClass extends RunBaseBatch implements SysPackable
+{
+    int counter;
+}
+]]></Declaration>
+  </SourceCode>
+  <Source><![CDATA[
+class SampleClass extends RunBaseBatch implements SysPackable
+{
+    // a comment
+    public static SampleClass construct()
+    {
+        return new SampleClass();
+    }
+
+    /* block
+       comment */
+    protected str buildMessage(
+        str _prefix,
+        int _count)
+    {
+        return _prefix;
+    }
+
+    private void run()
+    {
+        info(this.buildMessage('x', 1));
+    }
+
+    public abstract container pack()
+    {
+    }
+}
+]]></Source>
+</AxClass>

@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AxTable xmlns:i="http://www.w3.org/2001/XMLSchema-instance">
+  <Name>SampleTable</Name>
+  <Extends>BaseTable</Extends>
+  <Label>@SYS12345</Label>
+  <SaveDataPerCompany>Yes</SaveDataPerCompany>
+  <Methods>
+    <Method>
+      <Name>find</Name>
+      <Source><![CDATA[
+    public static SampleTable find(SampleId _sampleId, boolean _forUpdate = false)
+    {
+        SampleTable sampleTable;
+        return sampleTable;
+    }
+]]></Source>
+    </Method>
+  </Methods>
+  <Fields>
+    <AxTableField i:type="AxTableFieldString">
+      <Name>AccountNum</Name>
+      <ExtendedDataType>CustAccount</ExtendedDataType>
+      <Label>@SYS1</Label>
+      <Mandatory>Yes</Mandatory>
+    </AxTableField>
+    <AxTableField i:type="AxTableFieldInt">
+      <Name>LineNum</Name>
+      <AllowEdit>No</AllowEdit>
+    </AxTableField>
+    <AxTableField i:type="AxTableFieldReal">
+      <Name>Amount</Name>
+    </AxTableField>
+  </Fields>
+  <Indexes>
+    <AxTableIndex>
+      <Name>AccountIdx</Name>
+    </AxTableIndex>
+  </Indexes>
+</AxTable>
