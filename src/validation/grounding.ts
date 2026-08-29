@@ -59,6 +59,12 @@ export function resolveClassOrTable(db: Database, name: string): AxObject | null
   return get(db, name, 'Class') ?? get(db, name, 'Table');
 }
 
+/** Resolve a Class by name. Returns null when the name is unknown or is not a class. */
+export function resolveClass(db: Database, name: string): AxObject | null {
+  if (!name) return null;
+  return get(db, name, 'Class');
+}
+
 /** Resolve any indexable AOT object by name, trying each known type. */
 export function resolveAnyObject(db: Database, name: string): AxObject | null {
   if (!name) return null;
@@ -112,6 +118,30 @@ export interface CoCTargetResult {
   error?: string;
 }
 
+/** Matches the X++ attribute form `[ExtensionOf(...)]` rather than any mention of the word. */
+const EXTENSION_OF_ATTRIBUTE_RE = /\[\s*ExtensionOf\s*\(/i;
+
+/** Remove XML, X++ line and block comments so attribute detection ignores commented-out code. */
+function stripXppComments(source: string): string {
+  return source
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/\/\/[^\n]*/g, ' ');
+}
+
+/**
+ * Split an X++ parameter list into its parameter identifiers, ignoring any
+ * default values (`boolean _skip = false` yields `_skip`).
+ */
+export function extractParamNames(params: string): string[] {
+  return (params || '')
+    .split(',')
+    .map((p) => p.split('=')[0].trim())
+    .filter(Boolean)
+    .map((p) => p.split(/\s+/).pop() as string)
+    .filter(Boolean);
+}
+
 /**
  * Verify that a Chain of Command target exists and is a real base object,
  * not itself an extension class.
@@ -135,7 +165,11 @@ export function validateCoCTarget(db: Database, className: string): CoCTargetRes
   }
 
   const isFinal = obj.properties?.isFinal === 'true' || obj.properties?.IsFinal === 'true';
-  const isExtensionOf = typeof obj.raw_xml === 'string' && /ExtensionOf/i.test(obj.raw_xml);
+  const declarationSource =
+    obj.properties?.declaration || obj.properties?.Declaration || obj.raw_xml || '';
+  const isExtensionOf =
+    typeof declarationSource === 'string' &&
+    EXTENSION_OF_ATTRIBUTE_RE.test(stripXppComments(declarationSource));
   if (isExtensionOf) {
     return {
       ok: false,

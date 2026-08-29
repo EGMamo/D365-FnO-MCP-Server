@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { Database } from 'better-sqlite3';
 import {
+  extractParamNames,
+  resolveClass,
   resolveClassOrTable,
   resolveEdt,
   resolveLabel,
@@ -31,6 +33,12 @@ beforeAll(() => {
         ],
       },
       { type: 'Class', name: 'SalesLineTypeBase' },
+      {
+        type: 'Class',
+        name: 'MentionsExtensionOf',
+        raw_xml:
+          '<AxClass><Name>MentionsExtensionOf</Name><Source>// this class is not an ExtensionOf anything\nclass MentionsExtensionOf {}</Source></AxClass>',
+      },
       { type: 'Class', name: 'SysPackable' },
       {
         type: 'Class',
@@ -60,6 +68,30 @@ describe('resolveClassOrTable', () => {
   });
   it('returns null for unknown names', () => {
     expect(resolveClassOrTable(db, 'NoSuchThing')).toBeNull();
+  });
+});
+
+describe('resolveClass', () => {
+  it('resolves a class', () => {
+    expect(resolveClass(db, 'SalesLineType')?.type).toBe('Class');
+  });
+  it('does not resolve non-class objects', () => {
+    expect(resolveClass(db, 'CustTable')).toBeNull();
+    expect(resolveClass(db, 'CustAccount')).toBeNull();
+  });
+});
+
+describe('extractParamNames', () => {
+  it('strips default values', () => {
+    expect(extractParamNames("boolean _skip = false, str _s = '', int _i = 0")).toEqual([
+      '_skip',
+      '_s',
+      '_i',
+    ]);
+  });
+  it('handles plain and empty lists', () => {
+    expect(extractParamNames('SalesLine _line')).toEqual(['_line']);
+    expect(extractParamNames('')).toEqual([]);
   });
 });
 
@@ -105,6 +137,9 @@ describe('validateCoCTarget', () => {
   });
   it('rejects existing extension classes', () => {
     expect(validateCoCTarget(db, 'SalesLineType_Extension').ok).toBe(false);
+  });
+  it('does not treat a commented-out or textual ExtensionOf mention as an extension', () => {
+    expect(validateCoCTarget(db, 'MentionsExtensionOf').ok).toBe(true);
   });
 });
 
