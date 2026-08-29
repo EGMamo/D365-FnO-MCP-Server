@@ -4,8 +4,15 @@ export interface ParsedArgs {
   positionals: string[];
 }
 
+/** Short aliases expanded to their long flag names. */
+const SHORT_FLAGS: Record<string, string> = {
+  h: 'help',
+  v: 'version',
+};
+
 /**
- * Minimal argv parser supporting `--flag`, `--flag=value` and `--flag value`.
+ * Minimal argv parser supporting `--flag`, `--flag=value`, `--flag value`,
+ * and the `-h` / `-v` short aliases.
  * Kept dependency-free on purpose: the CLI surface is small and stable.
  */
 export function parseArgs(argv: string[]): ParsedArgs {
@@ -15,7 +22,12 @@ export function parseArgs(argv: string[]): ParsedArgs {
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (!arg.startsWith('--')) {
-      positionals.push(arg);
+      const short = arg.length === 2 && arg.startsWith('-') ? SHORT_FLAGS[arg.slice(1)] : undefined;
+      if (short) {
+        flags[short] = true;
+      } else {
+        positionals.push(arg);
+      }
       continue;
     }
 
@@ -27,7 +39,9 @@ export function parseArgs(argv: string[]): ParsedArgs {
     }
 
     const next = argv[i + 1];
-    if (next !== undefined && !next.startsWith('--')) {
+    const nextIsShortFlag =
+      next !== undefined && next.length === 2 && next.startsWith('-') && next[1] in SHORT_FLAGS;
+    if (next !== undefined && !next.startsWith('--') && !nextIsShortFlag) {
       flags[body] = next;
       i++;
     } else {
@@ -47,15 +61,18 @@ export function flagString(flags: Record<string, string | boolean>, name: string
 export const HELP_TEXT = `d365-fno-mcp-server <command> [options]
 
 Commands:
-  serve                     Start the MCP server (default)
+  serve                     Start the MCP server (default command)
   index [--force]           Run a foreground indexing pass
-  doctor                    Validate environment and report issues
+  doctor                    Validate environment and report issues (exit 1 on failure)
   setup [--non-interactive] Create a .env configuration file
       --packages-dir <dir>  D365 PackagesLocalDirectory path
-      --api-key <key>       MCP API key (>= 32 chars)
+      --api-key <key>       MCP API key (>= 32 chars; generated when omitted)
       --db-path <path>      SQLite index path (default ./d365_index.db)
+      --transport <mode>    http or stdio (default http)
 
 Options:
-  -h, --help                Show this help
+  -h, --help                Show help
   -v, --version             Show version
+
+Flags accept --flag, --flag=value, and --flag value forms.
 `;

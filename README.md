@@ -26,11 +26,13 @@ npm run build
 npm link          # exposes the `d365-fno-mcp-server` binary globally
 ```
 
-Or run without installing:
+Alternatively, install the local checkout globally:
 
 ```bash
-npx d365-fno-mcp-server --help
+npm install -g .
 ```
+
+The package is not published to npm yet, so `npx d365-fno-mcp-server` is not available.
 
 ## Quick start
 
