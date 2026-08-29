@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import type { AddressInfo } from 'net';
 import type { Server } from 'http';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -218,5 +218,44 @@ describe('session lifecycle', () => {
     expect(results.filter((s) => s === 200).length).toBeLessThanOrEqual(2);
     expect(results.filter((s) => s === 503).length).toBeGreaterThan(0);
     expect(sessions.size).toBeLessThanOrEqual(2);
+  });
+
+  it('releases the slot when initialize does not complete', async () => {
+    const { app, sessions } = makeApp(
+      () =>
+        ({
+          connect: () => Promise.reject(new Error('connect failed')),
+          close: vi.fn().mockResolvedValue(undefined),
+        }) as unknown as McpServer,
+    );
+    const url = await listen(app);
+
+    const res = await fetch(`${url}/mcp`, {
+      method: 'POST',
+      headers: initHeaders,
+      body: JSON.stringify(initBody),
+    });
+
+    expect(res.status).toBe(500);
+    expect(sessions.size).toBe(0);
+  });
+
+  it('closes idle sessions via the sweep', async () => {
+    const { app, sessions } = makeApp(undefined, {
+      sessionIdleTimeoutMs: 50,
+      sessionSweepIntervalMs: 25,
+    });
+    const url = await listen(app);
+
+    const res = await fetch(`${url}/mcp`, {
+      method: 'POST',
+      headers: initHeaders,
+      body: JSON.stringify(initBody),
+    });
+    expect(res.status).toBe(200);
+    expect(sessions.size).toBe(1);
+
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(sessions.size).toBe(0);
   });
 });

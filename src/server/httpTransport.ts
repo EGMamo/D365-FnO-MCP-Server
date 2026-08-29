@@ -19,6 +19,7 @@ export interface HttpTransportOptions {
   trustProxyHops?: number;
   maxConcurrentSessions?: number;
   sessionIdleTimeoutMs?: number;
+  sessionSweepIntervalMs?: number;
 }
 
 interface JsonRpcErrorBody {
@@ -71,6 +72,7 @@ export function createHttpApp(createMcpServer: ServerFactory, options: HttpTrans
   const trustProxyHops = options.trustProxyHops ?? 0;
   const maxConcurrentSessions = options.maxConcurrentSessions ?? 100;
   const sessionIdleTimeoutMs = options.sessionIdleTimeoutMs ?? 30 * 60 * 1000;
+  const sessionSweepIntervalMs = options.sessionSweepIntervalMs ?? SESSION_SWEEP_INTERVAL_MS;
 
   /**
    * Resolve the client IP. `req.ip` is only trustworthy when a known number of
@@ -191,7 +193,7 @@ export function createHttpApp(createMcpServer: ServerFactory, options: HttpTrans
       if (now - entry.lastActivity <= sessionIdleTimeoutMs) continue;
       closeSession(sid, entry, 'idle');
     }
-  }, SESSION_SWEEP_INTERVAL_MS);
+  }, sessionSweepIntervalMs);
   sweep.unref?.();
   app.locals.sessionSweep = sweep;
   app.locals.sessions = sessions;
@@ -235,6 +237,14 @@ export function createHttpApp(createMcpServer: ServerFactory, options: HttpTrans
         res
           .status(400)
           .json(jsonRpcError(-32600, 'Bad Request: mcp-session-id header required for non-initialize requests', firstId(req.body)));
+        return;
+      }
+
+      // Pre-check the cap before allocating any transport or McpServer. The
+      // post-reservation check below still guards the tiny race window.
+      if (sessions.size >= maxConcurrentSessions) {
+        logger.warn('Session limit reached', { active: sessions.size, max: maxConcurrentSessions });
+        res.status(503).json(jsonRpcError(-32000, 'Server busy: maximum concurrent sessions reached'));
         return;
       }
 
