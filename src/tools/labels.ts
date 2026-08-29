@@ -46,7 +46,7 @@ export function registerLabelsTools(server: McpServer, db: Database) {
   server.tool(
     'search_labels_fts',
     'Full-text search across label values, optionally scoped to one language',
-    { query: z.string(), language: z.string().optional(), limit: z.number().default(20) },
+    { query: z.string(), language: z.string().optional(), limit: z.number().int().min(1).max(500).default(20) },
     async ({ query, language, limit }) => {
       const labels = searchLabelsFts(db, query, language, limit);
       return { content: [{ type: 'text', text: JSON.stringify(labels, null, 2) }] };
