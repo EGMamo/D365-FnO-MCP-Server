@@ -12,6 +12,8 @@ export interface Xref {
 export function openDb(dbPath: string): Database {
   const db = new DatabaseConstructor(dbPath);
   db.pragma('journal_mode = WAL');
+  // Required for ON DELETE CASCADE on child tables (SQLite defaults to off).
+  db.pragma('foreign_keys = ON');
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS ax_objects (
@@ -55,6 +57,7 @@ export function openDb(dbPath: string): Database {
       label_id TEXT NOT NULL,
       language TEXT NOT NULL DEFAULT 'en-US',
       value TEXT NOT NULL,
+      source_file TEXT NOT NULL DEFAULT '',
       UNIQUE(label_id, language)
     );
 
@@ -108,6 +111,13 @@ export function openDb(dbPath: string): Database {
   );
   if (!fieldCols.has('data_source')) db.exec(`ALTER TABLE ax_fields ADD COLUMN data_source TEXT DEFAULT ''`);
   if (!fieldCols.has('data_field')) db.exec(`ALTER TABLE ax_fields ADD COLUMN data_field TEXT DEFAULT ''`);
+
+  const labelCols = new Set(
+    (db.prepare(`PRAGMA table_info(ax_labels)`).all() as { name: string }[]).map((c) => c.name)
+  );
+  if (!labelCols.has('source_file')) {
+    db.exec(`ALTER TABLE ax_labels ADD COLUMN source_file TEXT NOT NULL DEFAULT ''`);
+  }
 
   return db;
 }
@@ -270,23 +280,79 @@ export function upsertMethods(db: Database, objectId: number | bigint, methods: 
   insertMany(methods);
 }
 
-export function upsertLabels(db: Database, labels: any[]) {
+export function upsertLabels(db: Database, labels: any[], sourceFile: string = '') {
+  if (sourceFile) {
+    // Drop labels previously sourced from this file so removed entries don't linger.
+    db.prepare(`DELETE FROM ax_labels WHERE source_file = ?`).run(sourceFile);
+  }
   if (!labels || labels.length === 0) return;
 
   const insertStmt = db.prepare(`
-    INSERT INTO ax_labels (label_id, language, value)
-    VALUES (?, ?, ?)
+    INSERT INTO ax_labels (label_id, language, value, source_file)
+    VALUES (?, ?, ?, ?)
     ON CONFLICT(label_id, language) DO UPDATE SET
-      value = excluded.value
+      value = excluded.value,
+      source_file = excluded.source_file
   `);
 
   const insertMany = db.transaction((items) => {
     for (const item of items) {
-      insertStmt.run(item.labelId, item.language || 'en-US', item.value);
+      insertStmt.run(item.labelId, item.language || 'en-US', item.value, item.sourceFile || sourceFile);
     }
   });
 
   insertMany(labels);
+}
+
+export interface PruneStats {
+  objects: number;
+  labels: number;
+  xrefs: number;
+}
+
+/**
+ * Remove objects/labels whose backing files were not seen during an index run,
+ * plus any xrefs left dangling by those deletions.
+ */
+export function prune(db: Database, seenObjectFiles: Set<string>, seenLabelFiles: Set<string>): PruneStats {
+  const stale = db
+    .prepare(`SELECT id, type, name, file_path FROM ax_objects`)
+    .all() as { id: number; type: string; name: string; file_path: string }[];
+
+  const doomed = stale.filter((row) => !seenObjectFiles.has(row.file_path));
+
+  const deleteObject = db.prepare(`DELETE FROM ax_objects WHERE id = ?`);
+  const deleteXrefs = db.prepare(`DELETE FROM ax_xref WHERE from_type = ? AND from_name = ?`);
+  const run = db.transaction((rows: typeof doomed) => {
+    for (const row of rows) {
+      deleteObject.run(row.id);
+      deleteXrefs.run(row.type, row.name);
+    }
+  });
+  run(doomed);
+
+  // Labels with an empty source_file predate source tracking; leave them alone.
+  const labelRows = db
+    .prepare(`SELECT id, source_file FROM ax_labels WHERE source_file <> ''`)
+    .all() as { id: number; source_file: string }[];
+  const doomedLabels = labelRows.filter((row) => !seenLabelFiles.has(row.source_file));
+  const deleteLabel = db.prepare(`DELETE FROM ax_labels WHERE id = ?`);
+  const runLabels = db.transaction((rows: typeof doomedLabels) => {
+    for (const row of rows) deleteLabel.run(row.id);
+  });
+  runLabels(doomedLabels);
+
+  // Xrefs pointing at objects that no longer exist stay valid as "unresolved"
+  // references, but xrefs *from* deleted objects are meaningless.
+  const orphaned = db
+    .prepare(
+      `DELETE FROM ax_xref WHERE NOT EXISTS (
+         SELECT 1 FROM ax_objects o WHERE o.type = ax_xref.from_type AND o.name = ax_xref.from_name
+       )`
+    )
+    .run();
+
+  return { objects: doomed.length, labels: doomedLabels.length, xrefs: orphaned.changes };
 }
 
 export function upsertXref(db: Database, xrefs: any[]) {

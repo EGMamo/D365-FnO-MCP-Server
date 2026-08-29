@@ -1,10 +1,11 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import type { Database } from 'better-sqlite3';
 import { openDb, getObjectByName, getXrefsFrom, searchSymbols } from '../src/indexer/db.js';
 import { buildIndex, getIndexStats } from '../src/indexer/buildIndex.js';
+import { logger } from '../src/utils/logger.js';
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const fixturesDir = path.join(testDir, 'fixtures');
@@ -164,5 +165,121 @@ describe('buildIndex with fixtures', () => {
     expect(stats.skipped).toBe(stats.total - 1);
     expect(stats.added).toBe(0);
     expect(stats.errors).toBe(0);
+    expect(stats.deleted).toBe(0);
+    expect(stats.collisions).toBe(0);
+  });
+});
+
+describe('index lifecycle: pruning, renames and collisions', () => {
+  let db: Database;
+  let root: string;
+
+  beforeEach(async () => {
+    root = fs.mkdtempSync(path.join(testDir, '.tmp-lifecycle-'));
+    stagePackages(root);
+    db = openDb(':memory:');
+    await buildIndex(db, root, true);
+  });
+
+  afterEach(() => {
+    db.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('prunes objects whose file was removed from disk', async () => {
+    fs.rmSync(path.join(root, 'TestPackage', 'TestModel', 'AxClass', 'SampleClass.xml'));
+
+    const stats = await buildIndex(db, root, false);
+
+    expect(stats.deleted).toBe(1);
+    expect(getObjectByName(db, 'SampleClass', 'Class')).toBeNull();
+    expect(getXrefsFrom(db, 'SampleClass', 'Class')).toEqual([]);
+    expect(getObjectByName(db, 'SampleTable', 'Table')).not.toBeNull();
+    const results = searchSymbols(db, 'SampleClass') as { name: string }[];
+    expect(results.some((r) => r.name === 'SampleClass')).toBe(false);
+  });
+
+  it('updates file_path on rename without leaving a stale row', async () => {
+    const dir = path.join(root, 'TestPackage', 'TestModel', 'AxClass');
+    const oldPath = path.join(dir, 'SampleClass.xml');
+    const newDir = path.join(root, 'OtherPackage', 'OtherModel', 'AxClass');
+    fs.mkdirSync(newDir, { recursive: true });
+    const newPath = path.join(newDir, 'SampleClass.xml');
+    fs.copyFileSync(oldPath, newPath);
+    fs.rmSync(oldPath);
+
+    const stats = await buildIndex(db, root, false);
+
+    expect(stats.deleted).toBe(0);
+    const rows = db
+      .prepare(`SELECT file_path, package FROM ax_objects WHERE type = 'Class' AND name = 'SampleClass'`)
+      .all() as { file_path: string; package: string }[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0].file_path.replace(/\\/g, '/')).toBe(newPath.replace(/\\/g, '/'));
+    expect(rows[0].package).toBe('OtherPackage');
+  });
+
+  it('logs a collision when two files define the same type and name', async () => {
+    const dupDir = path.join(root, 'DupPackage', 'DupModel', 'AxClass');
+    fs.mkdirSync(dupDir, { recursive: true });
+    fs.copyFileSync(
+      path.join(root, 'TestPackage', 'TestModel', 'AxClass', 'SampleClass.xml'),
+      path.join(dupDir, 'SampleClass.xml')
+    );
+
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    try {
+      const stats = await buildIndex(db, root, false);
+      expect(stats.collisions).toBe(1);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringMatching(/^Collision: Class SampleClass defined in both .+ and .+$/),
+        expect.anything()
+      );
+    } finally {
+      warn.mockRestore();
+    }
+
+    const rows = db
+      .prepare(`SELECT file_path FROM ax_objects WHERE type = 'Class' AND name = 'SampleClass'`)
+      .all();
+    expect(rows).toHaveLength(1);
+  });
+
+  it('prunes labels when their label file is removed', async () => {
+    const labelPath = path.join(
+      root,
+      'TestPackage',
+      'TestModel',
+      'AxLabelFile',
+      'SampleLabels_en-US.label.txt'
+    );
+    const sourced = db
+      .prepare(`SELECT COUNT(*) as count FROM ax_labels WHERE source_file <> ''`)
+      .get() as { count: number };
+    expect(sourced.count).toBe(2);
+
+    fs.rmSync(labelPath);
+    await buildIndex(db, root, false);
+
+    expect(getIndexStats(db).totalLabels).toBe(0);
+  });
+
+  it('re-indexing a label file replaces its previous labels', async () => {
+    const labelPath = path.join(
+      root,
+      'TestPackage',
+      'TestModel',
+      'AxLabelFile',
+      'SampleLabels_en-US.label.txt'
+    );
+    fs.writeFileSync(labelPath, 'SYS1=Account renamed\n');
+
+    await buildIndex(db, root, false);
+
+    const rows = db.prepare(`SELECT label_id, value FROM ax_labels`).all() as {
+      label_id: string;
+      value: string;
+    }[];
+    expect(rows).toEqual([{ label_id: 'SYS1', value: 'Account renamed' }]);
   });
 });

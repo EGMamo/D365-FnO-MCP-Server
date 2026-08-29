@@ -11,14 +11,30 @@ export interface IndexStats {
   updated: number;
   skipped: number;
   errors: number;
+  deleted: number;
+  collisions: number;
   durationMs: number;
 }
 
 export async function buildIndex(db: Database, packagesDir: string, force: boolean = false): Promise<IndexStats> {
   const startTime = Date.now();
-  const stats: IndexStats = { total: 0, added: 0, updated: 0, skipped: 0, errors: 0, durationMs: 0 };
+  const stats: IndexStats = {
+    total: 0,
+    added: 0,
+    updated: 0,
+    skipped: 0,
+    errors: 0,
+    deleted: 0,
+    collisions: 0,
+    durationMs: 0,
+  };
 
   logger.info('Starting indexing', { packagesDir });
+
+  const seenObjectFiles = new Set<string>();
+  const seenLabelFiles = new Set<string>();
+  // (type|name) -> file path of the object that won the key during this run.
+  const seenKeys = new Map<string, string>();
 
   for await (const file of scanPackagesDir(packagesDir)) {
     stats.total++;
@@ -27,10 +43,33 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
       logger.info('Indexing progress', { files: stats.total });
     }
 
-    try {
-      const existing = db.prepare(`SELECT id, file_mtime FROM ax_objects WHERE name = ? AND type = ?`).get(file.name, file.type) as any;
+    if (file.type === 'Label') {
+      seenLabelFiles.add(file.filePath);
+    } else {
+      seenObjectFiles.add(file.filePath);
 
-      if (!force && existing && existing.file_mtime >= file.mtime) {
+      const key = `${file.type}|${file.name}`;
+      const winner = seenKeys.get(key);
+      if (winner !== undefined) {
+        stats.collisions++;
+        logger.warn(`Collision: ${file.type} ${file.name} defined in both ${winner} and ${file.filePath}`, {
+          type: file.type,
+          name: file.name,
+          keptPath: winner,
+          ignoredPath: file.filePath,
+        });
+        continue;
+      }
+      seenKeys.set(key, file.filePath);
+    }
+
+    try {
+      const existing = db.prepare(`SELECT id, file_mtime, file_path FROM ax_objects WHERE name = ? AND type = ?`).get(file.name, file.type) as any;
+
+      // A path change (rename/move) must always be re-indexed, even when the
+      // mtime suggests the content is unchanged.
+      const samePath = existing?.file_path === file.filePath;
+      if (!force && existing && samePath && existing.file_mtime >= file.mtime) {
         stats.skipped++;
         continue;
       }
@@ -39,7 +78,11 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
 
       if (file.type === 'Label') {
         const labels = parser.parseLabels(content);
-        dbUtils.upsertLabels(db, labels.map(l => ({ ...l, language: file.name.split('_')[1] || 'en-US' })));
+        dbUtils.upsertLabels(
+          db,
+          labels.map(l => ({ ...l, language: file.name.split('_')[1] || 'en-US' })),
+          file.filePath
+        );
         stats.updated++;
         continue;
       }
@@ -178,6 +221,12 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
       stats.errors++;
       logger.error('Failed to index file', { filePath: file.filePath, message: String(err) });
     }
+  }
+
+  const pruned = dbUtils.prune(db, seenObjectFiles, seenLabelFiles);
+  stats.deleted = pruned.objects;
+  if (pruned.objects > 0 || pruned.labels > 0 || pruned.xrefs > 0) {
+    logger.info('Pruned stale index entries', { ...pruned });
   }
 
   logger.info('Rebuilding FTS index');

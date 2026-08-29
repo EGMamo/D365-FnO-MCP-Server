@@ -48,6 +48,8 @@ export async function indexCommand(
     console.log(`  added         : ${stats.added}`);
     console.log(`  updated       : ${stats.updated}`);
     console.log(`  skipped       : ${stats.skipped}`);
+    console.log(`  deleted       : ${stats.deleted}`);
+    console.log(`  collisions    : ${stats.collisions}`);
     console.log(`  errors        : ${stats.errors}`);
     console.log(`  duration      : ${stats.durationMs}ms`);
     console.log(`  objects in db : ${summary.totalObjects}`);
