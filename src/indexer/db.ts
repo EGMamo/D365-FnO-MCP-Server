@@ -304,6 +304,11 @@ export function upsertLabels(db: Database, labels: any[], sourceFile: string = '
   insertMany(labels);
 }
 
+/** Current number of indexed objects, used to sanity-check a scan before pruning. */
+export function countObjects(db: Database): number {
+  return (db.prepare(`SELECT COUNT(*) as count FROM ax_objects`).get() as { count: number }).count;
+}
+
 export interface PruneStats {
   objects: number;
   labels: number;

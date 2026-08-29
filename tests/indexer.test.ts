@@ -328,3 +328,87 @@ describe('index lifecycle: pruning, renames and collisions', () => {
     expect(rows).toEqual([{ label_id: 'SYS1', value: 'Account renamed' }]);
   });
 });
+
+describe('prune guard: partially available packages directory', () => {
+  const dbs: Database[] = [];
+  const roots: string[] = [];
+
+  function stageClasses(names: string[]): string {
+    const root = fs.mkdtempSync(path.join(testDir, '.tmp-partial-'));
+    roots.push(root);
+    const dir = path.join(root, 'TestPackage', 'TestModel', 'AxClass');
+    fs.mkdirSync(dir, { recursive: true });
+    for (const name of names) {
+      fs.copyFileSync(path.join(fixturesDir, 'AxClassSample.xml'), path.join(dir, `${name}.xml`));
+    }
+    return root;
+  }
+
+  function openTracked(): Database {
+    const db = openDb(':memory:');
+    dbs.push(db);
+    return db;
+  }
+
+  afterEach(() => {
+    for (const db of dbs.splice(0)) db.close();
+    for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('does not prune when only a fraction of the indexed objects is present', async () => {
+    const full = stageClasses(['ClassA', 'ClassB', 'ClassC']);
+    const db = openTracked();
+    await buildIndex(db, full, true);
+    expect(getIndexStats(db).totalObjects).toBe(3);
+
+    const partial = stageClasses(['ClassA']);
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    try {
+      const stats = await buildIndex(db, partial, false);
+      expect(stats.deleted).toBe(0);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('Pruning skipped: scanned 1 objects vs 3 existing'),
+        expect.anything()
+      );
+    } finally {
+      warn.mockRestore();
+    }
+
+    expect(getIndexStats(db).totalObjects).toBe(3);
+    expect(getObjectByName(db, 'ClassB', 'Class')).not.toBeNull();
+    expect(getObjectByName(db, 'ClassC', 'Class')).not.toBeNull();
+  });
+
+  it('prunes when the scan still covers at least half of the indexed objects', async () => {
+    const root = stageClasses(['ClassA', 'ClassB', 'ClassC']);
+    const db = openTracked();
+    await buildIndex(db, root, true);
+
+    fs.rmSync(path.join(root, 'TestPackage', 'TestModel', 'AxClass', 'ClassC.xml'));
+    const stats = await buildIndex(db, root, false);
+
+    expect(stats.deleted).toBe(1);
+    expect(getObjectByName(db, 'ClassC', 'Class')).toBeNull();
+    expect(getObjectByName(db, 'ClassA', 'Class')).not.toBeNull();
+    expect(getObjectByName(db, 'ClassB', 'Class')).not.toBeNull();
+  });
+
+  it('keeps a single indexed object when the scan finds nothing', async () => {
+    const root = stageClasses(['ClassA']);
+    const db = openTracked();
+    await buildIndex(db, root, true);
+
+    const emptyRoot = fs.mkdtempSync(path.join(testDir, '.tmp-partial-empty-'));
+    roots.push(emptyRoot);
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    try {
+      const stats = await buildIndex(db, emptyRoot, false);
+      expect(stats.total).toBe(0);
+      expect(stats.deleted).toBe(0);
+    } finally {
+      warn.mockRestore();
+    }
+
+    expect(getObjectByName(db, 'ClassA', 'Class')).not.toBeNull();
+  });
+});

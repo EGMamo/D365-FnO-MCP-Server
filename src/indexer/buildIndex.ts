@@ -8,6 +8,9 @@ import { logger } from '../utils/logger.js';
 /** Above this share of failed parses the scan is treated as untrustworthy and pruning is skipped. */
 const MAX_PRUNE_ERROR_RATIO = 0.5;
 
+/** Minimum share of the already-indexed objects a scan must find before pruning is allowed. */
+const MIN_SCANNED_OBJECT_RATIO = 0.5;
+
 export interface IndexStats {
   total: number;
   added: number;
@@ -227,9 +230,12 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
   }
 
   // Pruning deletes every indexed row whose file was not seen during this scan.
-  // That is only safe when the scan itself was trustworthy: an empty or mostly
-  // failing scan usually means a bad/unmounted packages directory, not deletions.
+  // That is only safe when the scan itself was trustworthy: an empty, mostly
+  // failing, or partially available packages directory usually means a bad or
+  // half-mounted source tree, not real deletions.
   const errorRatio = stats.total > 0 ? stats.errors / stats.total : 0;
+  const existingCount = dbUtils.countObjects(db);
+  const scannedObjectCount = seenObjectFiles.size;
   if (stats.total === 0) {
     logger.warn('Skipping prune: no files were scanned', { packagesDir });
   } else if (errorRatio > MAX_PRUNE_ERROR_RATIO) {
@@ -239,6 +245,11 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
       errors: stats.errors,
       errorRatio,
     });
+  } else if (existingCount > 0 && scannedObjectCount < existingCount * MIN_SCANNED_OBJECT_RATIO) {
+    logger.warn(
+      `Pruning skipped: scanned ${scannedObjectCount} objects vs ${existingCount} existing (below ${MIN_SCANNED_OBJECT_RATIO * 100}% threshold)`,
+      { packagesDir, scannedObjectCount, existingCount, minRatio: MIN_SCANNED_OBJECT_RATIO }
+    );
   } else {
     const pruned = dbUtils.prune(db, seenObjectFiles, seenLabelFiles);
     stats.deleted = pruned.objects;
