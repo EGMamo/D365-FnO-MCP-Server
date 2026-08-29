@@ -1,12 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <AxClass xmlns:i="http://www.w3.org/2001/XMLSchema-instance">
   <Name>SampleClass</Name>
-  <Extends>RunBaseBatch</Extends>
-  <Implements>
-    <AxClassImplement>
-      <Name>SysPackable</Name>
-    </AxClassImplement>
-  </Implements>
   <SourceCode>
     <Declaration><![CDATA[
 class SampleClass extends RunBaseBatch implements SysPackable
@@ -14,16 +8,20 @@ class SampleClass extends RunBaseBatch implements SysPackable
     int counter;
 }
 ]]></Declaration>
-  </SourceCode>
-  <Source><![CDATA[
-class SampleClass extends RunBaseBatch implements SysPackable
-{
+    <Methods>
+      <Method>
+        <Name>construct</Name>
+        <Source><![CDATA[
     // a comment
     public static SampleClass construct()
     {
         return new SampleClass();
     }
-
+]]></Source>
+      </Method>
+      <Method>
+        <Name>buildMessage</Name>
+        <Source><![CDATA[
     /* block
        comment */
     protected str buildMessage(
@@ -32,15 +30,25 @@ class SampleClass extends RunBaseBatch implements SysPackable
     {
         return _prefix;
     }
-
+]]></Source>
+      </Method>
+      <Method>
+        <Name>run</Name>
+        <Source><![CDATA[
     private void run()
     {
         info(this.buildMessage('x', 1));
     }
-
+]]></Source>
+      </Method>
+      <Method>
+        <Name>pack</Name>
+        <Source><![CDATA[
     public abstract container pack()
     {
     }
-}
 ]]></Source>
+      </Method>
+    </Methods>
+  </SourceCode>
 </AxClass>

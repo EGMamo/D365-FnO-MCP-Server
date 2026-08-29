@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AxEnum>
+  <Name>SampleImplicitEnum</Name>
+  <EnumValues>
+    <AxEnumValue>
+      <Name>None</Name>
+    </AxEnumValue>
+    <AxEnumValue>
+      <Name>Open</Name>
+    </AxEnumValue>
+    <AxEnumValue>
+      <Name>Archived</Name>
+      <Value>10</Value>
+    </AxEnumValue>
+    <AxEnumValue>
+      <Name>Purged</Name>
+    </AxEnumValue>
+  </EnumValues>
+</AxEnum>

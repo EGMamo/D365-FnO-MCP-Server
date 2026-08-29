@@ -43,6 +43,8 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
         continue;
       }
 
+      // Keep the previous mtime until parsing succeeds, so a failed parse does not
+      // permanently poison the incremental index by marking the object as up to date.
       const objectId = dbUtils.upsertObject(db, {
         type: file.type,
         name: file.name,
@@ -50,11 +52,8 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
         model: file.model,
         file_path: file.filePath,
         raw_xml: content,
-        file_mtime: file.mtime
+        file_mtime: existing?.file_mtime ?? 0
       });
-
-      if (!existing) stats.added++;
-      else stats.updated++;
 
       let parsed: any;
       const xrefs: any[] = [];
@@ -164,10 +163,15 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
         }
       }
       
+      dbUtils.deleteXrefsFrom(db, file.type, file.name);
       if (xrefs.length > 0) {
-        dbUtils.deleteXrefsFrom(db, file.type, file.name);
         dbUtils.upsertXref(db, xrefs);
       }
+
+      db.prepare(`UPDATE ax_objects SET file_mtime = ? WHERE id = ?`).run(file.mtime, objectId);
+
+      if (!existing) stats.added++;
+      else stats.updated++;
 
     } catch (err) {
       stats.errors++;

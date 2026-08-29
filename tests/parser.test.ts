@@ -82,7 +82,33 @@ describe('parseAxClass', () => {
   });
 });
 
+describe('parseAxClass (legacy flat Source layout)', () => {
+  const result = parser.parseAxClass(fixture('AxClassLegacySample.xml'));
+
+  it('still extracts metadata and methods', () => {
+    expect(result.extends).toBe('RunBaseBatch');
+    expect(result.implements).toEqual(['SysPackable']);
+    expect(result.methods.map((m) => m.name)).toEqual(['construct', 'buildMessage', 'run', 'pack']);
+  });
+});
+
 describe('parseXppMethods', () => {
+  it('captures display and edit modifier methods', () => {
+    const methods = parser.parseXppMethods(`
+      public display Amount total()
+      {
+          return 0;
+      }
+
+      public edit str comment(boolean _set, str _value)
+      {
+          return _value;
+      }
+    `);
+    expect(methods.map((m) => m.name)).toEqual(['total', 'comment']);
+    expect(methods[0]).toMatchObject({ returnType: 'Amount', accessModifier: 'public' });
+  });
+
   it('handles multi-line signatures and comments', () => {
     const src = `
       // leading comment
@@ -115,6 +141,16 @@ describe('parseAxEnum', () => {
       { name: 'None', value: 0, labelId: '@SYS1000' },
       { name: 'Open', value: 1, labelId: '' },
       { name: 'Closed', value: 2, labelId: '' },
+    ]);
+  });
+
+  it('defaults implicit values to previous + 1 starting at 0', () => {
+    const result = parser.parseAxEnum(fixture('AxEnumImplicitSample.xml'));
+    expect(result.values).toEqual([
+      { name: 'None', value: 0, labelId: '' },
+      { name: 'Open', value: 1, labelId: '' },
+      { name: 'Archived', value: 10, labelId: '' },
+      { name: 'Purged', value: 11, labelId: '' },
     ]);
   });
 });

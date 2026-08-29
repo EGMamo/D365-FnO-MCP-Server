@@ -235,7 +235,7 @@ function splitParams(raw: string): AxParam[] {
 }
 
 const METHOD_RE =
-  /^((?:(?:public|protected|private|internal|default|static|abstract|final|server|client)\s+)*)([A-Za-z_][\w.]*(?:\s*<[^>]*>)?\s+)?([A-Za-z_]\w*)\s*\(([^)]*)\)\s*\{?$/;
+  /^((?:(?:public|protected|private|internal|default|static|abstract|final|server|client|display|edit)\s+)*)([A-Za-z_][\w.]*(?:\s*<[^>]*>)?\s+)?([A-Za-z_]\w*)\s*\(([^)]*)\)\s*\{?$/;
 
 function matchMethodDeclaration(signature: string): AxMethod | null {
   const s = signature.replace(/\s+/g, ' ').trim();
@@ -307,8 +307,11 @@ function collectSource(value: unknown): string {
 export function parseAxClass(xml: string, _name?: string, _pkg?: string) {
   const parsed = parser.parse(xml) as XmlNode;
   const root = node(parsed['AxClass']);
+  const sourceCode = node(root['SourceCode']);
 
-  const methodNodes = nodes(node(root['Methods'])['Method']);
+  // Real D365 layout is <SourceCode><Methods><Method>; older/simplified files use <Methods>.
+  const methodsContainer = node(sourceCode['Methods'] ?? root['Methods']);
+  const methodNodes = nodes(methodsContainer['Method']);
   const methods: AxMethod[] = [];
 
   for (const m of methodNodes) {
@@ -335,6 +338,18 @@ export function parseAxClass(xml: string, _name?: string, _pkg?: string) {
     methods.push(...parseXppMethods(classSource));
   }
 
+  const declarationSource = collectSource(sourceCode['Declaration']) || classSource;
+  const declMatch = /\bclass\s+[\w.]+((?:\s+(?:extends|implements)\s+[\w.,\s]+?)?)\s*(?:\{|$)/m.exec(
+    stripComments(declarationSource)
+  );
+  const declExtends = declMatch ? /\bextends\s+([\w.]+)/.exec(declMatch[1])?.[1] ?? '' : '';
+  const declImplements = declMatch
+    ? (/\bimplements\s+([\w.,\s]+)/.exec(declMatch[1])?.[1] ?? '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0)
+    : [];
+
   const implementsRaw = root['Implements'];
   const implementsList = (
     typeof implementsRaw === 'object' && implementsRaw !== null
@@ -344,9 +359,11 @@ export function parseAxClass(xml: string, _name?: string, _pkg?: string) {
 
   return {
     methods,
-    source: classSource || methodNodes.map((m) => collectSource(m['Source'])).join('\n'),
-    extends: text(root['Extends']),
-    implements: implementsList,
+    source:
+      classSource ||
+      [declarationSource, ...methodNodes.map((m) => collectSource(m['Source']))].filter(Boolean).join('\n'),
+    extends: text(root['Extends']) || declExtends,
+    implements: implementsList.length > 0 ? implementsList : declImplements,
     isAbstract: isYes(root['IsAbstract']),
     isFinal: isYes(root['IsFinal']),
     properties: root,
@@ -357,11 +374,22 @@ export function parseAxEnum(xml: string, _name?: string, _pkg?: string) {
   const parsed = parser.parse(xml) as XmlNode;
   const root = node(parsed['AxEnum']);
 
-  const values: AxEnumValue[] = nodes(node(root['EnumValues'])['AxEnumValue']).map((v, idx) => {
+  let nextImplicit = 0;
+  const values: AxEnumValue[] = nodes(node(root['EnumValues'])['AxEnumValue']).map((v) => {
     const rawValue = text(v['Value']);
+    let value: number | string;
+    if (rawValue === '') {
+      value = nextImplicit;
+      nextImplicit += 1;
+    } else if (Number.isNaN(Number(rawValue))) {
+      value = rawValue;
+    } else {
+      value = Number(rawValue);
+      nextImplicit = value + 1;
+    }
     return {
       name: text(v['Name']),
-      value: rawValue === '' ? idx : Number.isNaN(Number(rawValue)) ? rawValue : Number(rawValue),
+      value,
       labelId: text(v['Label']),
     };
   });
