@@ -58,19 +58,26 @@ export function registerMetadataTools(server: McpServer, db: Database) {
 
   server.tool(
     'find_references',
-    'Find all usages',
-    { name: z.string(), type: z.enum(['Table', 'Class', 'Enum', 'Form', 'Edt']).optional() },
-    async ({ name, type }) => {
+    'Find usages of an AOT object (capped at 500 total)',
+    {
+      name: z.string(),
+      type: z.enum(['Table', 'Class', 'Enum', 'Form', 'Edt']).optional(),
+      limit: z.number().int().min(1).max(500).default(100),
+    },
+    async ({ name, type, limit }) => {
       let xrefs: dbUtils.Xref[] = [];
       if (type) {
-        xrefs = dbUtils.getXrefsTo(db, name, type);
+        xrefs = dbUtils.getXrefsTo(db, name, type, limit);
       } else {
         const types = ['Table', 'Class', 'Enum', 'Form', 'Edt'] as const;
+        const perTypeLimit = Math.ceil(limit / types.length);
         for (const t of types) {
-          xrefs = xrefs.concat(dbUtils.getXrefsTo(db, name, t));
+          if (xrefs.length >= limit) break;
+          const remaining = limit - xrefs.length;
+          xrefs = xrefs.concat(dbUtils.getXrefsTo(db, name, t, Math.min(perTypeLimit, remaining)));
         }
       }
-      return { content: [{ type: 'text', text: JSON.stringify(xrefs, null, 2) }] };
+      return { content: [{ type: 'text', text: JSON.stringify(xrefs.slice(0, limit), null, 2) }] };
     }
   );
 

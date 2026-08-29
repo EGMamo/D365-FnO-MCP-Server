@@ -611,8 +611,14 @@ export function getObjectByName(db: Database, name: string, type: string) {
   };
 }
 
-export function getXrefsTo(db: Database, name: string, type: string): Xref[] {
-  return db.prepare(`SELECT * FROM ax_xref WHERE to_name = ? AND to_type = ?`).all(name, type) as Xref[];
+export function getXrefsTo(db: Database, name: string, type: string, limit?: number): Xref[] {
+  let sql = `SELECT * FROM ax_xref WHERE to_name = ? AND to_type = ?`;
+  const params: unknown[] = [name, type];
+  if (limit !== undefined) {
+    sql += ` LIMIT ?`;
+    params.push(limit);
+  }
+  return db.prepare(sql).all(...params) as Xref[];
 }
 
 export function getXrefsFrom(db: Database, name: string, type: string): Xref[] {
