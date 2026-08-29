@@ -109,6 +109,14 @@ export function registerGeneratorTools(server: McpServer, db: Database) {
           ? (existing.params as { name?: string; type?: string }[])
           : [];
         const indexedReturn = existing.return_type || 'void';
+        const accessModifier = (existing.access_modifier || 'public').toLowerCase();
+
+        if (accessModifier === 'private') {
+          signatureErrors.push(
+            `Method '${m.name}': ${existing.declaring_object ?? obj.name}.${existing.name} is private. Chain of Command can only wrap public or protected methods.`
+          );
+          return null;
+        }
 
         if (m.params !== undefined) {
           const supplied = extractParamNames(m.params);
@@ -131,7 +139,7 @@ export function registerGeneratorTools(server: McpServer, db: Database) {
           .map((p) => `${p.type ? `${p.type} ` : ''}${p.name ?? ''}`.trim())
           .filter(Boolean)
           .join(', ');
-        return { name: existing.name, params, returnType: indexedReturn, existing };
+        return { name: existing.name, params, returnType: indexedReturn, accessModifier, existing };
       });
       if (signatureErrors.length > 0) return fail(['Grounding failed:', ...signatureErrors]);
 
@@ -140,14 +148,17 @@ export function registerGeneratorTools(server: McpServer, db: Database) {
           const m = r as NonNullable<typeof r>;
           const declaredOn = m.existing.declaring_object ?? obj.name;
           const inheritedNote = declaredOn.toLowerCase() === obj.name.toLowerCase() ? '' : ` inherited from ${declaredOn}`;
-          const marker = `        // Wraps ${obj.name}.${m.existing.name}${inheritedNote} (${m.existing.access_modifier || 'public'} ${m.returnType})`;
+          const isStatic = m.existing.is_static === 1;
+          const staticPrefix = isStatic ? 'static ' : '';
+          const marker = `        // Wraps ${obj.name}.${m.existing.name}${inheritedNote} (${m.accessModifier} ${staticPrefix}${m.returnType})`;
           const args = extractParamNames(m.params).join(', ');
+          // Static Chain of Command still forwards through `next methodName(args);`.
           const nextCall = `next ${m.name}(${args});`;
           const body =
             m.returnType === 'void'
               ? `        ${nextCall}`
               : `        ${m.returnType} ret = ${nextCall}\n\n        return ret;`;
-          return `${marker}\n    public ${m.returnType} ${m.name}(${m.params})\n    {\n${body}\n    }`;
+          return `${marker}\n    ${m.accessModifier} ${staticPrefix}${m.returnType} ${m.name}(${m.params})\n    {\n${body}\n    }`;
         })
         .join('\n\n');
 

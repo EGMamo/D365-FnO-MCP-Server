@@ -42,6 +42,13 @@ beforeAll(() => {
             returnType: 'str',
             params: [{ name: '_arg', type: 'int' }],
           },
+          {
+            name: 'baseProtectedStatic',
+            accessModifier: 'protected',
+            returnType: 'void',
+            params: [],
+            isStatic: true,
+          },
         ],
       },
       { type: 'Class', name: 'SalesLineTypeDerived', properties: { extends: 'SalesLineType' } },
@@ -153,8 +160,16 @@ describe('validateMethodSignature', () => {
     expect(validateMethodSignature(db, 'SalesLineTypeDerived', 'baseOnly', 1)).not.toBeNull();
     expect(validateMethodSignature(db, 'SalesLineTypeDerived', 'baseOnly', 2)).toBeNull();
   });
-  it('terminates on cyclic inheritance chains', () => {
-    expect(validateMethodSignature(db, 'CycleA', 'nope')).toBeNull();
+  it('returns the access modifier and static flag of the resolved method', () => {
+    const own = validateMethodSignature(db, 'SalesLineType', 'insert');
+    expect(own?.access_modifier).toBe('public');
+    expect(own?.is_static).toBe(0);
+
+    const inherited = validateMethodSignature(db, 'SalesLineTypeDerived', 'baseProtectedStatic');
+    expect(inherited?.access_modifier).toBe('protected');
+    expect(inherited?.is_static).toBe(1);
+  });
+  it('terminates on cyclic inheritance chains', () => {    expect(validateMethodSignature(db, 'CycleA', 'nope')).toBeNull();
   });
 });
 

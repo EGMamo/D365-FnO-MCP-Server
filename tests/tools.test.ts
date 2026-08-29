@@ -20,6 +20,7 @@ beforeAll(() => {
         properties: { extends: 'SalesLineTypeBase', implements: 'SysPackable' },
         methods: [
           { name: 'insert', accessModifier: 'public', returnType: 'void', params: [] },
+          { name: 'ownPrivate', accessModifier: 'private', returnType: 'void', params: [] },
           {
             name: 'validateWrite',
             accessModifier: 'public',
@@ -47,6 +48,25 @@ beforeAll(() => {
             accessModifier: 'public',
             returnType: 'str',
             params: [{ name: '_arg', type: 'int' }],
+          },
+          {
+            name: 'baseProtected',
+            accessModifier: 'protected',
+            returnType: 'void',
+            params: [],
+          },
+          {
+            name: 'baseStatic',
+            accessModifier: 'public',
+            returnType: 'void',
+            params: [],
+            isStatic: true,
+          },
+          {
+            name: 'basePrivate',
+            accessModifier: 'private',
+            returnType: 'void',
+            params: [],
           },
         ],
       },
@@ -210,8 +230,53 @@ describe('create_coc_extension', () => {
     expect(text).toContain('inherited from SalesLineTypeBase');
   });
 
-  it('rejects targeting an existing extension class', async () => {
+  it('emits the protected access modifier for a protected base method', async () => {
     const res = await call('create_coc_extension', {
+      targetClass: 'SalesLineTypeDerived',
+      extensionName: 'MyDerived_Extension',
+      methods: [{ name: 'baseProtected' }],
+    });
+    expect(res.isError).toBeUndefined();
+    const text = res.content[0].text;
+    expect(text).toContain('protected void baseProtected()');
+    expect(text).not.toContain('public void baseProtected()');
+    expect(text).toContain('next baseProtected();');
+  });
+
+  it('emits the static modifier for a static base method', async () => {
+    const res = await call('create_coc_extension', {
+      targetClass: 'SalesLineTypeDerived',
+      extensionName: 'MyDerived_Extension',
+      methods: [{ name: 'baseStatic' }],
+    });
+    expect(res.isError).toBeUndefined();
+    const text = res.content[0].text;
+    expect(text).toContain('public static void baseStatic()');
+    expect(text).toContain('next baseStatic();');
+  });
+
+  it('rejects a private method inherited from a base class', async () => {
+    const res = await call('create_coc_extension', {
+      targetClass: 'SalesLineTypeDerived',
+      extensionName: 'MyDerived_Extension',
+      methods: [{ name: 'basePrivate' }],
+    });
+    expect(res.isError).toBe(true);
+    expect(res.content[0].text).toContain('private');
+    expect(res.content[0].text).not.toContain('[ExtensionOf');
+  });
+
+  it('rejects a private method declared on the target class itself', async () => {
+    const res = await call('create_coc_extension', {
+      targetClass: 'SalesLineType',
+      extensionName: 'MySalesLineType_Extension',
+      methods: [{ name: 'ownPrivate' }],
+    });
+    expect(res.isError).toBe(true);
+    expect(res.content[0].text).toContain('private');
+  });
+
+  it('rejects targeting an existing extension class', async () => {    const res = await call('create_coc_extension', {
       targetClass: 'SomeThing_Extension',
       extensionName: 'Another_Extension',
       methods: [{ name: 'insert' }],

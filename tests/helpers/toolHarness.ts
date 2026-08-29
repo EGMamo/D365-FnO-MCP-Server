@@ -36,7 +36,13 @@ export interface SeedObject {
   package?: string;
   raw_xml?: string;
   fields?: { name: string; type?: string; edt?: string }[];
-  methods?: { name: string; accessModifier?: string; returnType?: string; params?: unknown[] }[];
+  methods?: {
+    name: string;
+    accessModifier?: string;
+    returnType?: string;
+    params?: unknown[];
+    isStatic?: boolean;
+  }[];
   properties?: Record<string, unknown>;
 }
 

@@ -143,7 +143,12 @@ export function validateMethodSignature(
     const actual = Array.isArray(method.params) ? method.params.length : 0;
     if (actual !== expectedParamCount) return null;
   }
-  return { ...method, declaring_object: declaringObject };
+  return {
+    ...method,
+    access_modifier: method.access_modifier || 'public',
+    is_static: method.is_static ? 1 : 0,
+    declaring_object: declaringObject,
+  };
 }
 
 export interface CoCTargetResult {
