@@ -92,13 +92,11 @@ export function createHttpApp(createMcpServer: ServerFactory, options: HttpTrans
       standardHeaders: true,
       legacyHeaders: false,
       skip: (req) => req.path === '/health',
-      // Key on the hashed presented credential + client IP so that a single
-      // credential cannot escape its bucket by rotating X-Forwarded-For, while
-      // distinct credentials from the same NAT still get separate budgets.
-      keyGenerator: (req: Request) =>
-        createHash('sha256')
-          .update(`${extractApiKey(req) ?? ''}:${clientIp(req)}`)
-          .digest('hex'),
+      // Key on the client IP alone. The rate limiter runs before authentication,
+      // so a client-controlled credential header must not be part of the bucket key.
+      // When all clients share the same MCP_API_KEY, per-credential bucketing is not
+      // meaningful anyway; a real per-user throttle belongs behind verified auth.
+      keyGenerator: (req: Request) => clientIp(req),
       handler: (req, res) => {
         logger.warn('Rate limit exceeded', { ip: clientIp(req), path: req.path });
         res.status(429).json(jsonRpcError(-32029, 'Too many requests'));
