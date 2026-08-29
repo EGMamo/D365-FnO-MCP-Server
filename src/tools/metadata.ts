@@ -11,7 +11,7 @@ export function registerMetadataTools(server: McpServer, db: Database) {
     {
       query: z.string(),
       type: z.enum(['Table', 'Class', 'Enum', 'Form', 'Query', 'DataEntity', 'Edt']).optional(),
-      limit: z.number().max(100).default(20)
+      limit: z.number().int().min(1).max(100).default(20)
     },
     async ({ query, type, limit }) => {
       const results = dbUtils.searchSymbols(db, query, type, limit);
@@ -184,7 +184,12 @@ export function registerMetadataTools(server: McpServer, db: Database) {
   server.tool(
     'list_objects',
     'List AOT objects',
-    { type: z.enum(['Table', 'Class', 'Enum', 'Form', 'Query', 'DataEntity', 'Edt']).optional(), package: z.string().optional(), offset: z.number().default(0), limit: z.number().default(50) },
+    {
+      type: z.enum(['Table', 'Class', 'Enum', 'Form', 'Query', 'DataEntity', 'Edt']).optional(),
+      package: z.string().optional(),
+      offset: z.number().int().min(0).default(0),
+      limit: z.number().int().min(1).max(500).default(50),
+    },
     async ({ type, package: pkg, offset, limit }) => {
       const results = dbUtils.getAllObjects(db, type, pkg, offset, limit);
       return { content: [{ type: 'text', text: JSON.stringify(results, null, 2) }] };

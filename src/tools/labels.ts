@@ -23,7 +23,7 @@ export function registerLabelsTools(server: McpServer, db: Database) {
   server.tool(
     'search_labels',
     'Search for labels by value',
-    { query: z.string(), limit: z.number().default(20) },
+    { query: z.string(), limit: z.number().int().min(1).max(500).default(20) },
     async ({ query, limit }) => {
       const labels = db.prepare(`SELECT label_id, value FROM ax_labels WHERE value LIKE ? LIMIT ?`).all(`%${query}%`, limit);
       return { content: [{ type: 'text', text: JSON.stringify(labels, null, 2) }] };
