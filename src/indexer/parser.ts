@@ -339,7 +339,7 @@ export function parseAxClass(xml: string, _name?: string, _pkg?: string) {
   }
 
   const declarationSource = collectSource(sourceCode['Declaration']) || classSource;
-  const declMatch = /\bclass\s+[\w.]+((?:\s+(?:extends|implements)\s+[\w.,\s]+?)?)\s*(?:\{|$)/m.exec(
+  const declMatch = /\b(?:class|interface)\s+[\w.]+((?:\s+(?:extends|implements)\s+[\w.,\s]+?)?)\s*(?:\{|$)/m.exec(
     stripComments(declarationSource)
   );
   const declExtends = declMatch ? /\bextends\s+([\w.]+)/.exec(declMatch[1])?.[1] ?? '' : '';
@@ -383,6 +383,7 @@ export function parseAxEnum(xml: string, _name?: string, _pkg?: string) {
       nextImplicit += 1;
     } else if (Number.isNaN(Number(rawValue))) {
       value = rawValue;
+      nextImplicit += 1;
     } else {
       value = Number(rawValue);
       nextImplicit = value + 1;
