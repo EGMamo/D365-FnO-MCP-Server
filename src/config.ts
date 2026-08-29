@@ -5,7 +5,7 @@ dotenv.config();
 
 const configSchema = z.object({
   MCP_PORT: z.coerce.number().default(3000),
-  MCP_API_KEY: z.string().min(1, 'MCP_API_KEY is required'),
+  MCP_API_KEY: z.string().min(32, 'MCP_API_KEY must be at least 32 characters'),
   MCP_TRANSPORT: z.enum(['http', 'stdio']).default('http'),
   D365_PACKAGES_DIR: z.string().min(1, 'D365_PACKAGES_DIR is required'),
   D365_INDEX_DB_PATH: z.string().default('./d365_index.db'),
@@ -13,6 +13,9 @@ const configSchema = z.object({
   RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().positive().default(500),
   RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(15 * 60 * 1000),
   MCP_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(120_000),
+  TRUST_PROXY_HOPS: z.coerce.number().int().min(0).default(0),
+  MAX_CONCURRENT_SESSIONS: z.coerce.number().int().positive().default(100),
+  SESSION_IDLE_TIMEOUT_MS: z.coerce.number().int().positive().default(30 * 60 * 1000),
 });
 
 const parseConfig = () => {
@@ -39,5 +42,8 @@ export const config = {
   rateLimitMaxRequests: env.RATE_LIMIT_MAX_REQUESTS,
   rateLimitWindowMs: env.RATE_LIMIT_WINDOW_MS,
   requestTimeoutMs: env.MCP_REQUEST_TIMEOUT_MS,
+  trustProxyHops: env.TRUST_PROXY_HOPS,
+  maxConcurrentSessions: env.MAX_CONCURRENT_SESSIONS,
+  sessionIdleTimeoutMs: env.SESSION_IDLE_TIMEOUT_MS,
   version: VERSION,
 };

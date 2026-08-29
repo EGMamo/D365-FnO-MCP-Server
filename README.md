@@ -69,7 +69,7 @@ stdout stays reserved for JSON-RPC.
       "args": ["/path/to/D365-FnO-MCP-Server/dist/src/index.js"],
       "env": {
         "MCP_TRANSPORT": "stdio",
-        "MCP_API_KEY": "unused-in-stdio-but-required",
+        "MCP_API_KEY": "unused-in-stdio-but-required-min-32-characters",
         "D365_PACKAGES_DIR": "C:/AOSService/PackagesLocalDirectory"
       }
     }
@@ -85,10 +85,13 @@ In stdio mode background indexing is skipped unless `D365_INDEX_ON_START=1` is s
 | --- | --- | --- |
 | `MCP_TRANSPORT` | `http` | `http` or `stdio` |
 | `MCP_PORT` | `3000` | HTTP listen port |
-| `MCP_API_KEY` | _(required)_ | API key for HTTP auth |
+| `MCP_API_KEY` | _(required)_ | API key for HTTP auth (min 32 characters) |
 | `D365_PACKAGES_DIR` | _(required)_ | PackagesLocalDirectory path |
 | `D365_INDEX_DB_PATH` | `./d365_index.db` | SQLite index location |
 | `D365_INDEX_ON_START` | `0` | Set to `1` to index on start in stdio mode |
 | `RATE_LIMIT_MAX_REQUESTS` | `500` | Requests per window |
 | `RATE_LIMIT_WINDOW_MS` | `900000` | Rate limit window (15 min) |
 | `MCP_REQUEST_TIMEOUT_MS` | `120000` | Per-request timeout |
+| `TRUST_PROXY_HOPS` | `0` | Trusted reverse-proxy hops. `0` ignores `X-Forwarded-For`; set to the real hop count only when behind a trusted proxy |
+| `MAX_CONCURRENT_SESSIONS` | `100` | Max simultaneous MCP sessions; new sessions get `503` when full |
+| `SESSION_IDLE_TIMEOUT_MS` | `1800000` | Idle sessions are closed after this (swept every 60s) |

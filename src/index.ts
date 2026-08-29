@@ -59,6 +59,9 @@ async function main() {
     rateLimitMaxRequests: config.rateLimitMaxRequests,
     rateLimitWindowMs: config.rateLimitWindowMs,
     requestTimeoutMs: config.requestTimeoutMs,
+    trustProxyHops: config.trustProxyHops,
+    maxConcurrentSessions: config.maxConcurrentSessions,
+    sessionIdleTimeoutMs: config.sessionIdleTimeoutMs,
   });
 
   startBackgroundIndexing();

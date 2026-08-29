@@ -4,7 +4,7 @@ import type { Server } from 'http';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { createHttpApp } from '../src/server/httpTransport.js';
 
-const API_KEY = 'test-api-key-1234567890';
+const API_KEY = 'test-api-key-1234567890-abcdefghijklmnop';
 
 let server: Server;
 let baseUrl: string;
@@ -19,6 +19,9 @@ beforeAll(async () => {
       rateLimitMaxRequests: 10_000,
       rateLimitWindowMs: 60_000,
       requestTimeoutMs: 5_000,
+      trustProxyHops: 0,
+      maxConcurrentSessions: 100,
+      sessionIdleTimeoutMs: 60_000,
     },
   );
 
@@ -77,6 +80,25 @@ describe('json-rpc validation', () => {
     const body = (await res.json()) as { error: { code: number }; id: number };
     expect(body.error.code).toBe(-32600);
     expect(body.id).toBe(7);
+  });
+
+  it('accepts a JSON-RPC response envelope (server-initiated request reply)', async () => {
+    const res = await fetch(`${baseUrl}/mcp`, {
+      method: 'POST',
+      headers: { 'X-API-Key': API_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 3, result: {} }),
+    });
+    // Must get past envelope validation; the MCP transport decides the rest.
+    expect(res.status).not.toBe(400);
+  });
+
+  it('accepts a JSON-RPC error response envelope', async () => {
+    const res = await fetch(`${baseUrl}/mcp`, {
+      method: 'POST',
+      headers: { 'X-API-Key': API_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 4, error: { code: -1, message: 'nope' } }),
+    });
+    expect(res.status).not.toBe(400);
   });
 
   it('rejects a request missing "jsonrpc" with -32600', async () => {
