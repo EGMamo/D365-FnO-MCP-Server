@@ -20,6 +20,10 @@ export async function indexCommand(
     console.error(`D365_PACKAGES_DIR "${packagesDir}" does not exist.`);
     return 1;
   }
+  if (!fs.statSync(packagesDir).isDirectory()) {
+    console.error(`D365_PACKAGES_DIR "${packagesDir}" is not a directory.`);
+    return 1;
+  }
 
   if (options.force && dbPath !== ':memory:') {
     for (const suffix of ['', '-shm', '-wal']) {

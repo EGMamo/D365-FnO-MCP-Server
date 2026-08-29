@@ -5,6 +5,9 @@ import * as parser from './parser.js';
 import fs from 'fs/promises';
 import { logger } from '../utils/logger.js';
 
+/** Above this share of failed parses the scan is treated as untrustworthy and pruning is skipped. */
+const MAX_PRUNE_ERROR_RATIO = 0.5;
+
 export interface IndexStats {
   total: number;
   added: number;
@@ -223,10 +226,25 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
     }
   }
 
-  const pruned = dbUtils.prune(db, seenObjectFiles, seenLabelFiles);
-  stats.deleted = pruned.objects;
-  if (pruned.objects > 0 || pruned.labels > 0 || pruned.xrefs > 0) {
-    logger.info('Pruned stale index entries', { ...pruned });
+  // Pruning deletes every indexed row whose file was not seen during this scan.
+  // That is only safe when the scan itself was trustworthy: an empty or mostly
+  // failing scan usually means a bad/unmounted packages directory, not deletions.
+  const errorRatio = stats.total > 0 ? stats.errors / stats.total : 0;
+  if (stats.total === 0) {
+    logger.warn('Skipping prune: no files were scanned', { packagesDir });
+  } else if (errorRatio > MAX_PRUNE_ERROR_RATIO) {
+    logger.warn('Skipping prune: too many files failed to parse', {
+      packagesDir,
+      total: stats.total,
+      errors: stats.errors,
+      errorRatio,
+    });
+  } else {
+    const pruned = dbUtils.prune(db, seenObjectFiles, seenLabelFiles);
+    stats.deleted = pruned.objects;
+    if (pruned.objects > 0 || pruned.labels > 0 || pruned.xrefs > 0) {
+      logger.info('Pruned stale index entries', { ...pruned });
+    }
   }
 
   logger.info('Rebuilding FTS index');

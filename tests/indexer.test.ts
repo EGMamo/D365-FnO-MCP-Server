@@ -199,6 +199,51 @@ describe('index lifecycle: pruning, renames and collisions', () => {
     expect(results.some((r) => r.name === 'SampleClass')).toBe(false);
   });
 
+  it('does not prune when the scan returns no files at all', async () => {
+    const emptyRoot = fs.mkdtempSync(path.join(testDir, '.tmp-empty-'));
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    try {
+      const stats = await buildIndex(db, emptyRoot, false);
+      expect(stats.total).toBe(0);
+      expect(stats.deleted).toBe(0);
+      expect(warn).toHaveBeenCalledWith(
+        'Skipping prune: no files were scanned',
+        expect.anything()
+      );
+      expect(getIndexStats(db).totalObjects).toBe(7);
+      expect(getObjectByName(db, 'SampleClass', 'Class')).not.toBeNull();
+    } finally {
+      warn.mockRestore();
+      fs.rmSync(emptyRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('does not prune when more than half the scanned files fail to parse', async () => {
+    const corruptRoot = fs.mkdtempSync(path.join(testDir, '.tmp-corrupt-'));
+    const dir = path.join(corruptRoot, 'TestPackage', 'TestModel', 'AxClass');
+    fs.mkdirSync(dir, { recursive: true });
+    for (let i = 0; i < 4; i++) {
+      fs.writeFileSync(path.join(dir, `Corrupt${i}.xml`), '<AxClass><Name>Corrupt</Name');
+    }
+
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    try {
+      const stats = await buildIndex(db, corruptRoot, false);
+      expect(stats.total).toBe(4);
+      expect(stats.errors / stats.total).toBeGreaterThan(0.5);
+      expect(stats.deleted).toBe(0);
+      expect(warn).toHaveBeenCalledWith(
+        'Skipping prune: too many files failed to parse',
+        expect.anything()
+      );
+      expect(getObjectByName(db, 'SampleClass', 'Class')).not.toBeNull();
+      expect(getObjectByName(db, 'SampleTable', 'Table')).not.toBeNull();
+    } finally {
+      warn.mockRestore();
+      fs.rmSync(corruptRoot, { recursive: true, force: true });
+    }
+  });
+
   it('updates file_path on rename without leaving a stale row', async () => {
     const dir = path.join(root, 'TestPackage', 'TestModel', 'AxClass');
     const oldPath = path.join(dir, 'SampleClass.xml');

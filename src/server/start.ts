@@ -1,4 +1,5 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import fsSync from 'fs';
 import { config, VERSION } from '../config.js';
 import { openDb } from '../indexer/db.js';
 import { buildIndex } from '../indexer/buildIndex.js';
@@ -33,6 +34,19 @@ export async function startServer(): Promise<void> {
   }
 
   function startBackgroundIndexing() {
+    let isDir = false;
+    try {
+      isDir = fsSync.statSync(config.packagesDir).isDirectory();
+    } catch {
+      isDir = false;
+    }
+    if (!isDir) {
+      logger.error('Skipping background indexing: packages directory is missing or not a directory', {
+        packagesDir: config.packagesDir,
+      });
+      return;
+    }
+
     buildIndex(db, config.packagesDir, false)
       .then((stats) => {
         logger.info('Background indexing complete', { ...stats });
