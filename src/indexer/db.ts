@@ -309,6 +309,26 @@ export function countObjects(db: Database): number {
   return (db.prepare(`SELECT COUNT(*) as count FROM ax_objects`).get() as { count: number }).count;
 }
 
+/**
+ * How many of the given already-indexed object file paths were seen by a scan.
+ * `existingPaths` must be a snapshot taken *before* the run inserts new rows,
+ * otherwise objects created by this run inflate the overlap.
+ */
+export function countObjectsWithPaths(existingPaths: Iterable<string>, scannedPaths: Set<string>): number {
+  let count = 0;
+  for (const p of existingPaths) {
+    if (scannedPaths.has(p)) count++;
+  }
+  return count;
+}
+
+/** File paths of every currently indexed object, snapshotted before a scan. */
+export function listObjectPaths(db: Database): string[] {
+  return (db.prepare(`SELECT file_path FROM ax_objects`).all() as { file_path: string }[]).map(
+    (row) => row.file_path
+  );
+}
+
 export interface PruneStats {
   objects: number;
   labels: number;

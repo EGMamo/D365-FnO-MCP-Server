@@ -8,7 +8,7 @@ import { logger } from '../utils/logger.js';
 /** Above this share of failed parses the scan is treated as untrustworthy and pruning is skipped. */
 const MAX_PRUNE_ERROR_RATIO = 0.5;
 
-/** Minimum share of the already-indexed objects a scan must find before pruning is allowed. */
+/** Minimum share of the already-indexed objects a scan must overlap before pruning is allowed. */
 const MIN_SCANNED_OBJECT_RATIO = 0.5;
 
 export interface IndexStats {
@@ -45,7 +45,8 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
   // Captured before the scan so the prune magnitude guard compares against the
   // objects indexed by *previous* runs only. Counting after the loop would
   // include rows added by this run, inflating the denominator.
-  const preScanObjectCount = dbUtils.countObjects(db);
+  const preScanObjectPaths = dbUtils.listObjectPaths(db);
+  const preScanObjectCount = preScanObjectPaths.length;
 
   for await (const file of scanPackagesDir(packagesDir)) {
     stats.total++;
@@ -239,7 +240,9 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
   // failing, or partially available packages directory usually means a bad or
   // half-mounted source tree, not real deletions.
   const errorRatio = stats.total > 0 ? stats.errors / stats.total : 0;
-  const scannedObjectCount = seenObjectFiles.size;
+  // Overlap, not raw scan size: a disjoint tree of similar size must not be
+  // treated as covering the existing index.
+  const overlapCount = dbUtils.countObjectsWithPaths(preScanObjectPaths, seenObjectFiles);
   const bypassMagnitudeGuard = process.env.D365_BYPASS_PRUNE_GUARD === '1';
   if (stats.total === 0) {
     logger.warn('Skipping prune: no files were scanned', { packagesDir });
@@ -253,11 +256,11 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
   } else if (
     !bypassMagnitudeGuard &&
     preScanObjectCount > 0 &&
-    scannedObjectCount < preScanObjectCount * MIN_SCANNED_OBJECT_RATIO
+    overlapCount < preScanObjectCount * MIN_SCANNED_OBJECT_RATIO
   ) {
     logger.warn(
-      `Pruning skipped: scanned ${scannedObjectCount} objects vs ${preScanObjectCount} previously indexed (below ${MIN_SCANNED_OBJECT_RATIO * 100}% threshold)`,
-      { packagesDir, scannedObjectCount, preScanObjectCount, minRatio: MIN_SCANNED_OBJECT_RATIO }
+      `Pruning skipped: only ${overlapCount} of ${preScanObjectCount} existing objects overlap with scanned paths (below ${MIN_SCANNED_OBJECT_RATIO * 100}% threshold)`,
+      { packagesDir, overlapCount, preScanObjectCount, minRatio: MIN_SCANNED_OBJECT_RATIO }
     );
   } else {
     const pruned = dbUtils.prune(db, seenObjectFiles, seenLabelFiles);

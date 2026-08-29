@@ -367,7 +367,7 @@ describe('prune guard: partially available packages directory', () => {
       const stats = await buildIndex(db, partial, false);
       expect(stats.deleted).toBe(0);
       expect(warn).toHaveBeenCalledWith(
-        expect.stringContaining('Pruning skipped: scanned 1 objects vs 3 previously indexed'),
+        expect.stringContaining('Pruning skipped: only 0 of 3 existing objects overlap'),
         expect.anything()
       );
     } finally {
@@ -393,23 +393,30 @@ describe('prune guard: partially available packages directory', () => {
     expect(getObjectByName(db, 'ClassB', 'Class')).not.toBeNull();
   });
 
-  it('prunes stale rows when a disjoint scan still covers half of the previously indexed objects', async () => {
+  it('skips pruning when a disjoint scan of similar size does not overlap the existing objects', async () => {
     const original = stageClasses(['ClassA', 'ClassB', 'ClassC']);
     const db = openTracked();
     await buildIndex(db, original, true);
     expect(getIndexStats(db).totalObjects).toBe(3);
 
-    // Disjoint tree: 2 new objects vs 3 previously indexed => 2 >= 1.5, prune runs.
+    // Disjoint tree: 2 new objects but 0 overlap vs 3 previously indexed => prune skipped.
     const replacement = stageClasses(['ClassD', 'ClassE']);
-    const stats = await buildIndex(db, replacement, false);
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    try {
+      const stats = await buildIndex(db, replacement, false);
+      expect(stats.deleted).toBe(0);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('Pruning skipped: only 0 of 3 existing objects overlap'),
+        expect.anything()
+      );
+    } finally {
+      warn.mockRestore();
+    }
 
-    expect(stats.deleted).toBe(3);
-    expect(getObjectByName(db, 'ClassA', 'Class')).toBeNull();
-    expect(getObjectByName(db, 'ClassB', 'Class')).toBeNull();
-    expect(getObjectByName(db, 'ClassC', 'Class')).toBeNull();
-    expect(getObjectByName(db, 'ClassD', 'Class')).not.toBeNull();
-    expect(getObjectByName(db, 'ClassE', 'Class')).not.toBeNull();
-    expect(getIndexStats(db).totalObjects).toBe(2);
+    expect(getObjectByName(db, 'ClassA', 'Class')).not.toBeNull();
+    expect(getObjectByName(db, 'ClassB', 'Class')).not.toBeNull();
+    expect(getObjectByName(db, 'ClassC', 'Class')).not.toBeNull();
+    expect(getIndexStats(db).totalObjects).toBe(5);
   });
 
   it('skips pruning when a disjoint scan covers less than half of the previously indexed objects', async () => {
@@ -417,14 +424,14 @@ describe('prune guard: partially available packages directory', () => {
     const db = openTracked();
     await buildIndex(db, original, true);
 
-    // Disjoint tree: 1 new object vs 3 previously indexed => 1 < 1.5, prune skipped.
+    // Disjoint tree: 1 new object, 0 overlap vs 3 previously indexed => prune skipped.
     const replacement = stageClasses(['ClassD']);
     const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
     try {
       const stats = await buildIndex(db, replacement, false);
       expect(stats.deleted).toBe(0);
       expect(warn).toHaveBeenCalledWith(
-        expect.stringContaining('Pruning skipped: scanned 1 objects vs 3 previously indexed'),
+        expect.stringContaining('Pruning skipped: only 0 of 3 existing objects overlap'),
         expect.anything()
       );
     } finally {
@@ -433,6 +440,27 @@ describe('prune guard: partially available packages directory', () => {
 
     expect(getObjectByName(db, 'ClassA', 'Class')).not.toBeNull();
     expect(getIndexStats(db).totalObjects).toBe(4);
+  });
+
+  it('prunes the missing object when the scan overlaps two of three indexed objects', async () => {
+    const root = stageClasses(['ClassA', 'ClassB', 'ClassC']);
+    const db = openTracked();
+    await buildIndex(db, root, true);
+    expect(getIndexStats(db).totalObjects).toBe(3);
+
+    // Keep ClassA/ClassB (overlap 2 >= 1.5), drop ClassC, add a brand new file.
+    const dir = path.join(root, 'TestPackage', 'TestModel', 'AxClass');
+    fs.rmSync(path.join(dir, 'ClassC.xml'));
+    fs.copyFileSync(path.join(fixturesDir, 'AxClassSample.xml'), path.join(dir, 'ClassD.xml'));
+
+    const stats = await buildIndex(db, root, false);
+
+    expect(stats.deleted).toBe(1);
+    expect(getObjectByName(db, 'ClassC', 'Class')).toBeNull();
+    expect(getObjectByName(db, 'ClassA', 'Class')).not.toBeNull();
+    expect(getObjectByName(db, 'ClassB', 'Class')).not.toBeNull();
+    expect(getObjectByName(db, 'ClassD', 'Class')).not.toBeNull();
+    expect(getIndexStats(db).totalObjects).toBe(3);
   });
 
   it('prunes despite the magnitude guard when D365_BYPASS_PRUNE_GUARD=1', async () => {
