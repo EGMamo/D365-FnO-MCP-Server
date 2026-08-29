@@ -22,11 +22,11 @@ export function registerMetadataTools(server: McpServer, db: Database) {
   server.tool(
     'get_table_schema',
     'Full table details',
-    { tableName: z.string() },
-    async ({ tableName }) => {
+    { tableName: z.string(), xrefLimit: z.number().int().min(1).max(500).default(100) },
+    async ({ tableName, xrefLimit }) => {
       const obj = dbUtils.getObjectByName(db, tableName, 'Table');
       if (!obj) return { content: [{ type: 'text', text: `Table ${tableName} not found.` }] };
-      const xrefs = dbUtils.getXrefsTo(db, tableName, 'Table');
+      const xrefs = dbUtils.getXrefsTo(db, tableName, 'Table', xrefLimit);
       return { content: [{ type: 'text', text: JSON.stringify({ ...obj, xrefs }, null, 2) }] };
     }
   );
@@ -34,11 +34,11 @@ export function registerMetadataTools(server: McpServer, db: Database) {
   server.tool(
     'get_class_hierarchy',
     'Class inheritance',
-    { className: z.string() },
-    async ({ className }) => {
+    { className: z.string(), childLimit: z.number().int().min(1).max(500).default(100) },
+    async ({ className, childLimit }) => {
       const obj = dbUtils.getObjectByName(db, className, 'Class');
       if (!obj) return { content: [{ type: 'text', text: `Class ${className} not found.` }] };
-      const children = dbUtils.getXrefsTo(db, className, 'Class').filter((x: dbUtils.Xref) => x.xref_kind === 'extends');
+      const children = dbUtils.getXrefsTo(db, className, 'Class', childLimit, 'extends');
       return { content: [{ type: 'text', text: JSON.stringify({ class: obj.name, children }, null, 2) }] };
     }
   );
@@ -70,11 +70,10 @@ export function registerMetadataTools(server: McpServer, db: Database) {
         xrefs = dbUtils.getXrefsTo(db, name, type, limit);
       } else {
         const types = ['Table', 'Class', 'Enum', 'Form', 'Edt'] as const;
-        const perTypeLimit = Math.ceil(limit / types.length);
         for (const t of types) {
           if (xrefs.length >= limit) break;
           const remaining = limit - xrefs.length;
-          xrefs = xrefs.concat(dbUtils.getXrefsTo(db, name, t, Math.min(perTypeLimit, remaining)));
+          xrefs = xrefs.concat(dbUtils.getXrefsTo(db, name, t, remaining));
         }
       }
       return { content: [{ type: 'text', text: JSON.stringify(xrefs.slice(0, limit), null, 2) }] };
