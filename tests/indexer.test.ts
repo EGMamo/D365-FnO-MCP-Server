@@ -367,7 +367,7 @@ describe('prune guard: partially available packages directory', () => {
       const stats = await buildIndex(db, partial, false);
       expect(stats.deleted).toBe(0);
       expect(warn).toHaveBeenCalledWith(
-        expect.stringContaining('Pruning skipped: scanned 1 objects vs 3 existing'),
+        expect.stringContaining('Pruning skipped: scanned 1 objects vs 3 previously indexed'),
         expect.anything()
       );
     } finally {
@@ -393,8 +393,67 @@ describe('prune guard: partially available packages directory', () => {
     expect(getObjectByName(db, 'ClassB', 'Class')).not.toBeNull();
   });
 
-  it('keeps a single indexed object when the scan finds nothing', async () => {
-    const root = stageClasses(['ClassA']);
+  it('prunes stale rows when a disjoint scan still covers half of the previously indexed objects', async () => {
+    const original = stageClasses(['ClassA', 'ClassB', 'ClassC']);
+    const db = openTracked();
+    await buildIndex(db, original, true);
+    expect(getIndexStats(db).totalObjects).toBe(3);
+
+    // Disjoint tree: 2 new objects vs 3 previously indexed => 2 >= 1.5, prune runs.
+    const replacement = stageClasses(['ClassD', 'ClassE']);
+    const stats = await buildIndex(db, replacement, false);
+
+    expect(stats.deleted).toBe(3);
+    expect(getObjectByName(db, 'ClassA', 'Class')).toBeNull();
+    expect(getObjectByName(db, 'ClassB', 'Class')).toBeNull();
+    expect(getObjectByName(db, 'ClassC', 'Class')).toBeNull();
+    expect(getObjectByName(db, 'ClassD', 'Class')).not.toBeNull();
+    expect(getObjectByName(db, 'ClassE', 'Class')).not.toBeNull();
+    expect(getIndexStats(db).totalObjects).toBe(2);
+  });
+
+  it('skips pruning when a disjoint scan covers less than half of the previously indexed objects', async () => {
+    const original = stageClasses(['ClassA', 'ClassB', 'ClassC']);
+    const db = openTracked();
+    await buildIndex(db, original, true);
+
+    // Disjoint tree: 1 new object vs 3 previously indexed => 1 < 1.5, prune skipped.
+    const replacement = stageClasses(['ClassD']);
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    try {
+      const stats = await buildIndex(db, replacement, false);
+      expect(stats.deleted).toBe(0);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('Pruning skipped: scanned 1 objects vs 3 previously indexed'),
+        expect.anything()
+      );
+    } finally {
+      warn.mockRestore();
+    }
+
+    expect(getObjectByName(db, 'ClassA', 'Class')).not.toBeNull();
+    expect(getIndexStats(db).totalObjects).toBe(4);
+  });
+
+  it('prunes despite the magnitude guard when D365_BYPASS_PRUNE_GUARD=1', async () => {
+    const original = stageClasses(['ClassA', 'ClassB', 'ClassC']);
+    const db = openTracked();
+    await buildIndex(db, original, true);
+
+    const replacement = stageClasses(['ClassD']);
+    process.env.D365_BYPASS_PRUNE_GUARD = '1';
+    try {
+      const stats = await buildIndex(db, replacement, false);
+      expect(stats.deleted).toBe(3);
+    } finally {
+      delete process.env.D365_BYPASS_PRUNE_GUARD;
+    }
+
+    expect(getObjectByName(db, 'ClassA', 'Class')).toBeNull();
+    expect(getObjectByName(db, 'ClassD', 'Class')).not.toBeNull();
+  });
+
+  it('keeps a single indexed object when the scan finds nothing', async () => {    const root = stageClasses(['ClassA']);
     const db = openTracked();
     await buildIndex(db, root, true);
 
