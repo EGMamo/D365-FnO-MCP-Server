@@ -29,7 +29,10 @@ interface JsonRpcErrorBody {
 
 interface SessionEntry {
   transport: StreamableHTTPServerTransport;
+  server: McpServer;
   lastActivity: number;
+  /** False while the initialize handshake is still in flight (slot reserved). */
+  initialized: boolean;
 }
 
 const SESSION_SWEEP_INTERVAL_MS = 60_000;
@@ -149,13 +152,13 @@ export function createHttpApp(createMcpServer: ServerFactory, options: HttpTrans
     return next();
   });
 
-  // ── Per-request timeout ───────────────────────────────────────────────────
+  // ── Per-request response timeout ──────────────────────────────────────────
+  // This guard is response-only: it fails the HTTP request with 504 when nothing
+  // has been sent in time. It cannot cancel work already in flight — the MCP SDK's
+  // `transport.handleRequest` takes no AbortSignal, and synchronous better-sqlite3
+  // queries are not cancellable from Node once started.
   app.use((req: Request, res: Response, next: NextFunction) => {
-    const controller = new AbortController();
-    (req as Request & { abortSignal?: AbortSignal }).abortSignal = controller.signal;
-
     const timer = setTimeout(() => {
-      controller.abort();
       if (!res.headersSent) {
         logger.error('Request timed out', {
           path: req.path,
@@ -170,25 +173,46 @@ export function createHttpApp(createMcpServer: ServerFactory, options: HttpTrans
     next();
   });
 
+  const closeSession = (sid: string, entry: SessionEntry, reason: string): void => {
+    sessions.delete(sid);
+    logger.info('Closing session', { sessionId: sid, reason, active: sessions.size });
+    void Promise.resolve(entry.transport.close()).catch((err: unknown) => {
+      logger.error('Failed to close session transport', { sessionId: sid, message: String(err) });
+    });
+    void Promise.resolve(entry.server.close()).catch((err: unknown) => {
+      logger.error('Failed to close session server', { sessionId: sid, message: String(err) });
+    });
+  };
+
   // ── Idle session sweep ────────────────────────────────────────────────────
   const sweep = setInterval(() => {
     const now = Date.now();
     for (const [sid, entry] of sessions) {
       if (now - entry.lastActivity <= sessionIdleTimeoutMs) continue;
-      sessions.delete(sid);
-      logger.info('Closing idle session', { sessionId: sid, active: sessions.size });
-      void Promise.resolve(entry.transport.close()).catch((err: unknown) => {
-        logger.error('Failed to close idle session', { sessionId: sid, message: String(err) });
-      });
+      closeSession(sid, entry, 'idle');
     }
   }, SESSION_SWEEP_INTERVAL_MS);
   sweep.unref?.();
   app.locals.sessionSweep = sweep;
   app.locals.sessions = sessions;
 
+  /** First JSON-RPC message method in the body, if any. */
+  const firstMethod = (body: unknown): string | undefined => {
+    const msg = Array.isArray(body) ? body[0] : body;
+    if (typeof msg !== 'object' || msg === null) return undefined;
+    const method = (msg as Record<string, unknown>).method;
+    return typeof method === 'string' ? method : undefined;
+  };
+
+  const firstId = (body: unknown): string | number | null => {
+    const msg = Array.isArray(body) ? body[0] : body;
+    if (typeof msg !== 'object' || msg === null) return null;
+    const id = (msg as Record<string, unknown>).id;
+    return typeof id === 'string' || typeof id === 'number' ? id : null;
+  };
+
   // ── MCP endpoint ──────────────────────────────────────────────────────────
   const handleMcp = async (req: Request, res: Response, next: NextFunction) => {
-    const signal = (req as Request & { abortSignal?: AbortSignal }).abortSignal;
     try {
       const sessionId = req.headers['mcp-session-id'] as string | undefined;
 
@@ -204,9 +228,13 @@ export function createHttpApp(createMcpServer: ServerFactory, options: HttpTrans
         return;
       }
 
-      if (sessions.size >= maxConcurrentSessions) {
-        logger.warn('Session limit reached', { active: sessions.size, max: maxConcurrentSessions });
-        res.status(503).json(jsonRpcError(-32000, 'Server busy: maximum concurrent sessions reached'));
+      // Without a session ID the only legal request is `initialize`. Anything else
+      // must be rejected *before* we allocate a transport + McpServer, otherwise an
+      // unauthenticated-shaped request stream would leak one server per request.
+      if (req.method !== 'POST' || firstMethod(req.body) !== 'initialize') {
+        res
+          .status(400)
+          .json(jsonRpcError(-32600, 'Bad Request: mcp-session-id header required for non-initialize requests', firstId(req.body)));
         return;
       }
 
@@ -214,25 +242,52 @@ export function createHttpApp(createMcpServer: ServerFactory, options: HttpTrans
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => newSessionId,
         onsessioninitialized: (sid: string) => {
-          sessions.set(sid, { transport, lastActivity: Date.now() });
+          const entry = sessions.get(sid);
+          if (entry) entry.initialized = true;
           logger.info('Session initialized', { sessionId: sid, active: sessions.size });
         },
       });
 
-      transport.onclose = () => {
-        sessions.delete(newSessionId);
-        logger.info('Session closed', { sessionId: newSessionId, active: sessions.size });
+      const mcpServer = createMcpServer();
+      const entry: SessionEntry = {
+        transport,
+        server: mcpServer,
+        lastActivity: Date.now(),
+        initialized: false,
       };
 
-      const mcpServer = createMcpServer();
-      await mcpServer.connect(transport);
-      if (signal?.aborted) return;
-      await transport.handleRequest(req, res, req.body);
-      const entry = sessions.get(newSessionId);
-      if (entry) entry.lastActivity = Date.now();
+      // Reserve the slot synchronously so concurrent initializations cannot all
+      // observe a stale `sessions.size` and blow past the cap.
+      sessions.set(newSessionId, entry);
+      if (sessions.size > maxConcurrentSessions) {
+        sessions.delete(newSessionId);
+        logger.warn('Session limit reached', { active: sessions.size, max: maxConcurrentSessions });
+        res.status(503).json(jsonRpcError(-32000, 'Server busy: maximum concurrent sessions reached'));
+        return;
+      }
+
+      transport.onclose = () => {
+        if (sessions.delete(newSessionId)) {
+          logger.info('Session closed', { sessionId: newSessionId, active: sessions.size });
+        }
+      };
+
+      let handshakeOk = false;
+      try {
+        await mcpServer.connect(transport);
+        await transport.handleRequest(req, res, req.body);
+        handshakeOk = sessions.get(newSessionId)?.initialized ?? false;
+        entry.lastActivity = Date.now();
+      } finally {
+        // If `onsessioninitialized` never fired (client disconnect, transport error,
+        // rejected handshake) the reservation must be released along with the server.
+        if (!handshakeOk && sessions.get(newSessionId) === entry) {
+          closeSession(newSessionId, entry, 'initialize did not complete');
+        }
+      }
     } catch (err) {
-      if (signal?.aborted || res.headersSent) {
-        logger.error('Request failed after response started or abort', { message: String(err) });
+      if (res.headersSent) {
+        logger.error('Request failed after response started', { message: String(err) });
         return;
       }
       next(err);

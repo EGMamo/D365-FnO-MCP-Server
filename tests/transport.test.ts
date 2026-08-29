@@ -8,22 +8,37 @@ const API_KEY = 'test-api-key-1234567890-abcdefghijklmnop';
 
 let server: Server;
 let baseUrl: string;
+const extraServers: Server[] = [];
+
+function makeApp(
+  factory: () => McpServer = () => new McpServer({ name: 'test', version: '0.0.0' }),
+  overrides: Partial<Parameters<typeof createHttpApp>[1]> = {},
+) {
+  const app = createHttpApp(factory, {
+    port: 0,
+    mcpApiKey: API_KEY,
+    version: '0.1.0',
+    rateLimitMaxRequests: 10_000,
+    rateLimitWindowMs: 60_000,
+    requestTimeoutMs: 5_000,
+    trustProxyHops: 0,
+    maxConcurrentSessions: 100,
+    sessionIdleTimeoutMs: 60_000,
+    ...overrides,
+  });
+  return { app, sessions: app.locals.sessions as Map<string, unknown> };
+}
+
+async function listen(app: ReturnType<typeof makeApp>['app']): Promise<string> {
+  const s = await new Promise<Server>((resolve) => {
+    const created = app.listen(0, () => resolve(created));
+  });
+  extraServers.push(s);
+  return `http://127.0.0.1:${(s.address() as AddressInfo).port}`;
+}
 
 beforeAll(async () => {
-  const app = createHttpApp(
-    () => new McpServer({ name: 'test', version: '0.0.0' }),
-    {
-      port: 0,
-      mcpApiKey: API_KEY,
-      version: '0.1.0',
-      rateLimitMaxRequests: 10_000,
-      rateLimitWindowMs: 60_000,
-      requestTimeoutMs: 5_000,
-      trustProxyHops: 0,
-      maxConcurrentSessions: 100,
-      sessionIdleTimeoutMs: 60_000,
-    },
-  );
+  const { app } = makeApp();
 
   await new Promise<void>((resolve) => {
     server = app.listen(0, () => resolve());
@@ -34,6 +49,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await new Promise<void>((resolve) => server.close(() => resolve()));
+  await Promise.all(extraServers.map((s) => new Promise<void>((resolve) => s.close(() => resolve()))));
 });
 
 describe('http transport auth', () => {
@@ -88,8 +104,10 @@ describe('json-rpc validation', () => {
       headers: { 'X-API-Key': API_KEY, 'Content-Type': 'application/json' },
       body: JSON.stringify({ jsonrpc: '2.0', id: 3, result: {} }),
     });
-    // Must get past envelope validation; the MCP transport decides the rest.
-    expect(res.status).not.toBe(400);
+    // Passes envelope validation; rejected later because it carries no session.
+    const body = (await res.json()) as { error: { code: number; message: string } };
+    expect(res.status).toBe(400);
+    expect(body.error.message).toMatch(/mcp-session-id/);
   });
 
   it('accepts a JSON-RPC error response envelope', async () => {
@@ -98,7 +116,8 @@ describe('json-rpc validation', () => {
       headers: { 'X-API-Key': API_KEY, 'Content-Type': 'application/json' },
       body: JSON.stringify({ jsonrpc: '2.0', id: 4, error: { code: -1, message: 'nope' } }),
     });
-    expect(res.status).not.toBe(400);
+    const body = (await res.json()) as { error: { message: string } };
+    expect(body.error.message).toMatch(/mcp-session-id/);
   });
 
   it('rejects a request missing "jsonrpc" with -32600', async () => {
@@ -122,5 +141,82 @@ describe('body size limit', () => {
       body: JSON.stringify(huge),
     });
     expect(res.status).toBe(413);
+  });
+});
+
+describe('session lifecycle', () => {
+  const initBody = {
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'initialize',
+    params: {
+      protocolVersion: '2024-11-05',
+      capabilities: {},
+      clientInfo: { name: 'test-client', version: '0.0.0' },
+    },
+  };
+
+  const initHeaders = {
+    'X-API-Key': API_KEY,
+    'Content-Type': 'application/json',
+    Accept: 'application/json, text/event-stream',
+  };
+
+  it('rejects tools/list without a session id and creates no server', async () => {
+    let created = 0;
+    const { app, sessions } = makeApp(() => {
+      created += 1;
+      return new McpServer({ name: 'test', version: '0.0.0' });
+    });
+    const url = await listen(app);
+
+    const res = await fetch(`${url}/mcp`, {
+      method: 'POST',
+      headers: { 'X-API-Key': API_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+    });
+
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { code: number } };
+    expect(body.error.code).toBe(-32600);
+    expect(created).toBe(0);
+    expect(sessions.size).toBe(0);
+  });
+
+  it('registers exactly one session per successful initialize', async () => {
+    const { app, sessions } = makeApp();
+    const url = await listen(app);
+
+    const res = await fetch(`${url}/mcp`, {
+      method: 'POST',
+      headers: initHeaders,
+      body: JSON.stringify(initBody),
+    });
+
+    expect(res.status).toBe(200);
+    await res.text();
+    expect(sessions.size).toBe(1);
+  });
+
+  it('enforces the concurrent session cap', async () => {
+    const { app, sessions } = makeApp(undefined, { maxConcurrentSessions: 2 });
+    const url = await listen(app);
+
+    const results = await Promise.all(
+      Array.from({ length: 5 }, () =>
+        fetch(`${url}/mcp`, {
+          method: 'POST',
+          headers: initHeaders,
+          body: JSON.stringify(initBody),
+        }).then(async (r) => {
+          await r.text();
+          return r.status;
+        }),
+      ),
+    );
+
+    expect(results.filter((s) => s === 200).length).toBeLessThanOrEqual(2);
+    expect(results.filter((s) => s === 503).length).toBeGreaterThan(0);
+    expect(sessions.size).toBeLessThanOrEqual(2);
   });
 });
