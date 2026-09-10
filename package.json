@@ -16,7 +16,7 @@
   },
   "type": "module",
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=24.0.0"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
@@ -35,7 +35,6 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
-    "better-sqlite3": "^11.10.0",
     "dotenv": "^16.4.5",
     "express": "^5.2.1",
     "express-rate-limit": "^8.7.0",
@@ -44,9 +43,8 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.11",
     "@types/express": "^5.0.6",
-    "@types/node": "^22.0.0",
+    "@types/node": "^24.0.0",
     "@typescript-eslint/eslint-plugin": "^8.18.0",
     "@typescript-eslint/parser": "^8.18.0",
     "eslint": "^9.17.0",

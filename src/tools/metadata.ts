@@ -1,5 +1,5 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { Database } from 'better-sqlite3';
+import type { Database } from '../indexer/db.js';
 import { z } from 'zod';
 import * as dbUtils from '../indexer/db.js';
 import { getIndexStats } from '../indexer/buildIndex.js';

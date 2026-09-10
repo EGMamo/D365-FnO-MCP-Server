@@ -1,4 +1,4 @@
-import { Database } from 'better-sqlite3';
+import type { Database } from './db.js';
 import { scanPackagesDir } from './scanner.js';
 import * as dbUtils from './db.js';
 import * as parser from './parser.js';

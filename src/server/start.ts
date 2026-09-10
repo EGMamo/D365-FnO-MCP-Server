@@ -23,7 +23,7 @@ export async function startServer(): Promise<void> {
   /**
    * Factory: create a new McpServer instance with all tools registered.
    * Called once per MCP client session. All sessions share the same `db`
-   * connection (better-sqlite3 is synchronous and safe for shared reads).
+   * connection (Node's built-in SQLite driver is synchronous and safe for shared reads).
    */
   function createMcpServer(): McpServer {
     const server = new McpServer({ name: 'd365-fno-mcp-server', version: VERSION });

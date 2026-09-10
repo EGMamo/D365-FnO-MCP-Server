@@ -1,4 +1,4 @@
-import { Database } from 'better-sqlite3';
+import type { Database } from '../indexer/db.js';
 import * as dbUtils from '../indexer/db.js';
 
 export interface AxMethod {

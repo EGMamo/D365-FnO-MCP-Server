@@ -1,5 +1,5 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { Database } from 'better-sqlite3';
+import type { Database } from '../indexer/db.js';
 import { z } from 'zod';
 import { resolveLabelByLanguage, searchLabelsFts } from '../indexer/db.js';
 

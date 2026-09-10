@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterEach, afterAll } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { Database } from 'better-sqlite3';
+import type { Database } from '../src/indexer/db.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { registerWriterTools } from '../src/tools/writers.js';
 import { seedDb, type ToolResult } from './helpers/toolHarness.js';

@@ -20,7 +20,7 @@ Date: 2026-08-29
 | Command | Result |
 | --- | --- |
 | `git init` | OK |
-| `npm install` | OK (warnings only: `allow-scripts` prompts for `better-sqlite3`, `esbuild`) |
+| `npm install` | OK (warnings only: `allow-scripts` prompts for native build helpers such as `esbuild`) |
 | `npm run lint` | Exit 0 — 47 problems, **0 errors / 47 warnings** |
 | `npm run build` | **Fails** — 26 TS errors (23 newly surfaced by the strict flags, 3 pre-existing) |
 | `npm test` | **Passes** — 2 files, 2 tests |

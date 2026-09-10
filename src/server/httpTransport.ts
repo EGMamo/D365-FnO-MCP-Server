@@ -157,7 +157,7 @@ export function createHttpApp(createMcpServer: ServerFactory, options: HttpTrans
   // ── Per-request response timeout ──────────────────────────────────────────
   // This guard is response-only: it fails the HTTP request with 504 when nothing
   // has been sent in time. It cannot cancel work already in flight — the MCP SDK's
-  // `transport.handleRequest` takes no AbortSignal, and synchronous better-sqlite3
+  // `transport.handleRequest` takes no AbortSignal, and synchronous SQLite
   // queries are not cancellable from Node once started.
   app.use((req: Request, res: Response, next: NextFunction) => {
     const timer = setTimeout(() => {

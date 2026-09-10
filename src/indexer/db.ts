@@ -1,5 +1,28 @@
-import DatabaseConstructor, { Database } from 'better-sqlite3';
+import { createRequire } from 'node:module';
+import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
 import fs from 'fs';
+
+export type Database = DatabaseSync;
+
+const require = createRequire(import.meta.url);
+const { DatabaseSync: NodeDatabaseSync } = require('node:sqlite') as typeof import('node:sqlite');
+
+function transaction<Args extends unknown[], Result>(
+  db: Database,
+  fn: (...args: Args) => Result
+): (...args: Args) => Result {
+  return (...args: Args): Result => {
+    db.exec('BEGIN');
+    try {
+      const result = fn(...args);
+      db.exec('COMMIT');
+      return result;
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+  };
+}
 
 export interface Xref {
   id?: number | bigint;
@@ -11,10 +34,10 @@ export interface Xref {
 }
 
 export function openDb(dbPath: string): Database {
-  const db = new DatabaseConstructor(dbPath);
-  db.pragma('journal_mode = WAL');
+  const db = new NodeDatabaseSync(dbPath);
+  db.exec('PRAGMA journal_mode = WAL');
   // Required for ON DELETE CASCADE on child tables (SQLite defaults to off).
-  db.pragma('foreign_keys = ON');
+  db.exec('PRAGMA foreign_keys = ON');
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS ax_objects (
@@ -170,7 +193,7 @@ export function upsertFields(db: Database, objectId: number | bigint, fields: Fi
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
-  const insertMany = db.transaction((items: FieldInput[]) => {
+  const insertMany = transaction(db, (items: FieldInput[]) => {
     for (const item of items) {
       insertStmt.run(
         objectId,
@@ -202,7 +225,7 @@ export function upsertEnumValues(db: Database, objectId: number | bigint, values
   const stmt = db.prepare(
     `INSERT INTO ax_enum_values (object_id, name, value, label_id) VALUES (?, ?, ?, ?)`
   );
-  const insertMany = db.transaction((items: EnumValueInput[]) => {
+  const insertMany = transaction(db, (items: EnumValueInput[]) => {
     for (const item of items) {
       stmt.run(objectId, item.name, item.value === undefined ? '' : String(item.value), item.labelId || '');
     }
@@ -220,7 +243,7 @@ export function upsertDataSources(db: Database, objectId: number | bigint, dataS
   if (!dataSources || dataSources.length === 0) return;
 
   const stmt = db.prepare(`INSERT INTO ax_datasources (object_id, name, table_name) VALUES (?, ?, ?)`);
-  const insertMany = db.transaction((items: DataSourceInput[]) => {
+  const insertMany = transaction(db, (items: DataSourceInput[]) => {
     for (const item of items) {
       stmt.run(objectId, item.name, item.table || '');
     }
@@ -241,7 +264,7 @@ export function upsertFormControls(db: Database, objectId: number | bigint, cont
   const stmt = db.prepare(
     `INSERT INTO ax_form_controls (object_id, name, type, parent_name) VALUES (?, ?, ?, ?)`
   );
-  const insertMany = db.transaction((items: ControlInput[]) => {
+  const insertMany = transaction(db, (items: ControlInput[]) => {
     const walk = (list: ControlInput[], parent: string) => {
       for (const c of list) {
         stmt.run(objectId, c.name, c.type || '', parent);
@@ -262,7 +285,7 @@ export function upsertProperties(db: Database, objectId: number | bigint, props:
     `INSERT INTO ax_properties (object_id, key, value) VALUES (?, ?, ?)
      ON CONFLICT(object_id, key) DO UPDATE SET value = excluded.value`
   );
-  const insertMany = db.transaction((items: [string, unknown][]) => {
+  const insertMany = transaction(db, (items: [string, unknown][]) => {
     for (const [key, value] of items) {
       stmt.run(objectId, key, String(value));
     }
@@ -281,7 +304,7 @@ export function upsertMethods(db: Database, objectId: number | bigint, methods: 
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `);
 
-  const insertMany = db.transaction((items) => {
+  const insertMany = transaction(db, (items: any[]) => {
     for (const item of items) {
       insertStmt.run(objectId, item.name, item.accessModifier || 'public', item.returnType || '', JSON.stringify(item.params || []), item.isStatic ? 1 : 0, item.isAbstract ? 1 : 0);
     }
@@ -305,7 +328,7 @@ export function upsertLabels(db: Database, labels: any[], sourceFile: string = '
       source_file = excluded.source_file
   `);
 
-  const insertMany = db.transaction((items) => {
+  const insertMany = transaction(db, (items: any[]) => {
     for (const item of items) {
       insertStmt.run(item.labelId, item.language || 'en-US', item.value, item.sourceFile || sourceFile);
     }
@@ -358,7 +381,7 @@ export function prune(db: Database, seenObjectFiles: Set<string>, seenLabelFiles
 
   const deleteObject = db.prepare(`DELETE FROM ax_objects WHERE id = ?`);
   const deleteXrefs = db.prepare(`DELETE FROM ax_xref WHERE from_type = ? AND from_name = ?`);
-  const run = db.transaction((rows: typeof doomed) => {
+  const run = transaction(db, (rows: typeof doomed) => {
     for (const row of rows) {
       deleteObject.run(row.id);
       deleteXrefs.run(row.type, row.name);
@@ -372,7 +395,7 @@ export function prune(db: Database, seenObjectFiles: Set<string>, seenLabelFiles
     .all() as { id: number; source_file: string }[];
   const doomedLabels = labelRows.filter((row) => !seenLabelFiles.has(row.source_file));
   const deleteLabel = db.prepare(`DELETE FROM ax_labels WHERE id = ?`);
-  const runLabels = db.transaction((rows: typeof doomedLabels) => {
+  const runLabels = transaction(db, (rows: typeof doomedLabels) => {
     for (const row of rows) deleteLabel.run(row.id);
   });
   runLabels(doomedLabels);
@@ -387,7 +410,7 @@ export function prune(db: Database, seenObjectFiles: Set<string>, seenLabelFiles
     )
     .run();
 
-  return { objects: doomed.length, labels: doomedLabels.length, xrefs: orphaned.changes };
+  return { objects: doomed.length, labels: doomedLabels.length, xrefs: Number(orphaned.changes) };
 }
 
 export function upsertXref(db: Database, xrefs: any[]) {
@@ -398,7 +421,7 @@ export function upsertXref(db: Database, xrefs: any[]) {
     VALUES (?, ?, ?, ?, ?)
   `);
 
-  const insertMany = db.transaction((items) => {
+  const insertMany = transaction(db, (items: any[]) => {
     for (const item of items) {
       insertStmt.run(item.fromType, item.fromName, item.toType, item.toName, item.xrefKind);
     }
@@ -414,9 +437,8 @@ export function deleteXrefsFrom(db: Database, fromType: string, fromName: string
 /**
  * Reuses prepared statements across a full indexing pass.
  *
- * `better-sqlite3` statements are native resources. Preparing fresh statements
- * for every AOT object is expensive and has proven unstable on Windows ARM when
- * indexing large D365 package directories.
+ * Reusing statements keeps large D365 package scans fast and avoids unnecessary
+ * native resource churn.
  */
 export function createIndexWriter(db: Database) {
   const selectExistingObject = db.prepare(
@@ -440,7 +462,7 @@ export function createIndexWriter(db: Database) {
     INSERT INTO ax_fields (object_id, name, type, edt, label_id, mandatory, allow_edit, data_source, data_field)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  const insertFields = db.transaction((objectId: number | bigint, fields: FieldInput[]) => {
+  const insertFields = transaction(db, (objectId: number | bigint, fields: FieldInput[]) => {
     deleteFields.run(objectId);
     for (const item of fields) {
       insertField.run(
@@ -461,7 +483,7 @@ export function createIndexWriter(db: Database) {
   const insertEnumValue = db.prepare(
     `INSERT INTO ax_enum_values (object_id, name, value, label_id) VALUES (?, ?, ?, ?)`
   );
-  const insertEnumValues = db.transaction((objectId: number | bigint, values: EnumValueInput[]) => {
+  const insertEnumValues = transaction(db, (objectId: number | bigint, values: EnumValueInput[]) => {
     deleteEnumValues.run(objectId);
     for (const item of values) {
       insertEnumValue.run(
@@ -477,7 +499,7 @@ export function createIndexWriter(db: Database) {
   const insertDataSource = db.prepare(
     `INSERT INTO ax_datasources (object_id, name, table_name) VALUES (?, ?, ?)`
   );
-  const insertDataSources = db.transaction((objectId: number | bigint, dataSources: DataSourceInput[]) => {
+  const insertDataSources = transaction(db, (objectId: number | bigint, dataSources: DataSourceInput[]) => {
     deleteDataSources.run(objectId);
     for (const item of dataSources) {
       insertDataSource.run(objectId, item.name, item.table || '');
@@ -488,7 +510,7 @@ export function createIndexWriter(db: Database) {
   const insertFormControl = db.prepare(
     `INSERT INTO ax_form_controls (object_id, name, type, parent_name) VALUES (?, ?, ?, ?)`
   );
-  const insertFormControls = db.transaction((objectId: number | bigint, controls: ControlInput[]) => {
+  const insertFormControls = transaction(db, (objectId: number | bigint, controls: ControlInput[]) => {
     deleteFormControls.run(objectId);
     const walk = (list: ControlInput[], parent: string) => {
       for (const c of list) {
@@ -504,7 +526,7 @@ export function createIndexWriter(db: Database) {
     INSERT INTO ax_properties (object_id, key, value) VALUES (?, ?, ?)
     ON CONFLICT(object_id, key) DO UPDATE SET value = excluded.value
   `);
-  const insertProperties = db.transaction((objectId: number | bigint, props: Record<string, unknown>) => {
+  const insertProperties = transaction(db, (objectId: number | bigint, props: Record<string, unknown>) => {
     deleteProperties.run(objectId);
     for (const [key, value] of Object.entries(props)) {
       if (value !== undefined && value !== null && value !== '') {
@@ -518,7 +540,7 @@ export function createIndexWriter(db: Database) {
     INSERT INTO ax_methods (object_id, name, access_modifier, return_type, params, is_static, is_abstract)
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `);
-  const insertMethods = db.transaction((objectId: number | bigint, methods: any[]) => {
+  const insertMethods = transaction(db, (objectId: number | bigint, methods: any[]) => {
     deleteMethods.run(objectId);
     for (const item of methods) {
       insertMethod.run(
@@ -541,7 +563,7 @@ export function createIndexWriter(db: Database) {
       value = excluded.value,
       source_file = excluded.source_file
   `);
-  const insertLabels = db.transaction((labels: any[], sourceFile: string) => {
+  const insertLabels = transaction(db, (labels: any[], sourceFile: string) => {
     if (sourceFile) deleteLabelsBySource.run(sourceFile);
     for (const item of labels) {
       insertLabel.run(item.labelId, item.language || 'en-US', item.value, item.sourceFile || sourceFile);
@@ -553,7 +575,7 @@ export function createIndexWriter(db: Database) {
     INSERT INTO ax_xref (from_type, from_name, to_type, to_name, xref_kind)
     VALUES (?, ?, ?, ?, ?)
   `);
-  const insertXrefs = db.transaction((xrefs: any[]) => {
+  const insertXrefs = transaction(db, (xrefs: any[]) => {
     for (const item of xrefs) {
       insertXref.run(item.fromType, item.fromName, item.toType, item.toName, item.xrefKind);
     }
@@ -681,14 +703,14 @@ export function searchLabelsFts(
 ): LabelHit[] {
   const likeSearch = (): LabelHit[] => {
     let sql = `SELECT label_id, language, value FROM ax_labels WHERE value LIKE ?`;
-    const params: unknown[] = [`%${query}%`];
+    const params: SQLInputValue[] = [`%${query}%`];
     if (language) {
       sql += ` AND language = ?`;
       params.push(language);
     }
     sql += ` LIMIT ?`;
     params.push(limit);
-    return db.prepare(sql).all(...params) as LabelHit[];
+    return db.prepare(sql).all(...params) as unknown as LabelHit[];
   };
 
   if (!/[A-Za-z0-9]/.test(query)) return likeSearch();
@@ -701,14 +723,14 @@ export function searchLabelsFts(
       JOIN ax_labels l ON l.id = f.rowid
       WHERE f.ax_labels_fts MATCH ?
     `;
-    const params: unknown[] = [ftsQuery];
+    const params: SQLInputValue[] = [ftsQuery];
     if (language) {
       sql += ` AND l.language = ?`;
       params.push(language);
     }
     sql += ` ORDER BY rank LIMIT ?`;
     params.push(limit);
-    const rows = db.prepare(sql).all(...params) as LabelHit[];
+    const rows = db.prepare(sql).all(...params) as unknown as LabelHit[];
     return rows.length > 0 ? rows : likeSearch();
   } catch {
     return likeSearch();
@@ -774,7 +796,7 @@ export function searchSymbols(db: Database, query: string, type?: string, limit:
     JOIN ax_objects o ON o.id = f.rowid
     WHERE f.ax_fts MATCH ?
   `;
-  const params: unknown[] = [ftsQuery];
+  const params: SQLInputValue[] = [ftsQuery];
 
   if (type) {
     sql += ` AND o.type = ?`;
@@ -826,7 +848,7 @@ export function getXrefsTo(
   xrefKind?: string
 ): Xref[] {
   let sql = `SELECT * FROM ax_xref WHERE to_name = ? AND to_type = ?`;
-  const params: unknown[] = [name, type];
+  const params: SQLInputValue[] = [name, type];
   if (xrefKind !== undefined) {
     sql += ` AND xref_kind = ?`;
     params.push(xrefKind);
@@ -835,11 +857,11 @@ export function getXrefsTo(
     sql += ` LIMIT ?`;
     params.push(limit);
   }
-  return db.prepare(sql).all(...params) as Xref[];
+  return db.prepare(sql).all(...params) as unknown as Xref[];
 }
 
 export function getXrefsFrom(db: Database, name: string, type: string): Xref[] {
-  return db.prepare(`SELECT * FROM ax_xref WHERE from_name = ? AND from_type = ?`).all(name, type) as Xref[];
+  return db.prepare(`SELECT * FROM ax_xref WHERE from_name = ? AND from_type = ?`).all(name, type) as unknown as Xref[];
 }
 
 export function getAllObjects(db: Database, type?: string, pkg?: string, offset: number = 0, limit: number = 50) {

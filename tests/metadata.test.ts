@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import type { Database } from 'better-sqlite3';
+import type { Database } from '../src/indexer/db.js';
 import fs from 'fs';
 import path from 'path';
 import { collectMetadataTools, seedDb, type ToolResult } from './helpers/toolHarness.js';

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { Database } from 'better-sqlite3';
+import type { Database } from '../indexer/db.js';
 import { z } from 'zod';
 import { resolveAnyObject, validateNaming } from '../validation/grounding.js';
 import { generateTableExtensionXml } from './generators.js';

@@ -13,7 +13,7 @@ A Model Context Protocol (MCP) server that gives AI coding assistants first-clas
 
 ## Prerequisites
 
-- Node.js **22 or higher**
+- Node.js **24 or higher**
 - A local D365 FnO `PackagesLocalDirectory` (or a copy of it)
 
 ## Installation

@@ -8,10 +8,10 @@ enums, labels, cross-references — by indexing `PackagesLocalDirectory` XML fil
 > **No live D365 environment connection.** Pure local code intelligence tool.
 
 ## Tech Stack
-- **Runtime**: Node.js 22, TypeScript (ESNext modules, strict mode)
+- **Runtime**: Node.js 24, TypeScript (ESNext modules, strict mode)
 - **MCP Transport**: HTTP Streamable SSE — MCP spec 2025-03-26 (`StreamableHTTPServerTransport`)
 - **MCP SDK**: `@modelcontextprotocol/sdk`
-- **Local Indexing**: `PackagesLocalDirectory` AOT XML files → parsed with `fast-xml-parser` → stored in SQLite via `better-sqlite3`
+- **Local Indexing**: `PackagesLocalDirectory` AOT XML files -> parsed with `fast-xml-parser` -> stored in SQLite via Node's built-in SQLite driver
 - **Auth (MCP clients)**: API Key via `X-API-Key` HTTP header
 - **No live D365 connection**: No Azure AD, no OData, no network calls to D365
 - **Distribution**: Local clone only — `git clone` → `npm install` → `npm start`

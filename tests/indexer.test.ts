@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } 
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import type { Database } from 'better-sqlite3';
+import type { Database } from '../src/indexer/db.js';
 import { openDb, getObjectByName, getXrefsFrom, searchSymbols } from '../src/indexer/db.js';
 import { buildIndex, getIndexStats } from '../src/indexer/buildIndex.js';
 import { logger } from '../src/utils/logger.js';
