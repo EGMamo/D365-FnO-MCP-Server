@@ -142,6 +142,12 @@ export function upsertObject(db: Database, obj: any): number | bigint {
   return result.id;
 }
 
+export interface ExistingObjectRow {
+  id: number | bigint;
+  file_mtime: number;
+  file_path: string;
+}
+
 export interface FieldInput {
   name: string;
   type?: string;
@@ -403,6 +409,207 @@ export function upsertXref(db: Database, xrefs: any[]) {
 
 export function deleteXrefsFrom(db: Database, fromType: string, fromName: string) {
   db.prepare(`DELETE FROM ax_xref WHERE from_type = ? AND from_name = ?`).run(fromType, fromName);
+}
+
+/**
+ * Reuses prepared statements across a full indexing pass.
+ *
+ * `better-sqlite3` statements are native resources. Preparing fresh statements
+ * for every AOT object is expensive and has proven unstable on Windows ARM when
+ * indexing large D365 package directories.
+ */
+export function createIndexWriter(db: Database) {
+  const selectExistingObject = db.prepare(
+    `SELECT id, file_mtime, file_path FROM ax_objects WHERE name = ? AND type = ?`
+  );
+  const upsertObjectStmt = db.prepare(`
+    INSERT INTO ax_objects (type, name, package, model, file_path, raw_xml, file_mtime)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(type, name) DO UPDATE SET
+      package = excluded.package,
+      model = excluded.model,
+      file_path = excluded.file_path,
+      raw_xml = excluded.raw_xml,
+      file_mtime = excluded.file_mtime
+    RETURNING id
+  `);
+  const updateObjectMtime = db.prepare(`UPDATE ax_objects SET file_mtime = ? WHERE id = ?`);
+
+  const deleteFields = db.prepare(`DELETE FROM ax_fields WHERE object_id = ?`);
+  const insertField = db.prepare(`
+    INSERT INTO ax_fields (object_id, name, type, edt, label_id, mandatory, allow_edit, data_source, data_field)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  const insertFields = db.transaction((objectId: number | bigint, fields: FieldInput[]) => {
+    deleteFields.run(objectId);
+    for (const item of fields) {
+      insertField.run(
+        objectId,
+        item.name,
+        item.type || '',
+        item.edt || '',
+        item.labelId || '',
+        item.mandatory ? 1 : 0,
+        item.allowEdit === false ? 0 : 1,
+        item.dataSource || '',
+        item.dataField || ''
+      );
+    }
+  });
+
+  const deleteEnumValues = db.prepare(`DELETE FROM ax_enum_values WHERE object_id = ?`);
+  const insertEnumValue = db.prepare(
+    `INSERT INTO ax_enum_values (object_id, name, value, label_id) VALUES (?, ?, ?, ?)`
+  );
+  const insertEnumValues = db.transaction((objectId: number | bigint, values: EnumValueInput[]) => {
+    deleteEnumValues.run(objectId);
+    for (const item of values) {
+      insertEnumValue.run(
+        objectId,
+        item.name,
+        item.value === undefined ? '' : String(item.value),
+        item.labelId || ''
+      );
+    }
+  });
+
+  const deleteDataSources = db.prepare(`DELETE FROM ax_datasources WHERE object_id = ?`);
+  const insertDataSource = db.prepare(
+    `INSERT INTO ax_datasources (object_id, name, table_name) VALUES (?, ?, ?)`
+  );
+  const insertDataSources = db.transaction((objectId: number | bigint, dataSources: DataSourceInput[]) => {
+    deleteDataSources.run(objectId);
+    for (const item of dataSources) {
+      insertDataSource.run(objectId, item.name, item.table || '');
+    }
+  });
+
+  const deleteFormControls = db.prepare(`DELETE FROM ax_form_controls WHERE object_id = ?`);
+  const insertFormControl = db.prepare(
+    `INSERT INTO ax_form_controls (object_id, name, type, parent_name) VALUES (?, ?, ?, ?)`
+  );
+  const insertFormControls = db.transaction((objectId: number | bigint, controls: ControlInput[]) => {
+    deleteFormControls.run(objectId);
+    const walk = (list: ControlInput[], parent: string) => {
+      for (const c of list) {
+        insertFormControl.run(objectId, c.name, c.type || '', parent);
+        if (c.children && c.children.length > 0) walk(c.children, c.name);
+      }
+    };
+    walk(controls, '');
+  });
+
+  const deleteProperties = db.prepare(`DELETE FROM ax_properties WHERE object_id = ?`);
+  const insertProperty = db.prepare(`
+    INSERT INTO ax_properties (object_id, key, value) VALUES (?, ?, ?)
+    ON CONFLICT(object_id, key) DO UPDATE SET value = excluded.value
+  `);
+  const insertProperties = db.transaction((objectId: number | bigint, props: Record<string, unknown>) => {
+    deleteProperties.run(objectId);
+    for (const [key, value] of Object.entries(props)) {
+      if (value !== undefined && value !== null && value !== '') {
+        insertProperty.run(objectId, key, String(value));
+      }
+    }
+  });
+
+  const deleteMethods = db.prepare(`DELETE FROM ax_methods WHERE object_id = ?`);
+  const insertMethod = db.prepare(`
+    INSERT INTO ax_methods (object_id, name, access_modifier, return_type, params, is_static, is_abstract)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `);
+  const insertMethods = db.transaction((objectId: number | bigint, methods: any[]) => {
+    deleteMethods.run(objectId);
+    for (const item of methods) {
+      insertMethod.run(
+        objectId,
+        item.name,
+        item.accessModifier || 'public',
+        item.returnType || '',
+        JSON.stringify(item.params || []),
+        item.isStatic ? 1 : 0,
+        item.isAbstract ? 1 : 0
+      );
+    }
+  });
+
+  const deleteLabelsBySource = db.prepare(`DELETE FROM ax_labels WHERE source_file = ?`);
+  const insertLabel = db.prepare(`
+    INSERT INTO ax_labels (label_id, language, value, source_file)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(label_id, language) DO UPDATE SET
+      value = excluded.value,
+      source_file = excluded.source_file
+  `);
+  const insertLabels = db.transaction((labels: any[], sourceFile: string) => {
+    if (sourceFile) deleteLabelsBySource.run(sourceFile);
+    for (const item of labels) {
+      insertLabel.run(item.labelId, item.language || 'en-US', item.value, item.sourceFile || sourceFile);
+    }
+  });
+
+  const deleteXrefsByFrom = db.prepare(`DELETE FROM ax_xref WHERE from_type = ? AND from_name = ?`);
+  const insertXref = db.prepare(`
+    INSERT INTO ax_xref (from_type, from_name, to_type, to_name, xref_kind)
+    VALUES (?, ?, ?, ?, ?)
+  `);
+  const insertXrefs = db.transaction((xrefs: any[]) => {
+    for (const item of xrefs) {
+      insertXref.run(item.fromType, item.fromName, item.toType, item.toName, item.xrefKind);
+    }
+  });
+
+  return {
+    getExistingObject(name: string, type: string): ExistingObjectRow | undefined {
+      return selectExistingObject.get(name, type) as ExistingObjectRow | undefined;
+    },
+    upsertObject(obj: any): number | bigint {
+      const result = upsertObjectStmt.get(
+        obj.type,
+        obj.name,
+        obj.package,
+        obj.model || '',
+        obj.file_path,
+        obj.raw_xml,
+        obj.file_mtime
+      ) as { id: number | bigint };
+      return result.id;
+    },
+    updateObjectMtime(fileMtime: number, objectId: number | bigint): void {
+      updateObjectMtime.run(fileMtime, objectId);
+    },
+    upsertFields(objectId: number | bigint, fields: FieldInput[]): void {
+      insertFields(objectId, fields || []);
+    },
+    upsertEnumValues(objectId: number | bigint, values: EnumValueInput[]): void {
+      insertEnumValues(objectId, values || []);
+    },
+    upsertDataSources(objectId: number | bigint, dataSources: DataSourceInput[]): void {
+      insertDataSources(objectId, dataSources || []);
+    },
+    upsertFormControls(objectId: number | bigint, controls: ControlInput[]): void {
+      insertFormControls(objectId, controls || []);
+    },
+    upsertProperties(objectId: number | bigint, props: Record<string, unknown>): void {
+      insertProperties(objectId, props);
+    },
+    upsertMethods(objectId: number | bigint, methods: any[]): void {
+      insertMethods(objectId, methods || []);
+    },
+    upsertLabels(labels: any[], sourceFile: string): void {
+      if (!labels || labels.length === 0) {
+        if (sourceFile) deleteLabelsBySource.run(sourceFile);
+        return;
+      }
+      insertLabels(labels, sourceFile);
+    },
+    deleteXrefsFrom(fromType: string, fromName: string): void {
+      deleteXrefsByFrom.run(fromType, fromName);
+    },
+    upsertXrefs(xrefs: any[]): void {
+      if (xrefs && xrefs.length > 0) insertXrefs(xrefs);
+    },
+  };
 }
 
 export function rebuildFts(db: Database) {

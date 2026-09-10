@@ -37,6 +37,7 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
 
   logger.info('Starting indexing', { packagesDir });
 
+  const writer = dbUtils.createIndexWriter(db);
   const seenObjectFiles = new Set<string>();
   const seenLabelFiles = new Set<string>();
   // (type|name) -> file path of the object that won the key during this run.
@@ -76,7 +77,7 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
     }
 
     try {
-      const existing = db.prepare(`SELECT id, file_mtime, file_path FROM ax_objects WHERE name = ? AND type = ?`).get(file.name, file.type) as any;
+      const existing = writer.getExistingObject(file.name, file.type);
 
       // A path change (rename/move) must always be re-indexed, even when the
       // mtime suggests the content is unchanged.
@@ -90,8 +91,7 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
 
       if (file.type === 'Label') {
         const labels = parser.parseLabels(content);
-        dbUtils.upsertLabels(
-          db,
+        writer.upsertLabels(
           labels.map(l => ({ ...l, language: file.name.split('_')[1] || 'en-US' })),
           file.filePath
         );
@@ -101,7 +101,7 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
 
       // Keep the previous mtime until parsing succeeds, so a failed parse does not
       // permanently poison the incremental index by marking the object as up to date.
-      const objectId = dbUtils.upsertObject(db, {
+      const objectId = writer.upsertObject({
         type: file.type,
         name: file.name,
         package: file.package,
@@ -117,9 +117,9 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
       switch (file.type) {
         case 'Table': {
           parsed = parser.parseAxTable(content, file.name, file.package);
-          dbUtils.upsertFields(db, objectId, parsed.fields);
-          dbUtils.upsertMethods(db, objectId, parsed.methods);
-          dbUtils.upsertProperties(db, objectId, {
+          writer.upsertFields(objectId, parsed.fields);
+          writer.upsertMethods(objectId, parsed.methods);
+          writer.upsertProperties(objectId, {
             label: parsed.label,
             extends: parsed.extends,
             saveDataPerCompany: parsed.saveDataPerCompany,
@@ -137,8 +137,8 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
         }
         case 'Class': {
           parsed = parser.parseAxClass(content, file.name, file.package);
-          dbUtils.upsertMethods(db, objectId, parsed.methods);
-          dbUtils.upsertProperties(db, objectId, {
+          writer.upsertMethods(objectId, parsed.methods);
+          writer.upsertProperties(objectId, {
             extends: parsed.extends,
             implements: parsed.implements.join(','),
             isAbstract: parsed.isAbstract,
@@ -154,15 +154,15 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
         }
         case 'Enum': {
           parsed = parser.parseAxEnum(content, file.name, file.package);
-          dbUtils.upsertEnumValues(db, objectId, parsed.values);
-          dbUtils.upsertProperties(db, objectId, { label: parsed.label, isExtensible: parsed.isExtensible });
+          writer.upsertEnumValues(objectId, parsed.values);
+          writer.upsertProperties(objectId, { label: parsed.label, isExtensible: parsed.isExtensible });
           break;
         }
         case 'Form': {
           parsed = parser.parseAxForm(content, file.name, file.package);
-          dbUtils.upsertDataSources(db, objectId, parsed.dataSources);
-          dbUtils.upsertFormControls(db, objectId, parsed.controls);
-          dbUtils.upsertProperties(db, objectId, {
+          writer.upsertDataSources(objectId, parsed.dataSources);
+          writer.upsertFormControls(objectId, parsed.controls);
+          writer.upsertProperties(objectId, {
             pattern: parsed.pattern,
             patternVersion: parsed.patternVersion,
             caption: parsed.caption,
@@ -176,8 +176,8 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
         }
         case 'Query': {
           parsed = parser.parseAxQuery(content, file.name, file.package);
-          dbUtils.upsertDataSources(db, objectId, parsed.dataSources);
-          dbUtils.upsertProperties(db, objectId, { title: parsed.title });
+          writer.upsertDataSources(objectId, parsed.dataSources);
+          writer.upsertProperties(objectId, { title: parsed.title });
           for (const ds of parsed.dataSources) {
             if (ds.table) {
               xrefs.push({ fromType: 'Query', fromName: file.name, toType: 'Table', toName: ds.table, xrefKind: 'datasource' });
@@ -187,9 +187,9 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
         }
         case 'DataEntity': {
           parsed = parser.parseAxDataEntity(content, file.name, file.package);
-          dbUtils.upsertFields(db, objectId, parsed.fields);
-          dbUtils.upsertDataSources(db, objectId, parsed.dataSources);
-          dbUtils.upsertProperties(db, objectId, {
+          writer.upsertFields(objectId, parsed.fields);
+          writer.upsertDataSources(objectId, parsed.dataSources);
+          writer.upsertProperties(objectId, {
             publicEntityName: parsed.publicEntityName,
             publicCollectionName: parsed.publicCollectionName,
             stagingTable: parsed.stagingTable,
@@ -205,7 +205,7 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
         }
         case 'Edt': {
           parsed = parser.parseAxEdt(content, file.name, file.package);
-          dbUtils.upsertProperties(db, objectId, {
+          writer.upsertProperties(objectId, {
             extends: parsed.extends,
             label: parsed.labelId,
             helpText: parsed.helpText,
@@ -219,12 +219,10 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
         }
       }
       
-      dbUtils.deleteXrefsFrom(db, file.type, file.name);
-      if (xrefs.length > 0) {
-        dbUtils.upsertXref(db, xrefs);
-      }
+      writer.deleteXrefsFrom(file.type, file.name);
+      writer.upsertXrefs(xrefs);
 
-      db.prepare(`UPDATE ax_objects SET file_mtime = ? WHERE id = ?`).run(file.mtime, objectId);
+      writer.updateObjectMtime(file.mtime, objectId);
 
       if (!existing) stats.added++;
       else stats.updated++;
