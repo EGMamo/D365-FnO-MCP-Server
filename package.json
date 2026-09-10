@@ -26,6 +26,9 @@
     "typecheck": "tsc --noEmit",
     "dev": "tsx watch src/index.ts",
     "start": "node dist/src/index.js",
+    "serve": "node dist/src/index.js serve",
+    "doctor": "node dist/src/index.js doctor",
+    "index": "node dist/src/index.js index",
     "lint": "eslint src/ tests/",
     "test": "vitest run",
     "test:watch": "vitest"
