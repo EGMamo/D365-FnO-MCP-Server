@@ -168,6 +168,25 @@ export function openDb(dbPath: string): Database {
     CREATE INDEX IF NOT EXISTS idx_ax_xref_from ON ax_xref(from_type, from_name);
     CREATE INDEX IF NOT EXISTS idx_ax_xref_to ON ax_xref(to_type, to_name);
     CREATE INDEX IF NOT EXISTS idx_ax_labels_source_file ON ax_labels(source_file);
+
+    CREATE TABLE IF NOT EXISTS ax_usage_refs (
+      id INTEGER PRIMARY KEY,
+      source_type TEXT NOT NULL,
+      source_name TEXT NOT NULL,
+      source_method TEXT,
+      target_type TEXT,
+      target_name TEXT NOT NULL,
+      target_method TEXT,
+      reference_kind TEXT NOT NULL,
+      source_line INTEGER,
+      source_column INTEGER,
+      occurrence_count INTEGER,
+      source_table TEXT NOT NULL,
+      raw_json TEXT NOT NULL
+    );
+    DROP INDEX IF EXISTS idx_ax_usage_target;
+    CREATE INDEX idx_ax_usage_target ON ax_usage_refs(target_name, target_type, target_method);
+    CREATE INDEX IF NOT EXISTS idx_ax_usage_source ON ax_usage_refs(source_type, source_name, source_method);
   `);
 
   return db;

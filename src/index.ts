@@ -33,6 +33,15 @@ export async function run(argv: string[]): Promise<CliResult> {
       const { indexCommand } = await import('./cli/index-command.js');
       return { code: await indexCommand({ force: flags.force === true || flags.force === 'true' }) };
     }
+    case 'index-xref': {
+      const { indexXrefCommand } = await import('./cli/index-xref-command.js');
+      return {
+        code: await indexXrefCommand({
+          connectionString: flagString(flags, 'connection-string'),
+          dbPath: flagString(flags, 'db-path'),
+        }),
+      };
+    }
     case 'doctor': {
       const { doctorCommand } = await import('./cli/doctor.js');
       return { code: await doctorCommand() };
