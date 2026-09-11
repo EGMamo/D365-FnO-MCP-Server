@@ -65,6 +65,7 @@ Configuration comes from environment variables (a `.env` file in the working dir
 | `D365_PACKAGES_DIR` | _(required)_ | Path to `PackagesLocalDirectory`. |
 | `D365_INDEX_DB_PATH` | `./d365_index.db` | Location of the SQLite index file. |
 | `D365_INDEX_ON_START` | `0` | Set to `1` to run a background indexing pass on startup (also enables indexing on start in stdio mode). |
+| `D365_INDEX_STORE_RAW_XML` | `1` | Set to `0` to keep full AOT XML out of `ax_objects.raw_xml` and reduce DB size. `get_element_xml` then reads the source XML from `file_path` on demand, so source files must remain available. |
 | `D365_ENABLE_WRITE_TOOLS` | `0` | Set to `1` to register write tools (e.g. `write_table_extension`). Requires `D365_PROJECT_DIR`. |
 | `D365_PROJECT_DIR` | _(empty)_ | Root directory write tools are allowed to write into. Required when `D365_ENABLE_WRITE_TOOLS=1`. |
 | `D365_BYPASS_PRUNE_GUARD` | `0` | Set to `1` to skip the "scan must overlap at least half of the previously indexed objects" prune guard. The zero-scan and parse-error guards still apply. Use only for an intentional large deletion. |
@@ -145,7 +146,11 @@ In stdio mode, background indexing is skipped unless `D365_INDEX_ON_START=1`.
 `d365-fno-mcp-server index` scans `D365_PACKAGES_DIR` and populates the SQLite index.
 
 - **Incremental by default** — files whose path and modification time are unchanged since the last pass are skipped, so re-indexing after a sync is fast.
-- **`--force`** — ignores mtimes and re-parses every file. Use after upgrading the server or when the index looks stale or corrupt.
+- **Label files are incremental too** — label source mtimes are tracked separately so unchanged `.label.txt` files are skipped on later passes.
+- **Raw XML storage** — full element XML is stored by default for backward compatibility. Set `D365_INDEX_STORE_RAW_XML=0` to shrink the database; raw XML requests will fall back to reading the original source file from disk.
+- **Search index rebuilds** — FTS indexes are rebuilt only when objects or labels changed during the run.
+- **`--force`** — ignores mtimes and re-parses every file. Use when the index looks stale or corrupt. It is *not* required after upgrading the server.
+- **Upgrading an existing index** — schema changes are additive, so an existing `d365_index.db` keeps working; just run `npm run index` again without `--force`. Unchanged AOT objects stay skipped, and any `raw_xml` already stored is preserved even if you set `D365_INDEX_STORE_RAW_XML=0` (the flag only stops writing new raw XML). The first upgraded run reprocesses label files once to populate label mtime tracking, after which labels are skipped like every other file.
 - **Pruning** — entries whose source files no longer exist (deleted or renamed objects) are removed at the end of a full pass, along with their cross-references and labels.
 - **Collisions** — when two files declare the same object name, the collision is counted and reported so duplicate/overlayed metadata is visible rather than silently overwritten.
 

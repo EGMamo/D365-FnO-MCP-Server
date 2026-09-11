@@ -22,6 +22,61 @@ export interface IndexStats {
   durationMs: number;
 }
 
+function shouldStoreRawXml(env: NodeJS.ProcessEnv = process.env): boolean {
+  const value = env.D365_INDEX_STORE_RAW_XML;
+  if (value === undefined) return true;
+  return !['0', 'false', 'no', 'off'].includes(value.trim().toLowerCase());
+}
+
+/** Derives the label language the same way the scanner does, from `<name>_<language>.label.txt`. */
+function labelLanguageFromPath(filePath: string): string {
+  const fileName = filePath.split(/[\\/]/).pop() ?? '';
+  return fileName.replace('.label.txt', '').split('_')[1] || 'en-US';
+}
+
+/**
+ * Re-applies label files that currently contribute fewer labels than they parsed,
+ * which happens when a duplicate-declaring source that owned the shared rows was
+ * pruned. Returns the number of sources re-applied.
+ */
+async function recoverUnderContributingLabelSources(
+  writer: ReturnType<typeof dbUtils.createIndexWriter>,
+  seenLabelFiles: Set<string>
+): Promise<number> {
+  let recovered = 0;
+  for (const filePath of seenLabelFiles) {
+    const source = writer.getLabelSource(filePath);
+    if (!source || source.label_count === 0) continue;
+    if (writer.countLabelsFromSource(filePath) >= source.label_count) continue;
+
+    try {
+      const content = await fs.readFile(filePath, 'utf-8');
+      const labels = parser.parseLabels(content);
+      const language = labelLanguageFromPath(filePath);
+      writer.runInTransaction(() => {
+        writer.upsertLabels(labels.map((l) => ({ ...l, language })), filePath);
+        writer.updateLabelSourceMtime(filePath, source.file_mtime, labels.length);
+      });
+      recovered++;
+    } catch (err) {
+      // Clear the tracked mtime so the next run cannot skip this file. Without
+      // this, a transient read/parse failure here would leave the source
+      // permanently under-contributing: the mtime skip in the main loop would
+      // keep passing it over and recovery only runs after a label prune.
+      try {
+        writer.updateLabelSourceMtime(filePath, 0, source.label_count);
+      } catch {
+        // Best effort only; the warning below is still the actionable signal.
+      }
+      logger.warn('Failed to re-apply label source after prune; will retry next run', {
+        filePath,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  return recovered;
+}
+
 export async function buildIndex(db: Database, packagesDir: string, force: boolean = false): Promise<IndexStats> {
   const startTime = Date.now();
   const stats: IndexStats = {
@@ -42,6 +97,9 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
   const seenLabelFiles = new Set<string>();
   // (type|name) -> file path of the object that won the key during this run.
   const seenKeys = new Map<string, string>();
+  const storeRawXml = shouldStoreRawXml();
+  let objectFtsDirty = force;
+  let labelFtsDirty = force;
 
   // Captured before the scan so the prune magnitude guard compares against the
   // objects indexed by *previous* runs only. Counting after the loop would
@@ -77,7 +135,33 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
     }
 
     try {
-      const existing = writer.getExistingObject(file.name, file.type);
+      const existing = file.type === 'Label'
+        ? undefined
+        : writer.getExistingObject(file.name, file.type);
+
+      if (file.type === 'Label') {
+        // Mirrors the object mtime skip. Cases where another source currently
+        // owns some of this file's labels are repaired by the post-prune
+        // recovery pass instead of by re-reading the file on every run.
+        const existingLabelSource = writer.getLabelSource(file.filePath);
+        if (!force && existingLabelSource && existingLabelSource.file_mtime >= file.mtime) {
+          stats.skipped++;
+          continue;
+        }
+
+        const content = await fs.readFile(file.filePath, 'utf-8');
+        const labels = parser.parseLabels(content);
+        writer.runInTransaction(() => {
+          writer.upsertLabels(
+            labels.map(l => ({ ...l, language: file.name.split('_')[1] || 'en-US' })),
+            file.filePath
+          );
+          writer.updateLabelSourceMtime(file.filePath, file.mtime, labels.length);
+        });
+        stats.updated++;
+        labelFtsDirty = true;
+        continue;
+      }
 
       // A path change (rename/move) must always be re-indexed, even when the
       // mtime suggests the content is unchanged.
@@ -89,143 +173,136 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
 
       const content = await fs.readFile(file.filePath, 'utf-8');
 
-      if (file.type === 'Label') {
-        const labels = parser.parseLabels(content);
-        writer.upsertLabels(
-          labels.map(l => ({ ...l, language: file.name.split('_')[1] || 'en-US' })),
-          file.filePath
-        );
-        stats.updated++;
-        continue;
-      }
-
       // Keep the previous mtime until parsing succeeds, so a failed parse does not
       // permanently poison the incremental index by marking the object as up to date.
-      const objectId = writer.upsertObject({
-        type: file.type,
-        name: file.name,
-        package: file.package,
-        model: file.model,
-        file_path: file.filePath,
-        raw_xml: content,
-        file_mtime: existing?.file_mtime ?? 0
-      });
-
       let parsed: any;
       const xrefs: any[] = [];
 
-      switch (file.type) {
-        case 'Table': {
-          parsed = parser.parseAxTable(content, file.name, file.package);
-          writer.upsertFields(objectId, parsed.fields);
-          writer.upsertMethods(objectId, parsed.methods);
-          writer.upsertProperties(objectId, {
-            label: parsed.label,
-            extends: parsed.extends,
-            saveDataPerCompany: parsed.saveDataPerCompany,
-            indexes: parsed.indexes.join(','),
-          });
-          if (parsed.extends) {
-            xrefs.push({ fromType: 'Table', fromName: file.name, toType: 'Table', toName: parsed.extends, xrefKind: 'extends' });
-          }
-          for (const f of parsed.fields) {
-            if (f.edt) {
-              xrefs.push({ fromType: 'Table', fromName: file.name, toType: 'Edt', toName: f.edt, xrefKind: 'uses' });
-            }
-          }
-          break;
-        }
-        case 'Class': {
-          parsed = parser.parseAxClass(content, file.name, file.package);
-          writer.upsertMethods(objectId, parsed.methods);
-          writer.upsertProperties(objectId, {
-            extends: parsed.extends,
-            implements: parsed.implements.join(','),
-            isAbstract: parsed.isAbstract,
-            isFinal: parsed.isFinal,
-          });
-          if (parsed.extends) {
-            xrefs.push({ fromType: 'Class', fromName: file.name, toType: 'Class', toName: parsed.extends, xrefKind: 'extends' });
-          }
-          for (const iface of parsed.implements) {
-            xrefs.push({ fromType: 'Class', fromName: file.name, toType: 'Class', toName: iface, xrefKind: 'implements' });
-          }
-          break;
-        }
-        case 'Enum': {
-          parsed = parser.parseAxEnum(content, file.name, file.package);
-          writer.upsertEnumValues(objectId, parsed.values);
-          writer.upsertProperties(objectId, { label: parsed.label, isExtensible: parsed.isExtensible });
-          break;
-        }
-        case 'Form': {
-          parsed = parser.parseAxForm(content, file.name, file.package);
-          writer.upsertDataSources(objectId, parsed.dataSources);
-          writer.upsertFormControls(objectId, parsed.controls);
-          writer.upsertProperties(objectId, {
-            pattern: parsed.pattern,
-            patternVersion: parsed.patternVersion,
-            caption: parsed.caption,
-          });
-          for (const ds of parsed.dataSources) {
-            if (ds.table) {
-              xrefs.push({ fromType: 'Form', fromName: file.name, toType: 'Table', toName: ds.table, xrefKind: 'datasource' });
-            }
-          }
-          break;
-        }
-        case 'Query': {
-          parsed = parser.parseAxQuery(content, file.name, file.package);
-          writer.upsertDataSources(objectId, parsed.dataSources);
-          writer.upsertProperties(objectId, { title: parsed.title });
-          for (const ds of parsed.dataSources) {
-            if (ds.table) {
-              xrefs.push({ fromType: 'Query', fromName: file.name, toType: 'Table', toName: ds.table, xrefKind: 'datasource' });
-            }
-          }
-          break;
-        }
-        case 'DataEntity': {
-          parsed = parser.parseAxDataEntity(content, file.name, file.package);
-          writer.upsertFields(objectId, parsed.fields);
-          writer.upsertDataSources(objectId, parsed.dataSources);
-          writer.upsertProperties(objectId, {
-            publicEntityName: parsed.publicEntityName,
-            publicCollectionName: parsed.publicCollectionName,
-            stagingTable: parsed.stagingTable,
-            primaryKey: parsed.primaryKey,
-            isPublic: parsed.isPublic,
-          });
-          for (const ds of parsed.dataSources) {
-            if (ds.table) {
-              xrefs.push({ fromType: 'DataEntity', fromName: file.name, toType: 'Table', toName: ds.table, xrefKind: 'datasource' });
-            }
-          }
-          break;
-        }
-        case 'Edt': {
-          parsed = parser.parseAxEdt(content, file.name, file.package);
-          writer.upsertProperties(objectId, {
-            extends: parsed.extends,
-            label: parsed.labelId,
-            helpText: parsed.helpText,
-            stringSize: parsed.stringSize,
-            edtType: parsed.edtType,
-          });
-          if (parsed.extends) {
-            xrefs.push({ fromType: 'Edt', fromName: file.name, toType: 'Edt', toName: parsed.extends, xrefKind: 'extends' });
-          }
-          break;
-        }
-      }
-      
-      writer.deleteXrefsFrom(file.type, file.name);
-      writer.upsertXrefs(xrefs);
+      writer.runInTransaction(() => {
+        const objectId = writer.upsertObject({
+          type: file.type,
+          name: file.name,
+          package: file.package,
+          model: file.model,
+          file_path: file.filePath,
+          raw_xml: storeRawXml ? content : null,
+          file_mtime: existing?.file_mtime ?? 0
+        });
 
-      writer.updateObjectMtime(file.mtime, objectId);
+        switch (file.type) {
+          case 'Table': {
+            parsed = parser.parseAxTable(content, file.name, file.package);
+            writer.upsertFields(objectId, parsed.fields);
+            writer.upsertMethods(objectId, parsed.methods);
+            writer.upsertProperties(objectId, {
+              label: parsed.label,
+              extends: parsed.extends,
+              saveDataPerCompany: parsed.saveDataPerCompany,
+              indexes: parsed.indexes.join(','),
+            });
+            if (parsed.extends) {
+              xrefs.push({ fromType: 'Table', fromName: file.name, toType: 'Table', toName: parsed.extends, xrefKind: 'extends' });
+            }
+            for (const f of parsed.fields) {
+              if (f.edt) {
+                xrefs.push({ fromType: 'Table', fromName: file.name, toType: 'Edt', toName: f.edt, xrefKind: 'uses' });
+              }
+            }
+            break;
+          }
+          case 'Class': {
+            parsed = parser.parseAxClass(content, file.name, file.package);
+            writer.upsertMethods(objectId, parsed.methods);
+            writer.upsertProperties(objectId, {
+              extends: parsed.extends,
+              implements: parsed.implements.join(','),
+              isAbstract: parsed.isAbstract,
+              isFinal: parsed.isFinal,
+            });
+            if (parsed.extends) {
+              xrefs.push({ fromType: 'Class', fromName: file.name, toType: 'Class', toName: parsed.extends, xrefKind: 'extends' });
+            }
+            for (const iface of parsed.implements) {
+              xrefs.push({ fromType: 'Class', fromName: file.name, toType: 'Class', toName: iface, xrefKind: 'implements' });
+            }
+            break;
+          }
+          case 'Enum': {
+            parsed = parser.parseAxEnum(content, file.name, file.package);
+            writer.upsertEnumValues(objectId, parsed.values);
+            writer.upsertProperties(objectId, { label: parsed.label, isExtensible: parsed.isExtensible });
+            break;
+          }
+          case 'Form': {
+            parsed = parser.parseAxForm(content, file.name, file.package);
+            writer.upsertDataSources(objectId, parsed.dataSources);
+            writer.upsertFormControls(objectId, parsed.controls);
+            writer.upsertProperties(objectId, {
+              pattern: parsed.pattern,
+              patternVersion: parsed.patternVersion,
+              caption: parsed.caption,
+            });
+            for (const ds of parsed.dataSources) {
+              if (ds.table) {
+                xrefs.push({ fromType: 'Form', fromName: file.name, toType: 'Table', toName: ds.table, xrefKind: 'datasource' });
+              }
+            }
+            break;
+          }
+          case 'Query': {
+            parsed = parser.parseAxQuery(content, file.name, file.package);
+            writer.upsertDataSources(objectId, parsed.dataSources);
+            writer.upsertProperties(objectId, { title: parsed.title });
+            for (const ds of parsed.dataSources) {
+              if (ds.table) {
+                xrefs.push({ fromType: 'Query', fromName: file.name, toType: 'Table', toName: ds.table, xrefKind: 'datasource' });
+              }
+            }
+            break;
+          }
+          case 'DataEntity': {
+            parsed = parser.parseAxDataEntity(content, file.name, file.package);
+            writer.upsertFields(objectId, parsed.fields);
+            writer.upsertDataSources(objectId, parsed.dataSources);
+            writer.upsertProperties(objectId, {
+              publicEntityName: parsed.publicEntityName,
+              publicCollectionName: parsed.publicCollectionName,
+              stagingTable: parsed.stagingTable,
+              primaryKey: parsed.primaryKey,
+              isPublic: parsed.isPublic,
+            });
+            for (const ds of parsed.dataSources) {
+              if (ds.table) {
+                xrefs.push({ fromType: 'DataEntity', fromName: file.name, toType: 'Table', toName: ds.table, xrefKind: 'datasource' });
+              }
+            }
+            break;
+          }
+          case 'Edt': {
+            parsed = parser.parseAxEdt(content, file.name, file.package);
+            writer.upsertProperties(objectId, {
+              extends: parsed.extends,
+              label: parsed.labelId,
+              helpText: parsed.helpText,
+              stringSize: parsed.stringSize,
+              edtType: parsed.edtType,
+            });
+            if (parsed.extends) {
+              xrefs.push({ fromType: 'Edt', fromName: file.name, toType: 'Edt', toName: parsed.extends, xrefKind: 'extends' });
+            }
+            break;
+          }
+        }
+
+        writer.deleteXrefsFrom(file.type, file.name);
+        writer.upsertXrefs(xrefs);
+
+        writer.updateObjectMtime(file.mtime, objectId);
+      });
 
       if (!existing) stats.added++;
       else stats.updated++;
+      objectFtsDirty = true;
 
     } catch (err) {
       stats.errors++;
@@ -263,14 +340,33 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
   } else {
     const pruned = dbUtils.prune(db, seenObjectFiles, seenLabelFiles);
     stats.deleted = pruned.objects;
+    if (pruned.objects > 0) objectFtsDirty = true;
+    if (pruned.labels > 0) labelFtsDirty = true;
     if (pruned.objects > 0 || pruned.labels > 0 || pruned.xrefs > 0) {
       logger.info('Pruned stale index entries', { ...pruned });
     }
+
+    // Two label files may declare the same (label_id, language). The UNIQUE
+    // constraint means only one of them owns the row, so deleting the winner's
+    // file drops labels that a surviving file also defines. Re-apply any still
+    // present source that now contributes fewer labels than it parsed.
+    if (pruned.labels > 0) {
+      const recovered = await recoverUnderContributingLabelSources(writer, seenLabelFiles);
+      if (recovered > 0) {
+        stats.updated += recovered;
+        labelFtsDirty = true;
+        logger.info('Re-applied label sources after prune', { sources: recovered });
+      }
+    }
   }
 
-  logger.info('Rebuilding FTS index');
-  dbUtils.rebuildFts(db);
-  dbUtils.rebuildLabelsFts(db);
+  if (objectFtsDirty || labelFtsDirty) {
+    logger.info('Rebuilding FTS index', { objects: objectFtsDirty, labels: labelFtsDirty });
+    if (objectFtsDirty) dbUtils.rebuildFts(db);
+    if (labelFtsDirty) dbUtils.rebuildLabelsFts(db);
+  } else {
+    logger.info('Skipping FTS rebuild; no indexed content changed');
+  }
 
   stats.durationMs = Date.now() - startTime;
   logger.info('Indexing complete', { ...stats });

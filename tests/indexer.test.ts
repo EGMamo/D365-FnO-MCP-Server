@@ -1,14 +1,19 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import path from 'path';
+import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
 import type { Database } from '../src/indexer/db.js';
 import { openDb, getObjectByName, getXrefsFrom, searchSymbols } from '../src/indexer/db.js';
 import { buildIndex, getIndexStats } from '../src/indexer/buildIndex.js';
 import { logger } from '../src/utils/logger.js';
+import { collectMetadataTools } from './helpers/toolHarness.js';
+import { validateCoCTarget } from '../src/validation/grounding.js';
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const fixturesDir = path.join(testDir, 'fixtures');
+const require = createRequire(import.meta.url);
+const { DatabaseSync } = require('node:sqlite') as typeof import('node:sqlite');
 
 /** Build a fake PackagesLocalDirectory layout: <root>/<Package>/<Model>/<AxType>/<Name>.xml */
 function stagePackages(root: string) {
@@ -38,6 +43,99 @@ describe('Indexer DB Tests', () => {
     const db = openDb(':memory:');
     expect(db).toBeDefined();
     db.close();
+  });
+
+  it('migrates older databases before creating indexes on new columns', () => {
+    const tmpDir = fs.mkdtempSync(path.join(testDir, '.tmp-old-db-'));
+    const dbPath = path.join(tmpDir, 'old.db');
+    const oldDb = new DatabaseSync(dbPath);
+    oldDb.exec(`
+      CREATE TABLE ax_objects (
+        id INTEGER PRIMARY KEY,
+        type TEXT NOT NULL,
+        name TEXT NOT NULL,
+        package TEXT NOT NULL,
+        model TEXT NOT NULL DEFAULT '',
+        file_path TEXT NOT NULL,
+        raw_xml TEXT,
+        file_mtime INTEGER NOT NULL DEFAULT 0,
+        UNIQUE(type, name)
+      );
+      CREATE TABLE ax_fields (
+        id INTEGER PRIMARY KEY,
+        object_id INTEGER REFERENCES ax_objects(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        type TEXT,
+        edt TEXT,
+        label_id TEXT,
+        mandatory INTEGER DEFAULT 0,
+        allow_edit INTEGER DEFAULT 1
+      );
+      CREATE TABLE ax_methods (
+        id INTEGER PRIMARY KEY,
+        object_id INTEGER REFERENCES ax_objects(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        access_modifier TEXT DEFAULT 'public',
+        return_type TEXT,
+        params TEXT,
+        is_static INTEGER DEFAULT 0,
+        is_abstract INTEGER DEFAULT 0
+      );
+      CREATE TABLE ax_labels (
+        id INTEGER PRIMARY KEY,
+        label_id TEXT NOT NULL,
+        language TEXT NOT NULL DEFAULT 'en-US',
+        value TEXT NOT NULL,
+        UNIQUE(label_id, language)
+      );
+      CREATE TABLE ax_xref (
+        id INTEGER PRIMARY KEY,
+        from_type TEXT NOT NULL,
+        from_name TEXT NOT NULL,
+        to_type TEXT NOT NULL,
+        to_name TEXT NOT NULL,
+        xref_kind TEXT
+      );
+      CREATE TABLE ax_enum_values (
+        id INTEGER PRIMARY KEY,
+        object_id INTEGER REFERENCES ax_objects(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        value TEXT,
+        label_id TEXT
+      );
+      CREATE TABLE ax_datasources (
+        id INTEGER PRIMARY KEY,
+        object_id INTEGER REFERENCES ax_objects(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        table_name TEXT
+      );
+      CREATE TABLE ax_form_controls (
+        id INTEGER PRIMARY KEY,
+        object_id INTEGER REFERENCES ax_objects(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        type TEXT,
+        parent_name TEXT
+      );
+      CREATE TABLE ax_properties (
+        id INTEGER PRIMARY KEY,
+        object_id INTEGER REFERENCES ax_objects(id) ON DELETE CASCADE,
+        key TEXT NOT NULL,
+        value TEXT,
+        UNIQUE(object_id, key)
+      );
+    `);
+    oldDb.close();
+
+    const db = openDb(dbPath);
+    try {
+      const labelCols = (db.prepare(`PRAGMA table_info(ax_labels)`).all() as { name: string }[]).map((c) => c.name);
+      expect(labelCols).toContain('source_file');
+      const indexes = (db.prepare(`PRAGMA index_list(ax_labels)`).all() as { name: string }[]).map((i) => i.name);
+      expect(indexes).toContain('idx_ax_labels_source_file');
+    } finally {
+      db.close();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -161,12 +259,41 @@ describe('buildIndex with fixtures', () => {
 
   it('skips unchanged files on a second incremental run', async () => {
     const stats = await buildIndex(db, root, false);
-    // Label files are not tracked in ax_objects, so they are always re-read.
-    expect(stats.skipped).toBe(stats.total - 1);
+    expect(stats.skipped).toBe(stats.total);
     expect(stats.added).toBe(0);
+    expect(stats.updated).toBe(0);
     expect(stats.errors).toBe(0);
     expect(stats.deleted).toBe(0);
     expect(stats.collisions).toBe(0);
+  });
+
+  it('skips FTS rebuild when an incremental run has no changed content', async () => {
+    const info = vi.spyOn(logger, 'info').mockImplementation(() => {});
+    try {
+      const stats = await buildIndex(db, root, false);
+      expect(stats.skipped).toBe(stats.total);
+      expect(info).toHaveBeenCalledWith('Skipping FTS rebuild; no indexed content changed');
+      expect(info).not.toHaveBeenCalledWith('Rebuilding FTS index', expect.anything());
+    } finally {
+      info.mockRestore();
+    }
+  });
+
+  it('rebuilds both FTS indexes on force even when only objects are scanned', async () => {
+    const objectOnlyRoot = fs.mkdtempSync(path.join(testDir, '.tmp-object-only-'));
+    const classDir = path.join(objectOnlyRoot, 'TestPackage', 'TestModel', 'AxClass');
+    fs.mkdirSync(classDir, { recursive: true });
+    fs.copyFileSync(path.join(fixturesDir, 'AxClassSample.xml'), path.join(classDir, 'SampleClass.xml'));
+    const objectOnlyDb = openDb(':memory:');
+    const info = vi.spyOn(logger, 'info').mockImplementation(() => {});
+    try {
+      await buildIndex(objectOnlyDb, objectOnlyRoot, true);
+      expect(info).toHaveBeenCalledWith('Rebuilding FTS index', { objects: true, labels: true });
+    } finally {
+      info.mockRestore();
+      objectOnlyDb.close();
+      fs.rmSync(objectOnlyRoot, { recursive: true, force: true });
+    }
   });
 });
 
@@ -326,6 +453,300 @@ describe('index lifecycle: pruning, renames and collisions', () => {
       value: string;
     }[];
     expect(rows).toEqual([{ label_id: 'SYS1', value: 'Account renamed' }]);
+  });
+
+  it('does not re-parse an unchanged label file', async () => {
+    const labelPath = path.join(
+      root,
+      'TestPackage',
+      'TestModel',
+      'AxLabelFile',
+      'SampleLabels_en-US.label.txt'
+    );
+    db.prepare(`UPDATE ax_labels SET value = ? WHERE label_id = ?`).run('Manual value', 'SYS1');
+
+    const stats = await buildIndex(db, root, false);
+
+    expect(stats.skipped).toBe(stats.total);
+    const row = db.prepare(`SELECT value FROM ax_labels WHERE label_id = ?`).get('SYS1') as { value: string };
+    expect(row.value).toBe('Manual value');
+    expect(fs.existsSync(labelPath)).toBe(true);
+  });
+
+  it('re-applies a duplicate label from a surviving source when the winning source is deleted', async () => {
+    const duplicateRoot = fs.mkdtempSync(path.join(testDir, '.tmp-label-dupe-'));
+    const labelDir = path.join(duplicateRoot, 'TestPackage', 'TestModel', 'AxLabelFile');
+    fs.mkdirSync(labelDir, { recursive: true });
+    const first = path.join(labelDir, 'A_en-US.label.txt');
+    const second = path.join(labelDir, 'B_en-US.label.txt');
+    fs.writeFileSync(first, 'SYS1=First\n');
+    fs.writeFileSync(second, 'SYS1=Second\n');
+    const duplicateDb = openDb(':memory:');
+
+    try {
+      await buildIndex(duplicateDb, duplicateRoot, true);
+      const winner = duplicateDb.prepare(`SELECT source_file FROM ax_labels WHERE label_id = ?`).get('SYS1') as {
+        source_file: string;
+      };
+      const survivor = winner.source_file === first ? second : first;
+      fs.rmSync(winner.source_file);
+
+      await buildIndex(duplicateDb, duplicateRoot, false);
+
+      const row = duplicateDb.prepare(`SELECT value, source_file FROM ax_labels WHERE label_id = ?`).get('SYS1') as {
+        value: string;
+        source_file: string;
+      };
+      expect(row).toBeDefined();
+      expect(row.source_file).toBe(survivor);
+    } finally {
+      duplicateDb.close();
+      fs.rmSync(duplicateRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('retries label recovery on the next run when re-applying the survivor fails', async () => {
+    const duplicateRoot = fs.mkdtempSync(path.join(testDir, '.tmp-label-retry-'));
+    const labelDir = path.join(duplicateRoot, 'TestPackage', 'TestModel', 'AxLabelFile');
+    fs.mkdirSync(labelDir, { recursive: true });
+    const first = path.join(labelDir, 'A_en-US.label.txt');
+    const second = path.join(labelDir, 'B_en-US.label.txt');
+    fs.writeFileSync(first, 'SYS1=First\n');
+    fs.writeFileSync(second, 'SYS1=Second\n');
+    const retryDb = openDb(':memory:');
+    let survivor = '';
+
+    try {
+      await buildIndex(retryDb, duplicateRoot, true);
+      const winner = retryDb.prepare(`SELECT source_file FROM ax_labels WHERE label_id = ?`).get('SYS1') as {
+        source_file: string;
+      };
+      survivor = winner.source_file === first ? second : first;
+      fs.rmSync(winner.source_file);
+
+      // Make the survivor unreadable so the post-prune recovery pass fails.
+      fs.chmodSync(survivor, 0o000);
+      await buildIndex(retryDb, duplicateRoot, false);
+
+      // The tracked mtime must be cleared so the next run cannot skip the file.
+      const tracked = retryDb
+        .prepare(`SELECT file_mtime FROM ax_label_sources WHERE source_file = ?`)
+        .get(survivor) as { file_mtime: number };
+      expect(tracked.file_mtime).toBe(0);
+
+      fs.chmodSync(survivor, 0o644);
+      await buildIndex(retryDb, duplicateRoot, false);
+
+      const row = retryDb.prepare(`SELECT source_file FROM ax_labels WHERE label_id = ?`).get('SYS1') as {
+        source_file: string;
+      };
+      expect(row?.source_file).toBe(survivor);
+    } finally {
+      if (survivor) fs.chmodSync(survivor, 0o644);
+      retryDb.close();
+      fs.rmSync(duplicateRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('prunes label source tracking for removed empty label files', async () => {
+    const emptyRoot = fs.mkdtempSync(path.join(testDir, '.tmp-empty-label-'));
+    const labelDir = path.join(emptyRoot, 'TestPackage', 'TestModel', 'AxLabelFile');
+    const classDir = path.join(emptyRoot, 'TestPackage', 'TestModel', 'AxClass');
+    fs.mkdirSync(labelDir, { recursive: true });
+    fs.mkdirSync(classDir, { recursive: true });
+    const labelPath = path.join(labelDir, 'Empty_en-US.label.txt');
+    fs.writeFileSync(labelPath, '# no parseable labels\n');
+    fs.copyFileSync(path.join(fixturesDir, 'AxClassSample.xml'), path.join(classDir, 'SampleClass.xml'));
+    const emptyDb = openDb(':memory:');
+
+    try {
+      await buildIndex(emptyDb, emptyRoot, true);
+      expect(emptyDb.prepare(`SELECT COUNT(*) as count FROM ax_label_sources`).get()).toEqual({ count: 1 });
+      fs.rmSync(labelPath);
+      await buildIndex(emptyDb, emptyRoot, false);
+      expect(emptyDb.prepare(`SELECT COUNT(*) as count FROM ax_label_sources`).get()).toEqual({ count: 0 });
+    } finally {
+      emptyDb.close();
+      fs.rmSync(emptyRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('raw XML storage options', () => {
+  let db: Database;
+  let root: string;
+  let previousStoreRawXml: string | undefined;
+
+  beforeEach(async () => {
+    previousStoreRawXml = process.env.D365_INDEX_STORE_RAW_XML;
+    process.env.D365_INDEX_STORE_RAW_XML = '0';
+    root = fs.mkdtempSync(path.join(testDir, '.tmp-rawxml-'));
+    stagePackages(root);
+    db = openDb(':memory:');
+    await buildIndex(db, root, true);
+  });
+
+  afterEach(() => {
+    if (previousStoreRawXml === undefined) {
+      delete process.env.D365_INDEX_STORE_RAW_XML;
+    } else {
+      process.env.D365_INDEX_STORE_RAW_XML = previousStoreRawXml;
+    }
+    db.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('can omit raw_xml and read get_element_xml from the source file', async () => {
+    const table = getObjectByName(db, 'SampleTable', 'Table')!;
+    expect(table.raw_xml).toBeNull();
+
+    const tools = collectMetadataTools(db);
+    const getElementXml = tools.get('get_element_xml');
+    if (!getElementXml) throw new Error('get_element_xml was not registered');
+
+    const result = await getElementXml({ name: 'SampleTable', type: 'Table' });
+    expect(result.content[0].text).toContain('<AxTable');
+    expect(result.content[0].text).toContain('<Name>AccountNum</Name>');
+  });
+
+  it('reports a clear message when raw_xml is omitted and the source file is gone', async () => {
+    const tablePath = path.join(root, 'TestPackage', 'TestModel', 'AxTable', 'SampleTable.xml');
+    fs.rmSync(tablePath);
+
+    const tools = collectMetadataTools(db);
+    const getElementXml = tools.get('get_element_xml');
+    if (!getElementXml) throw new Error('get_element_xml was not registered');
+
+    const result = await getElementXml({ name: 'SampleTable', type: 'Table' });
+    expect(result.content[0].text).toContain('Raw XML for Table SampleTable is not stored in the index');
+    expect(result.content[0].text).toContain(tablePath);
+  });
+
+  it('keeps Chain of Command target validation safe when raw_xml is omitted', () => {
+    const classPath = path.join(root, 'TestPackage', 'TestModel', 'AxClass', 'MyExtension.xml');
+    fs.writeFileSync(
+      classPath,
+      '<AxClass><Name>MyExtension</Name><Source>[ExtensionOf(classStr(SalesLineType))] class MyExtension {}</Source></AxClass>'
+    );
+
+    return buildIndex(db, root, false).then(() => {
+      expect(getObjectByName(db, 'MyExtension', 'Class')?.raw_xml).toBeNull();
+      expect(validateCoCTarget(db, 'MyExtension')).toMatchObject({
+        ok: false,
+        error: expect.stringContaining('already an extension class'),
+      });
+    });
+  });
+});
+
+describe('upgrade path from a pre-existing populated index', () => {
+  let root: string;
+  let workDir: string;
+  let dbPath: string;
+  let previousStoreRawXml: string | undefined;
+
+  beforeEach(async () => {
+    previousStoreRawXml = process.env.D365_INDEX_STORE_RAW_XML;
+    delete process.env.D365_INDEX_STORE_RAW_XML;
+
+    root = fs.mkdtempSync(path.join(testDir, '.tmp-upgrade-'));
+    workDir = fs.mkdtempSync(path.join(testDir, '.tmp-upgradedb-'));
+    dbPath = path.join(workDir, 'd365_index.db');
+    stagePackages(root);
+
+    // Populate a database the way the previous release did: raw_xml stored and
+    // no label-source tracking table at all.
+    const seedDb = openDb(dbPath);
+    await buildIndex(seedDb, root, true);
+    seedDb.close();
+
+    const rawDb = new DatabaseSync(dbPath);
+    rawDb.exec(`DROP TABLE IF EXISTS ax_label_sources`);
+    rawDb.close();
+  });
+
+  afterEach(() => {
+    if (previousStoreRawXml === undefined) {
+      delete process.env.D365_INDEX_STORE_RAW_XML;
+    } else {
+      process.env.D365_INDEX_STORE_RAW_XML = previousStoreRawXml;
+    }
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(workDir, { recursive: true, force: true });
+  });
+
+  it('reopens an old populated database without error or data loss', () => {
+    const db = openDb(dbPath);
+    try {
+      expect(getIndexStats(db).totalObjects).toBe(7);
+      expect(getIndexStats(db).totalLabels).toBe(2);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('skips unchanged objects and only catches up labels on the first upgraded run', async () => {
+    process.env.D365_INDEX_STORE_RAW_XML = '0';
+    const db = openDb(dbPath);
+    try {
+      const stats = await buildIndex(db, root, false);
+
+      // Every AOT object is untouched on disk, so none may be re-parsed.
+      expect(stats.added).toBe(0);
+      expect(stats.skipped).toBe(7);
+      // Only the label file is reprocessed, because ax_label_sources starts empty.
+      expect(stats.updated).toBe(1);
+      expect(stats.deleted).toBe(0);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('keeps raw_xml already stored for objects that were skipped', async () => {
+    process.env.D365_INDEX_STORE_RAW_XML = '0';
+    const db = openDb(dbPath);
+    try {
+      await buildIndex(db, root, false);
+
+      const table = getObjectByName(db, 'SampleTable', 'Table')!;
+      expect(table.raw_xml).toBeTruthy();
+      expect(table.raw_xml).toContain('<AxTable');
+
+      // Delete the source file to prove get_element_xml served raw_xml and never
+      // needed the on-disk fallback for these pre-existing rows.
+      fs.rmSync(path.join(root, 'TestPackage', 'TestModel', 'AxTable', 'SampleTable.xml'));
+
+      const getElementXml = collectMetadataTools(db).get('get_element_xml');
+      if (!getElementXml) throw new Error('get_element_xml was not registered');
+      const result = await getElementXml({ name: 'SampleTable', type: 'Table' });
+      expect(result.content[0].text).toContain('<AxTable');
+    } finally {
+      db.close();
+    }
+  });
+
+  it('settles into a fully skipped run with no FTS rebuild after the label catch-up', async () => {
+    const db = openDb(dbPath);
+    try {
+      await buildIndex(db, root, false);
+
+      const infoSpy = vi.spyOn(logger, 'info');
+      const stats = await buildIndex(db, root, false);
+
+      expect(stats.skipped).toBe(8);
+      expect(stats.added).toBe(0);
+      expect(stats.updated).toBe(0);
+      expect(infoSpy.mock.calls.some(([msg]) => msg === 'Rebuilding FTS index')).toBe(false);
+      expect(
+        infoSpy.mock.calls.some(([msg]) => msg === 'Skipping FTS rebuild; no indexed content changed')
+      ).toBe(true);
+      infoSpy.mockRestore();
+
+      // Labels survived the catch-up and remain searchable.
+      expect(getIndexStats(db).totalLabels).toBe(2);
+    } finally {
+      db.close();
+    }
   });
 });
 
