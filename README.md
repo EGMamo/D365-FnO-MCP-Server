@@ -86,6 +86,12 @@ Commands:
   serve                     Start the MCP server (default command)
   index [--force]           Run a foreground indexing pass
   doctor                    Validate environment and report issues (exit 1 on failure)
+  digest --file <path>      Validate a draft knowledge base article and add it if it passes
+      --slug <slug>          Filename slug override (kebab-case, no number prefix)
+      --dry-run              Validate only, do not write the file
+      --force                Write despite a near-duplicate match (missing sections/secrets still block)
+      --kb-dir <dir>         Override the knowledge base resources directory
+      --db-path <path>       Index DB to cross-check mentioned identifiers against
   setup [--non-interactive] Create a .env configuration file
       --packages-dir <dir>  D365 PackagesLocalDirectory path
       --api-key <key>       MCP API key (>= 32 chars; generated when omitted)
@@ -98,6 +104,37 @@ Options:
 ```
 
 Flags accept `--flag`, `--flag=value`, and `--flag value` forms.
+
+### Adding to the knowledge base with `digest`
+
+`d365-fno-assistant-knowledge/resources/` (see its own README) is a curated, project-agnostic
+markdown knowledge base exposed to MCP clients as `d365kb://{slug}` resources. Rather than hand-
+writing and numbering files yourself, run them through the digester, which validates before
+writing anything:
+
+```bash
+npm run digest -- --file ./my-draft.md            # validate + write if it passes
+npm run digest -- --file ./my-draft.md --dry-run   # validate only, report findings
+npm run digest -- --file ./my-draft.md --force     # write despite a near-duplicate match
+```
+
+The digester checks:
+- **Structure** — a `# Title` and a `## Pattern` section are required (missing either always
+  blocks the write, even with `--force`); `When to use this`, `Gotchas / notes`, and `Related`
+  are recommended.
+- **Sanitization** — flags likely un-redacted emails, connection-string secrets, API keys, and
+  company-prefixed object names (e.g. `ABCSalesTable`); these always block the write, even with
+  `--force`. IPv4-shaped strings (which also match D365 version numbers like `10.0.39.0`) are
+  reported as a warning only, since they're not reliably distinguishable from a real IP.
+- **Duplicates** — compares the draft against every existing topic with bag-of-words similarity;
+  near-duplicates (≥80% similar) block by default and require `--force` to add anyway.
+- **Feasibility** — cross-checks PascalCase identifiers mentioned in the draft against the
+  indexed AOT metadata (pass `--db-path`) and reports which ones weren't found, so you can verify
+  or replace them with `<Prefix>`/`<Model>` placeholders.
+
+The same validation is available to an MCP client as the `digest_knowledge` tool (feature-flagged
+behind `D365_ENABLE_WRITE_TOOLS=1`, same as the other write tools), so an assistant can hand over a
+sanitized draft directly instead of you running the CLI.
 
 ## Transport modes
 

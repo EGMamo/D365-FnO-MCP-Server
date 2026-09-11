@@ -37,6 +37,19 @@ export async function run(argv: string[]): Promise<CliResult> {
       const { doctorCommand } = await import('./cli/doctor.js');
       return { code: await doctorCommand() };
     }
+    case 'digest': {
+      const { digestCommand } = await import('./cli/digest.js');
+      return {
+        code: await digestCommand({
+          file: flagString(flags, 'file'),
+          slug: flagString(flags, 'slug'),
+          dryRun: flags['dry-run'] === true || flags['dry-run'] === 'true',
+          force: flags.force === true || flags.force === 'true',
+          kbDir: flagString(flags, 'kb-dir'),
+          dbPath: flagString(flags, 'db-path'),
+        }),
+      };
+    }
     case 'setup': {
       const { setupCommand } = await import('./cli/setup.js');
       const code = await setupCommand({

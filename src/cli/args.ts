@@ -64,6 +64,12 @@ Commands:
   serve                     Start the MCP server (default command)
   index [--force]           Run a foreground indexing pass
   doctor                    Validate environment and report issues (exit 1 on failure)
+  digest --file <path>      Validate a draft knowledge base article and add it if it passes
+      --slug <slug>          Filename slug override (kebab-case, no number prefix)
+      --dry-run              Validate only, do not write the file
+      --force                Write despite a near-duplicate match (missing sections/secrets still block)
+      --kb-dir <dir>         Override the knowledge base resources directory
+      --db-path <path>       Index DB to cross-check mentioned identifiers against
   setup [--non-interactive] Create a .env configuration file
       --packages-dir <dir>  D365 PackagesLocalDirectory path
       --api-key <key>       MCP API key (>= 32 chars; generated when omitted)

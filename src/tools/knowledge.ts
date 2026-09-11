@@ -3,6 +3,8 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { z } from 'zod';
+import type { Database } from '../indexer/db.js';
+import { digestKnowledge } from '../knowledge/digest.js';
 
 const KB_DIR_NAME = 'd365-fno-assistant-knowledge';
 const RESOURCE_SUBDIR = 'resources';
@@ -40,7 +42,7 @@ function firstHeading(content: string, fallback: string): string {
 
 /** Lists every markdown file in the knowledge base resources folder. */
 export function listKnowledgeEntries(kbDir: string | null = findKnowledgeDir()): KnowledgeEntry[] {
-  if (!kbDir) return [];
+  if (!kbDir || !fs.existsSync(kbDir)) return [];
   return fs
     .readdirSync(kbDir)
     .filter((f) => f.endsWith('.md'))
@@ -143,6 +145,77 @@ export function registerKnowledgeResources(server: McpServer): void {
           { role: 'user' as const, content: { type: 'text' as const, text: `${SYSTEM_PROMPT}\n\n${body}` } },
         ],
       };
+    }
+  );
+}
+
+export interface KnowledgeDigestOptions {
+  /** Master feature flag: reuses the write-tools flag since this writes files under the repo. */
+  enableWriteTools: boolean;
+}
+
+/**
+ * Registers `digest_knowledge`: lets an assistant hand over a sanitized draft article and have
+ * it validated (structure, sanitization, lexical duplicate detection, identifier feasibility
+ * against the indexed AOT metadata) and, if it passes, added to the knowledge base as a new
+ * numbered file. Every existing topic's title + scenario summary is always returned in the report
+ * so the caller can judge *conceptual* duplication itself — the same pattern written up in
+ * different words — which no wording-overlap heuristic can reliably catch.
+ */
+export function registerKnowledgeDigestTool(
+  server: McpServer,
+  db: Database | null,
+  options: KnowledgeDigestOptions
+): void {
+  if (options.enableWriteTools !== true) return;
+
+  const kbDir = findKnowledgeDir();
+
+  server.tool(
+    'digest_knowledge',
+    'Validate a draft D365 F&O knowledge base article (structure, sanitization, lexical wording-overlap ' +
+      'check, and identifier feasibility against the indexed metadata) and, if it passes, add it to the ' +
+      'knowledge base as a new numbered markdown file. Sensitive-content findings always block the write. ' +
+      'IMPORTANT: the returned report includes every existing topic\'s title and one-line scenario summary ' +
+      '(`existingTopics`) — before calling this tool, or before trusting a clean report, compare the draft ' +
+      'against that list yourself for CONCEPTUAL duplication (the same underlying pattern described in ' +
+      'different words). The `duplicates` field only catches near-identical phrasing and will miss that.',
+    {
+      content: z.string().min(1).describe('Full markdown content of the draft article, already sanitized.'),
+      slug: z.string().optional().describe('Optional filename slug override (kebab-case, no number prefix).'),
+      dryRun: z.boolean().optional().describe('When true, only validate; never write the file.'),
+      force: z
+        .boolean()
+        .optional()
+        .describe(
+          'Write even when a near-duplicate match is found. Missing required sections and sensitive-content errors always block, regardless of force.'
+        ),
+    },
+    async ({ content, slug, dryRun, force }) => {
+      if (!kbDir) {
+        return {
+          content: [
+            { type: 'text' as const, text: 'Knowledge base resources directory not found in this installation.' },
+          ],
+          isError: true,
+        };
+      }
+
+      try {
+        const report = digestKnowledge({ content, kbDir, db, slugOverride: slug, dryRun, force });
+        const hasErrors = report.issues.some((issue) => issue.level === 'error');
+        const blocked = hasErrors && !report.written;
+        return {
+          content: [{ type: 'text' as const, text: JSON.stringify(report, null, 2) }],
+          isError: blocked,
+        };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          content: [{ type: 'text' as const, text: `Failed to digest knowledge entry: ${message}` }],
+          isError: true,
+        };
+      }
     }
   );
 }
