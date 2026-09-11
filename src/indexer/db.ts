@@ -85,6 +85,12 @@ export function openDb(dbPath: string): Database {
       UNIQUE(label_id, language)
     );
 
+    CREATE TABLE IF NOT EXISTS ax_label_sources (
+      source_file TEXT PRIMARY KEY,
+      file_mtime INTEGER NOT NULL DEFAULT 0,
+      label_count INTEGER NOT NULL DEFAULT 0
+    );
+
     CREATE TABLE IF NOT EXISTS ax_xref (
       id INTEGER PRIMARY KEY,
       from_type TEXT NOT NULL,
@@ -146,6 +152,24 @@ export function openDb(dbPath: string): Database {
     db.exec(`ALTER TABLE ax_labels ADD COLUMN source_file TEXT NOT NULL DEFAULT ''`);
   }
 
+  const labelSourceCols = new Set(
+    (db.prepare(`PRAGMA table_info(ax_label_sources)`).all() as { name: string }[]).map((c) => c.name)
+  );
+  if (!labelSourceCols.has('label_count')) {
+    db.exec(`ALTER TABLE ax_label_sources ADD COLUMN label_count INTEGER NOT NULL DEFAULT 0`);
+  }
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_ax_fields_object_id ON ax_fields(object_id);
+    CREATE INDEX IF NOT EXISTS idx_ax_methods_object_id ON ax_methods(object_id);
+    CREATE INDEX IF NOT EXISTS idx_ax_enum_values_object_id ON ax_enum_values(object_id);
+    CREATE INDEX IF NOT EXISTS idx_ax_datasources_object_id ON ax_datasources(object_id);
+    CREATE INDEX IF NOT EXISTS idx_ax_form_controls_object_id ON ax_form_controls(object_id);
+    CREATE INDEX IF NOT EXISTS idx_ax_xref_from ON ax_xref(from_type, from_name);
+    CREATE INDEX IF NOT EXISTS idx_ax_xref_to ON ax_xref(to_type, to_name);
+    CREATE INDEX IF NOT EXISTS idx_ax_labels_source_file ON ax_labels(source_file);
+  `);
+
   return db;
 }
 
@@ -169,6 +193,12 @@ export interface ExistingObjectRow {
   id: number | bigint;
   file_mtime: number;
   file_path: string;
+}
+
+export interface ExistingLabelSourceRow {
+  source_file: string;
+  file_mtime: number;
+  label_count: number;
 }
 
 export interface FieldInput {
@@ -337,6 +367,35 @@ export function upsertLabels(db: Database, labels: any[], sourceFile: string = '
   insertMany(labels);
 }
 
+export function getLabelSource(db: Database, sourceFile: string): ExistingLabelSourceRow | undefined {
+  return db
+    .prepare(`SELECT source_file, file_mtime, label_count FROM ax_label_sources WHERE source_file = ?`)
+    .get(sourceFile) as ExistingLabelSourceRow | undefined;
+}
+
+export function updateLabelSourceMtime(
+  db: Database,
+  sourceFile: string,
+  fileMtime: number,
+  labelCount: number = 0
+): void {
+  db
+    .prepare(
+      `INSERT INTO ax_label_sources (source_file, file_mtime, label_count)
+       VALUES (?, ?, ?)
+       ON CONFLICT(source_file) DO UPDATE SET
+         file_mtime = excluded.file_mtime,
+         label_count = excluded.label_count`
+    )
+    .run(sourceFile, fileMtime, labelCount);
+}
+
+export function countLabelsFromSource(db: Database, sourceFile: string): number {
+  return (db.prepare(`SELECT COUNT(*) as count FROM ax_labels WHERE source_file = ?`).get(sourceFile) as {
+    count: number;
+  }).count;
+}
+
 /** Current number of indexed objects, used to sanity-check a scan before pruning. */
 export function countObjects(db: Database): number {
   return (db.prepare(`SELECT COUNT(*) as count FROM ax_objects`).get() as { count: number }).count;
@@ -395,8 +454,16 @@ export function prune(db: Database, seenObjectFiles: Set<string>, seenLabelFiles
     .all() as { id: number; source_file: string }[];
   const doomedLabels = labelRows.filter((row) => !seenLabelFiles.has(row.source_file));
   const deleteLabel = db.prepare(`DELETE FROM ax_labels WHERE id = ?`);
+  const labelSourceRows = db
+    .prepare(`SELECT source_file FROM ax_label_sources`)
+    .all() as { source_file: string }[];
+  const doomedLabelSources = labelSourceRows.filter((row) => !seenLabelFiles.has(row.source_file));
+  const deleteLabelSource = db.prepare(`DELETE FROM ax_label_sources WHERE source_file = ?`);
   const runLabels = transaction(db, (rows: typeof doomedLabels) => {
-    for (const row of rows) deleteLabel.run(row.id);
+    for (const row of rows) {
+      deleteLabel.run(row.id);
+    }
+    for (const row of doomedLabelSources) deleteLabelSource.run(row.source_file);
   });
   runLabels(doomedLabels);
 
@@ -444,6 +511,9 @@ export function createIndexWriter(db: Database) {
   const selectExistingObject = db.prepare(
     `SELECT id, file_mtime, file_path FROM ax_objects WHERE name = ? AND type = ?`
   );
+  const selectLabelSource = db.prepare(
+    `SELECT source_file, file_mtime, label_count FROM ax_label_sources WHERE source_file = ?`
+  );
   const upsertObjectStmt = db.prepare(`
     INSERT INTO ax_objects (type, name, package, model, file_path, raw_xml, file_mtime)
     VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -462,7 +532,7 @@ export function createIndexWriter(db: Database) {
     INSERT INTO ax_fields (object_id, name, type, edt, label_id, mandatory, allow_edit, data_source, data_field)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  const insertFields = transaction(db, (objectId: number | bigint, fields: FieldInput[]) => {
+  const insertFields = (objectId: number | bigint, fields: FieldInput[]) => {
     deleteFields.run(objectId);
     for (const item of fields) {
       insertField.run(
@@ -477,13 +547,13 @@ export function createIndexWriter(db: Database) {
         item.dataField || ''
       );
     }
-  });
+  };
 
   const deleteEnumValues = db.prepare(`DELETE FROM ax_enum_values WHERE object_id = ?`);
   const insertEnumValue = db.prepare(
     `INSERT INTO ax_enum_values (object_id, name, value, label_id) VALUES (?, ?, ?, ?)`
   );
-  const insertEnumValues = transaction(db, (objectId: number | bigint, values: EnumValueInput[]) => {
+  const insertEnumValues = (objectId: number | bigint, values: EnumValueInput[]) => {
     deleteEnumValues.run(objectId);
     for (const item of values) {
       insertEnumValue.run(
@@ -493,24 +563,24 @@ export function createIndexWriter(db: Database) {
         item.labelId || ''
       );
     }
-  });
+  };
 
   const deleteDataSources = db.prepare(`DELETE FROM ax_datasources WHERE object_id = ?`);
   const insertDataSource = db.prepare(
     `INSERT INTO ax_datasources (object_id, name, table_name) VALUES (?, ?, ?)`
   );
-  const insertDataSources = transaction(db, (objectId: number | bigint, dataSources: DataSourceInput[]) => {
+  const insertDataSources = (objectId: number | bigint, dataSources: DataSourceInput[]) => {
     deleteDataSources.run(objectId);
     for (const item of dataSources) {
       insertDataSource.run(objectId, item.name, item.table || '');
     }
-  });
+  };
 
   const deleteFormControls = db.prepare(`DELETE FROM ax_form_controls WHERE object_id = ?`);
   const insertFormControl = db.prepare(
     `INSERT INTO ax_form_controls (object_id, name, type, parent_name) VALUES (?, ?, ?, ?)`
   );
-  const insertFormControls = transaction(db, (objectId: number | bigint, controls: ControlInput[]) => {
+  const insertFormControls = (objectId: number | bigint, controls: ControlInput[]) => {
     deleteFormControls.run(objectId);
     const walk = (list: ControlInput[], parent: string) => {
       for (const c of list) {
@@ -519,28 +589,28 @@ export function createIndexWriter(db: Database) {
       }
     };
     walk(controls, '');
-  });
+  };
 
   const deleteProperties = db.prepare(`DELETE FROM ax_properties WHERE object_id = ?`);
   const insertProperty = db.prepare(`
     INSERT INTO ax_properties (object_id, key, value) VALUES (?, ?, ?)
     ON CONFLICT(object_id, key) DO UPDATE SET value = excluded.value
   `);
-  const insertProperties = transaction(db, (objectId: number | bigint, props: Record<string, unknown>) => {
+  const insertProperties = (objectId: number | bigint, props: Record<string, unknown>) => {
     deleteProperties.run(objectId);
     for (const [key, value] of Object.entries(props)) {
       if (value !== undefined && value !== null && value !== '') {
         insertProperty.run(objectId, key, String(value));
       }
     }
-  });
+  };
 
   const deleteMethods = db.prepare(`DELETE FROM ax_methods WHERE object_id = ?`);
   const insertMethod = db.prepare(`
     INSERT INTO ax_methods (object_id, name, access_modifier, return_type, params, is_static, is_abstract)
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `);
-  const insertMethods = transaction(db, (objectId: number | bigint, methods: any[]) => {
+  const insertMethods = (objectId: number | bigint, methods: any[]) => {
     deleteMethods.run(objectId);
     for (const item of methods) {
       insertMethod.run(
@@ -553,7 +623,7 @@ export function createIndexWriter(db: Database) {
         item.isAbstract ? 1 : 0
       );
     }
-  });
+  };
 
   const deleteLabelsBySource = db.prepare(`DELETE FROM ax_labels WHERE source_file = ?`);
   const insertLabel = db.prepare(`
@@ -563,27 +633,41 @@ export function createIndexWriter(db: Database) {
       value = excluded.value,
       source_file = excluded.source_file
   `);
-  const insertLabels = transaction(db, (labels: any[], sourceFile: string) => {
+  const insertLabels = (labels: any[], sourceFile: string) => {
     if (sourceFile) deleteLabelsBySource.run(sourceFile);
     for (const item of labels) {
       insertLabel.run(item.labelId, item.language || 'en-US', item.value, item.sourceFile || sourceFile);
     }
-  });
+  };
+  const upsertLabelSourceMtime = db.prepare(`
+    INSERT INTO ax_label_sources (source_file, file_mtime, label_count)
+    VALUES (?, ?, ?)
+    ON CONFLICT(source_file) DO UPDATE SET
+      file_mtime = excluded.file_mtime,
+      label_count = excluded.label_count
+  `);
+  const countLabelsBySource = db.prepare(`SELECT COUNT(*) as count FROM ax_labels WHERE source_file = ?`);
 
   const deleteXrefsByFrom = db.prepare(`DELETE FROM ax_xref WHERE from_type = ? AND from_name = ?`);
   const insertXref = db.prepare(`
     INSERT INTO ax_xref (from_type, from_name, to_type, to_name, xref_kind)
     VALUES (?, ?, ?, ?, ?)
   `);
-  const insertXrefs = transaction(db, (xrefs: any[]) => {
+  const insertXrefs = (xrefs: any[]) => {
     for (const item of xrefs) {
       insertXref.run(item.fromType, item.fromName, item.toType, item.toName, item.xrefKind);
     }
-  });
+  };
 
   return {
+    runInTransaction<Result>(fn: () => Result): Result {
+      return transaction(db, fn)();
+    },
     getExistingObject(name: string, type: string): ExistingObjectRow | undefined {
       return selectExistingObject.get(name, type) as ExistingObjectRow | undefined;
+    },
+    getLabelSource(sourceFile: string): ExistingLabelSourceRow | undefined {
+      return selectLabelSource.get(sourceFile) as ExistingLabelSourceRow | undefined;
     },
     upsertObject(obj: any): number | bigint {
       const result = upsertObjectStmt.get(
@@ -624,6 +708,12 @@ export function createIndexWriter(db: Database) {
         return;
       }
       insertLabels(labels, sourceFile);
+    },
+    countLabelsFromSource(sourceFile: string): number {
+      return (countLabelsBySource.get(sourceFile) as { count: number }).count;
+    },
+    updateLabelSourceMtime(sourceFile: string, fileMtime: number, labelCount: number = 0): void {
+      upsertLabelSourceMtime.run(sourceFile, fileMtime, labelCount);
     },
     deleteXrefsFrom(fromType: string, fromName: string): void {
       deleteXrefsByFrom.run(fromType, fromName);

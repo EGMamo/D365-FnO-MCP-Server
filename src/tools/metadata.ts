@@ -3,6 +3,7 @@ import type { Database } from '../indexer/db.js';
 import { z } from 'zod';
 import * as dbUtils from '../indexer/db.js';
 import { getIndexStats } from '../indexer/buildIndex.js';
+import fs from 'fs/promises';
 
 export function registerMetadataTools(server: McpServer, db: Database) {
   server.tool(
@@ -183,7 +184,21 @@ export function registerMetadataTools(server: McpServer, db: Database) {
     async ({ name, type }) => {
       const obj = dbUtils.getObjectByName(db, name, type);
       if (!obj) return { content: [{ type: 'text', text: `Object ${name} of type ${type} not found.` }] };
-      return { content: [{ type: 'text', text: obj.raw_xml }] };
+      if (obj.raw_xml) return { content: [{ type: 'text', text: obj.raw_xml }] };
+
+      try {
+        const xml = await fs.readFile(obj.file_path, 'utf-8');
+        return { content: [{ type: 'text', text: xml }] };
+      } catch {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Raw XML for ${type} ${name} is not stored in the index and the source file could not be read at ${obj.file_path}.`,
+            },
+          ],
+        };
+      }
     }
   );
 
