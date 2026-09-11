@@ -63,6 +63,9 @@ export const HELP_TEXT = `d365-fno-mcp-server <command> [options]
 Commands:
   serve                     Start the MCP server (default command)
   index [--force]           Run a foreground indexing pass
+  index-xref                 Import compiler cross-reference snapshot from SQL Server
+      --connection-string    SQL Server connection string (prefer D365_XREF_CONNECTION_STRING)
+      --db-path <path>       SQLite index path (default ./d365_index.db)
   doctor                    Validate environment and report issues (exit 1 on failure)
   digest --file <path>      Validate a draft knowledge base article and add it if it passes
       --slug <slug>          Filename slug override (kebab-case, no number prefix)

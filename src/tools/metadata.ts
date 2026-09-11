@@ -4,6 +4,7 @@ import { z } from 'zod';
 import * as dbUtils from '../indexer/db.js';
 import { getIndexStats } from '../indexer/buildIndex.js';
 import fs from 'fs/promises';
+import { findUsageRefs } from '../indexer/xrefUsage.js';
 
 export function registerMetadataTools(server: McpServer, db: Database) {
   server.tool(
@@ -78,6 +79,21 @@ export function registerMetadataTools(server: McpServer, db: Database) {
         }
       }
       return { content: [{ type: 'text', text: JSON.stringify(xrefs.slice(0, limit), null, 2) }] };
+    }
+  );
+
+  server.tool(
+    'find_usages',
+    'Find compiler-derived usage/call-site references imported from DynamicsXrefDB. This is distinct from structural/declared references returned by find_references.',
+    {
+      name: z.string(),
+      type: z.enum(['Table', 'Class', 'Enum', 'Form', 'Query', 'DataEntity', 'Edt']).optional(),
+      method: z.string().optional(),
+      limit: z.number().int().min(1).max(500).default(100),
+    },
+    async ({ name, type, method, limit }) => {
+      const usages = findUsageRefs(db, name, type, method, limit);
+      return { content: [{ type: 'text', text: JSON.stringify(usages, null, 2) }] };
     }
   );
 

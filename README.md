@@ -196,13 +196,42 @@ Index statistics are also available at runtime through the `get_index_stats` too
 ## MCP tools
 
 Metadata:
-`search_symbols`, `get_table_schema`, `get_class_hierarchy`, `get_method_signature`, `find_references`, `get_enum_values`, `get_edt_details`, `get_form_datasources`, `get_element_xml`, `list_objects`, `get_index_stats`
+`search_symbols`, `get_table_schema`, `get_class_hierarchy`, `get_method_signature`, `find_references`, `find_usages`, `get_enum_values`, `get_edt_details`, `get_form_datasources`, `get_element_xml`, `list_objects`, `get_index_stats`
 
 Labels:
 `resolve_label`, `search_labels`
 
 X++ generators (grounded against the index):
 `create_coc_extension`, `create_table_extension`, `create_class_extension`, `generate_xpp_class`, `create_runbase_batch`, `create_sys_operation`
+
+## Optional compiler cross-reference usage data
+
+Development VMs can generate compiler cross-reference data in the `DynamicsXrefDB` SQL Server
+database. This is different from the structural AOT metadata index: it records compiler-resolved
+references such as method calls and object/field references. The database is only as current as the
+last IDE cross-reference generation/build.
+
+The importer requires the `.mdf`/`.ldf` database files to be attached or restored to a reachable SQL
+Server instance. The raw MDF file cannot be read directly by this application. Set a connection
+string in `D365_XREF_CONNECTION_STRING` (recommended, so credentials do not appear in shell history),
+or pass it explicitly:
+
+```bash
+D365_XREF_CONNECTION_STRING='Server=devvm;Database=DynamicsXrefDB;Integrated Security= true;TrustServerCertificate=true' \
+  d365-fno-mcp-server index-xref --db-path ./d365_index.db
+# Alternatively: d365-fno-mcp-server index-xref --connection-string '...'
+```
+
+`index-xref` performs a full replacement of the local usage snapshot, which matches the wholesale
+regeneration behavior of the compiler database. It imports the standard `References`/`Names` tables
+when present and recognizes the older `SysXRef*References` table names. SQL identifiers are selected
+from an allowlist; row values are never interpolated into queries. The SQL Server driver is loaded
+only by this command, so normal indexing and serving remain usable without a SQL Server connection.
+
+The `find_usages` MCP tool searches these compiler-derived rows by target object and optional method.
+Its results may include source/target methods, reference kind, line/column, and the original source
+table/row payload. It returns an empty list before the first import. `find_references` remains the
+separate structural/declared relationship query and should not be interpreted as a compiler call graph.
 
 ## Development
 
