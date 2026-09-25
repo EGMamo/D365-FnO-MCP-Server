@@ -25,14 +25,6 @@ export async function indexCommand(
     return 1;
   }
 
-  if (options.force && dbPath !== ':memory:') {
-    for (const suffix of ['', '-shm', '-wal']) {
-      const target = `${dbPath}${suffix}`;
-      if (fs.existsSync(target)) fs.rmSync(target);
-    }
-    console.log(`Removed existing index at ${dbPath}`);
-  }
-
   const dbDir = path.resolve(path.dirname(dbPath));
   if (dbPath !== ':memory:' && !fs.existsSync(dbDir)) {
     fs.mkdirSync(dbDir, { recursive: true });
@@ -41,7 +33,13 @@ export async function indexCommand(
   const { openDb } = await import('../indexer/db.js');
   const { buildIndex, getIndexStats } = await import('../indexer/buildIndex.js');
 
-  const db = openDb(dbPath);
+  let db: ReturnType<typeof openDb>;
+  try {
+    db = openDb(dbPath);
+  } catch (err) {
+    console.error(`Cannot open the index: ${String(err)}. Back up or move the damaged database before rebuilding; --force never deletes it.`);
+    return 1;
+  }
   try {
     console.log(`Indexing ${packagesDir} -> ${dbPath}${options.force ? ' (force)' : ''}`);
     const stats = await buildIndex(db, packagesDir, options.force);

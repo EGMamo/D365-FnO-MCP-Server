@@ -39,6 +39,9 @@ export async function run(argv: string[]): Promise<CliResult> {
         code: await indexXrefCommand({
           connectionString: flagString(flags, 'connection-string'),
           dbPath: flagString(flags, 'db-path'),
+          allowEmpty: flags['allow-empty'] === true || flags['allow-empty'] === 'true',
+          allowSourceLocks: flags['allow-source-locks'] === true || flags['allow-source-locks'] === 'true',
+          storeRaw: flags['store-raw'] === true || flags['store-raw'] === 'true',
         }),
       };
     }

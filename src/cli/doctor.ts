@@ -1,6 +1,10 @@
 import fs from 'fs';
 import path from 'path';
 import { glob } from 'glob';
+import { discoverVisualStudioWorkspace, selectVisualStudioProject } from '../workspace/visualStudio.js';
+import { resolveModelTarget } from '../workspace/models.js';
+import { metadataProvenance, workspaceCapabilities } from '../workspace/capabilities.js';
+import { canonicalRoot, contained, errorMessage } from '../workspace/safety.js';
 
 export interface CheckResult {
   name: string;
@@ -8,7 +12,7 @@ export interface CheckResult {
   message: string;
 }
 
-const MIN_NODE_MAJOR = 22;
+const MIN_NODE_MAJOR = 24;
 
 function checkNode(): CheckResult {
   const major = Number(process.versions.node.split('.')[0]);
@@ -135,6 +139,81 @@ async function checkDbOpen(dbPath: string): Promise<CheckResult> {
   }
 }
 
+export function checkVisualStudioIntegration(env: NodeJS.ProcessEnv): CheckResult[] {
+  const capabilities = workspaceCapabilities();
+  const provenance = metadataProvenance(env.D365_CUSTOM_METADATA_DIR, env.D365_PROJECT_DIR);
+  const results: CheckResult[] = [
+    {
+      name: 'workspace-capabilities', status: 'warn',
+      message: JSON.stringify({ ...capabilities, provenance }),
+    },
+  ];
+  const metadataDir = env.D365_CUSTOM_METADATA_DIR || env.D365_PROJECT_DIR;
+  const workspaceDir = env.D365_VISUAL_STUDIO_WORKSPACE_DIR;
+  try {
+    const customRoot = metadataDir ? canonicalRoot(metadataDir) : null;
+    if (customRoot) {
+      results.push({
+        name: 'custom-metadata-dir', status: 'pass',
+        message: `${provenance.source}: ${metadataDir}; canonical root: ${customRoot}. No write probe performed.`,
+      });
+    } else if (env.D365_ENABLE_WRITE_TOOLS === '1') {
+      throw new Error('D365_CUSTOM_METADATA_DIR (or legacy D365_PROJECT_DIR) is required for write tools.');
+    }
+    const workspace = workspaceDir
+      ? discoverVisualStudioWorkspace(workspaceDir, env.D365_TARGET_SOLUTION)
+      : null;
+    const selected = workspace ? selectVisualStudioProject(workspace, undefined, env.D365_TARGET_PROJECT) : null;
+    results.push({
+      name: 'visual-studio-workspace',
+      status: !workspace || (workspace.projects.length > 1 && !selected) ? 'warn' : selected ? 'pass' : 'fail',
+      message: workspace
+        ? `D365_VISUAL_STUDIO_WORKSPACE_DIR: ${workspaceDir}; canonical root: ${workspace.root}; membership: ${workspace.membershipSource}; solution: ${workspace.selectedSolution ?? 'none'}; project: ${selected?.path ?? 'selection required'}.`
+        : 'D365_VISUAL_STUDIO_WORKSPACE_DIR is not configured; only metadata-only offline writes can be previewed.',
+    });
+    if (env.D365_TARGET_PROJECT && !selected) throw new Error('Configured target project was not found.');
+    if (env.D365_TARGET_SOLUTION && !workspace) throw new Error('Configured target solution requires a workspace.');
+    if (selected?.inspection === 'unsupported') {
+      results.push({ name: 'project-evaluation', status: 'warn', message: `Offline writes unsupported: ${selected.issues.join(' ')}` });
+    }
+    const model = env.D365_TARGET_MODEL || selected?.model;
+    if (model && selected?.model && model.toLowerCase() !== selected.model.toLowerCase()) {
+      throw new Error(`Configured model '${model}' differs from project model '${selected.model}'.`);
+    }
+    if (customRoot && model) {
+      const target = resolveModelTarget(customRoot, model, env.D365_TARGET_PACKAGE,
+        env.D365_WRITABLE_MODELS?.split(',').map((entry) => entry.trim()));
+      results.push({
+        name: 'model-descriptor', status: 'pass',
+        message: `Literal descriptor identity: ${target.package}/${target.model}; ${target.descriptor.path}; SHA256 ${target.descriptor.hash}.`,
+      });
+      results.push({
+        name: 'offline-write-authorization', status: target.writable ? 'pass' : 'warn',
+        message: target.writable
+          ? 'Explicitly allowlisted, unlocked model. Preview/apply and offline acknowledgement still required; compiler not run.'
+          : target.writeIssues.join(' '),
+      });
+      const locks = [path.join(target.modelDir, '.d365-mcp-write.lock'),
+        ...(workspace ? [path.join(workspace.root, '.d365-mcp-write.lock')] : [])];
+      for (const lock of locks) {
+        if (fs.existsSync(lock)) results.push({
+          name: 'offline-write-recovery', status: 'fail',
+          message: `Active or retained write lock: ${lock}. Do not remove it while a writer is running; inspect journal/backups for manual recovery.`,
+        });
+      }
+    }
+    if (env.D365_PACKAGES_DIR && customRoot && contained(canonicalRoot(env.D365_PACKAGES_DIR), customRoot)) {
+      results.push({
+        name: 'metadata-separation', status: 'warn',
+        message: 'Custom metadata overlaps the configured package/index root. Index presence is NOT write authorization; only D365_WRITABLE_MODELS permits existing unlocked targets.',
+      });
+    }
+  } catch (error) {
+    results.push({ name: 'visual-studio-workspace', status: 'fail', message: errorMessage(error) });
+  }
+  return results;
+}
+
 function checkApiKey(apiKey: string | undefined): CheckResult {
   if (!apiKey) {
     return {
@@ -166,6 +245,7 @@ export async function runChecks(env: NodeJS.ProcessEnv = process.env): Promise<C
   }
 
   results.push(checkApiKey(env.MCP_API_KEY));
+  results.push(...checkVisualStudioIntegration(env));
   return results;
 }
 

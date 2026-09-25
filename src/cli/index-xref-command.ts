@@ -1,81 +1,72 @@
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { openDb } from '../indexer/db.js';
-import { clearUsageRefs, insertUsageRefs, normalizeUsageRow, type UsageRef } from '../indexer/xrefUsage.js';
+import {
+  normalizeUsageRow, publishUsageSnapshot, stageUsageBatch, stageUsageSnapshot,
+  usageSnapshotVersion, type UsageRef,
+} from '../indexer/xrefUsage.js';
+import { createMssqlClient, type XrefSqlClient } from '../indexer/xrefSql.js';
 
-export interface XrefSqlClient {
-  listTables(): Promise<string[]>;
-  query(table: string, offset?: number, limit?: number): Promise<Record<string, unknown>[]>;
-  close(): Promise<void>;
+export type { XrefSqlClient } from '../indexer/xrefSql.js';
+
+export interface XrefImportOptions {
+  allowEmpty?: boolean;
+  storeRaw?: boolean;
+  signal?: AbortSignal;
 }
 
-const TABLES = ['References', 'SysXRefTableReferences', 'SysXRefClassReferences', 'SysXRefMethodReferences',
-  'SysXRefVariableReferences', 'SysXRefLabelReferences'];
-
-/** Imports a complete compiler snapshot; xref generation is wholesale, not incremental. */
-export async function importXrefSnapshot(dbPath: string, client: XrefSqlClient): Promise<number> {
-  const available = new Set(await client.listTables());
-  const names = new Map<string, string>();
-  if (available.has('Names')) {
-    for (let offset = 0; ; offset += 5000) {
-      const rows = await client.query('Names', offset, 5000);
-      for (const row of rows) {
-        const id = String(row.Id ?? row.id ?? '');
-        const p = String(row.Path ?? row.path ?? '');
-        if (id && p) names.set(id, p);
-      }
-      if (rows.length < 5000) break;
-    }
-  }
+/** Publishes only a complete, coherent import. All failures retain the previous snapshot. */
+export async function importXrefSnapshot(
+  dbPath: string,
+  client: XrefSqlClient,
+  options: XrefImportOptions = {}
+): Promise<number> {
+  options.signal?.throwIfAborted();
   const db = openDb(dbPath);
-  clearUsageRefs(db);
-  let imported = 0;
-  const sourceTables = available.has('References')
-    ? ['References']
-    : TABLES.filter((table) => table !== 'References');
-  for (const table of sourceTables) {
-    if (!available.has(table)) continue;
-    for (let offset = 0; ; offset += 5000) {
-      const rows = await client.query(table, offset, 5000);
-      if (rows.length === 0) break;
+  try {
+    const expectedVersion = usageSnapshotVersion(db);
+    stageUsageSnapshot(db);
+    let imported = 0;
+    for await (const { table, rows } of client.batches()) {
+      options.signal?.throwIfAborted();
       const refs: UsageRef[] = [];
       for (const row of rows) {
-        const ref = normalizeUsageRow(row, table, names);
-        if (ref) refs.push(ref);
+        const ref = normalizeUsageRow({
+          ...row, SourcePath: row.__source_path, TargetPath: row.__target_path,
+        }, table);
+        if (!ref) {
+          throw new Error(`Unresolved compiler reference in ${table} at row ${imported + refs.length + 1}; refusing a partial snapshot.`);
+        }
+        if (!options.storeRaw) ref.raw = {};
+        refs.push(ref);
       }
-      insertUsageRefs(db, refs);
+      stageUsageBatch(db, refs);
       imported += refs.length;
-      if (rows.length < 5000) break;
     }
+    if (imported !== client.source.expectedRows) {
+      throw new Error(`Xref row count mismatch: expected ${client.source.expectedRows}, received ${imported}. Existing snapshot retained.`);
+    }
+    if (imported === 0 && !options.allowEmpty) {
+      throw new Error('Source contains no cross-references. Use --allow-empty only to intentionally replace the previous snapshot with an empty one.');
+    }
+    options.signal?.throwIfAborted();
+    publishUsageSnapshot(db, expectedVersion, randomUUID(), imported, client.source);
+    return imported;
+  } finally {
+    db.close();
   }
-  db.close();
-  return imported;
 }
 
-async function createMssqlClient(connectionString: string): Promise<XrefSqlClient> {
-  const mod = await import('mssql');
-  const mssql = mod.default ?? mod;
-  const pool = await mssql.connect(connectionString);
-  return {
-    async listTables() {
-      const result = await pool.request().query(
-        "SELECT TABLE_NAME AS name FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_TYPE = 'BASE TABLE'"
-      );
-      return result.recordset.map((row: { name: string }) => row.name);
-    },
-    async query(table: string, offset = 0, limit = 5000) {
-      if (!TABLES.includes(table) && table !== 'Names') throw new Error(`Unsupported xref table: ${table}`);
-      const request = pool.request().input('offset', mssql.Int, offset).input('limit', mssql.Int, limit);
-      const result = await request.query(
-        `SELECT * FROM [dbo].[${table.replace(/]/g, ']]')} ORDER BY [Id] OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY`
-      );
-      return result.recordset as Record<string, unknown>[];
-    },
-    async close() { await pool.close(); },
-  };
+function safeError(err: unknown, connectionString: string): string {
+  if (err instanceof Error && 'code' in err) {
+    return `SQL Server operation failed (${String(err.code)}). Check database permissions, authentication and TLS configuration.`;
+  }
+  const message = err instanceof Error ? err.message : String(err);
+  return message.replaceAll(connectionString, '[redacted connection string]');
 }
 
 export async function indexXrefCommand(
-  options: { connectionString?: string; dbPath?: string },
+  options: { connectionString?: string; dbPath?: string; allowSourceLocks?: boolean } & XrefImportOptions,
   env: NodeJS.ProcessEnv = process.env
 ): Promise<number> {
   const connectionString = options.connectionString ?? env.D365_XREF_CONNECTION_STRING;
@@ -84,16 +75,30 @@ export async function indexXrefCommand(
     console.error('Set D365_XREF_CONNECTION_STRING or pass --connection-string.');
     return 1;
   }
+  const abort = new AbortController();
+  const cancel = () => abort.abort(new Error('Cross-reference import cancelled.'));
+  process.once('SIGINT', cancel);
+  process.once('SIGTERM', cancel);
   let client: XrefSqlClient | undefined;
+  let code = 0;
   try {
-    client = await createMssqlClient(connectionString);
-    const count = await importXrefSnapshot(path.resolve(dbPath), client);
+    client = await createMssqlClient(connectionString, { ...options, signal: options.signal ?? abort.signal });
+    const count = await importXrefSnapshot(path.resolve(dbPath), client, {
+      ...options, signal: options.signal ?? abort.signal,
+    });
     console.log(`Imported ${count} compiler cross-reference rows into ${dbPath}.`);
-    return 0;
   } catch (err) {
-    console.error(`Cross-reference import failed: ${err instanceof Error ? err.message : String(err)}`);
-    return 1;
+    console.error(`Cross-reference import failed: ${safeError(err, connectionString)}`);
+    code = 1;
   } finally {
-    if (client) await client.close();
+    try {
+      await client?.close();
+    } catch (err) {
+      console.error(`Cross-reference source cleanup failed: ${safeError(err, connectionString)}`);
+      code = 1;
+    }
+    process.removeListener('SIGINT', cancel);
+    process.removeListener('SIGTERM', cancel);
   }
+  return code;
 }

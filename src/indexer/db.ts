@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module';
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
 import fs from 'fs';
+import { createUsageSchema } from './xrefUsage.js';
 
 export type Database = DatabaseSync;
 
@@ -35,6 +36,7 @@ export interface Xref {
 
 export function openDb(dbPath: string): Database {
   const db = new NodeDatabaseSync(dbPath);
+  try {
   db.exec('PRAGMA journal_mode = WAL');
   // Required for ON DELETE CASCADE on child tables (SQLite defaults to off).
   db.exec('PRAGMA foreign_keys = ON');
@@ -169,27 +171,14 @@ export function openDb(dbPath: string): Database {
     CREATE INDEX IF NOT EXISTS idx_ax_xref_to ON ax_xref(to_type, to_name);
     CREATE INDEX IF NOT EXISTS idx_ax_labels_source_file ON ax_labels(source_file);
 
-    CREATE TABLE IF NOT EXISTS ax_usage_refs (
-      id INTEGER PRIMARY KEY,
-      source_type TEXT NOT NULL,
-      source_name TEXT NOT NULL,
-      source_method TEXT,
-      target_type TEXT,
-      target_name TEXT NOT NULL,
-      target_method TEXT,
-      reference_kind TEXT NOT NULL,
-      source_line INTEGER,
-      source_column INTEGER,
-      occurrence_count INTEGER,
-      source_table TEXT NOT NULL,
-      raw_json TEXT NOT NULL
-    );
-    DROP INDEX IF EXISTS idx_ax_usage_target;
-    CREATE INDEX idx_ax_usage_target ON ax_usage_refs(target_name, target_type, target_method);
-    CREATE INDEX IF NOT EXISTS idx_ax_usage_source ON ax_usage_refs(source_type, source_name, source_method);
   `);
+  createUsageSchema(db);
 
   return db;
+  } catch (err) {
+    db.close();
+    throw err;
+  }
 }
 
 export function upsertObject(db: Database, obj: any): number | bigint {

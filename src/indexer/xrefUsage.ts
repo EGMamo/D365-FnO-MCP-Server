@@ -90,10 +90,102 @@ export function createUsageSchema(db: Database): void {
       source_table TEXT NOT NULL,
       raw_json TEXT NOT NULL
     );
-    DROP INDEX IF EXISTS idx_ax_usage_target;
-    CREATE INDEX idx_ax_usage_target ON ax_usage_refs(target_name, target_type, target_method);
     CREATE INDEX IF NOT EXISTS idx_ax_usage_source ON ax_usage_refs(source_type, source_name, source_method);
+    CREATE TABLE IF NOT EXISTS ax_usage_snapshot (
+      singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+      run_id TEXT NOT NULL,
+      imported_at TEXT NOT NULL,
+      row_count INTEGER NOT NULL,
+      source_json TEXT NOT NULL
+    );
   `);
+  const columns = db.prepare('PRAGMA index_info(idx_ax_usage_target)').all() as { name: string }[];
+  if (columns.map((column) => column.name).join(',') !== 'target_name,target_type,target_method') {
+    db.exec(`
+      BEGIN IMMEDIATE;
+      DROP INDEX IF EXISTS idx_ax_usage_target;
+      CREATE INDEX idx_ax_usage_target ON ax_usage_refs(target_name, target_type, target_method);
+      COMMIT;
+    `);
+  }
+}
+
+const USAGE_COLUMNS = `source_type, source_name, source_method, target_type, target_name, target_method,
+  reference_kind, source_line, source_column, occurrence_count, source_table, raw_json`;
+
+function usageValues(ref: UsageRef): (string | number | null)[] {
+  return [
+    ref.sourceType, ref.sourceName, ref.sourceMethod ?? null, ref.targetType ?? null,
+    ref.targetName, ref.targetMethod ?? null, ref.referenceKind, ref.sourceLine ?? null,
+    ref.sourceColumn ?? null, ref.occurrenceCount ?? null, ref.sourceTable, JSON.stringify(ref.raw),
+  ];
+}
+
+/** TEMP staging is private to this connection; readers keep seeing the last complete snapshot. */
+export function stageUsageSnapshot(db: Database): void {
+  db.exec(`CREATE TEMP TABLE ax_usage_staging AS SELECT ${USAGE_COLUMNS} FROM ax_usage_refs WHERE 0`);
+}
+
+export function stageUsageBatch(db: Database, refs: UsageRef[]): void {
+  const insert = db.prepare(`INSERT INTO ax_usage_staging (${USAGE_COLUMNS}) VALUES (${Array(12).fill('?').join(',')})`);
+  db.exec('BEGIN');
+  try {
+    for (const ref of refs) insert.run(...usageValues(ref));
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+}
+
+export function usageSnapshotVersion(db: Database): string | null {
+  const row = db.prepare('SELECT run_id FROM ax_usage_snapshot WHERE singleton = 1').get() as
+    { run_id: string } | undefined;
+  return row?.run_id ?? null;
+}
+
+export function getUsageSnapshotStatus(db: Database): object {
+  const snapshot = db.prepare('SELECT run_id, imported_at, row_count, source_json FROM ax_usage_snapshot WHERE singleton = 1')
+    .get() as { run_id: string; imported_at: string; row_count: number; source_json: string } | undefined;
+  if (!snapshot) {
+    const hasLegacyRows = db.prepare('SELECT 1 FROM ax_usage_refs LIMIT 1').get() !== undefined;
+    return {
+      status: hasLegacyRows ? 'legacy-unverified' : 'not-imported',
+      message: hasLegacyRows
+        ? 'Usage rows exist, but their source consistency and import time were not recorded. Reimport to establish provenance.'
+        : 'No compiler usage snapshot has been imported. Empty usage results do not prove that an object is unused.',
+    };
+  }
+  return {
+    status: 'imported', runId: snapshot.run_id, importedAt: snapshot.imported_at,
+    rowCount: snapshot.row_count, source: JSON.parse(snapshot.source_json) as object,
+    message: 'Static compiler references from the recorded import; freshness relative to subsequent compiler builds is unknown.',
+  };
+}
+
+export function publishUsageSnapshot(
+  db: Database,
+  expectedVersion: string | null,
+  runId: string,
+  count: number,
+  source: object
+): void {
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    if (usageSnapshotVersion(db) !== expectedVersion) {
+      throw new Error('Another import published a snapshot while this import was running. Retry the import.');
+    }
+    db.exec(`DELETE FROM ax_usage_refs;
+      INSERT INTO ax_usage_refs (${USAGE_COLUMNS}) SELECT ${USAGE_COLUMNS} FROM ax_usage_staging`);
+    db.prepare(`INSERT INTO ax_usage_snapshot VALUES (1, ?, ?, ?, ?)
+      ON CONFLICT(singleton) DO UPDATE SET run_id=excluded.run_id, imported_at=excluded.imported_at,
+      row_count=excluded.row_count, source_json=excluded.source_json`)
+      .run(runId, new Date().toISOString(), count, JSON.stringify(source));
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
 }
 
 export function replaceUsageRefs(db: Database, refs: UsageRef[]): void {

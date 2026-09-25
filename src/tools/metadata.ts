@@ -4,9 +4,15 @@ import { z } from 'zod';
 import * as dbUtils from '../indexer/db.js';
 import { getIndexStats } from '../indexer/buildIndex.js';
 import fs from 'fs/promises';
-import { findUsageRefs } from '../indexer/xrefUsage.js';
+import { findUsageRefs, getUsageSnapshotStatus } from '../indexer/xrefUsage.js';
 
 export function registerMetadataTools(server: McpServer, db: Database) {
+  server.tool(
+    'get_usage_snapshot_status',
+    'Inspect compiler usage import provenance and completeness. Check this before interpreting empty find_usages results as no usages. Static references are not runtime execution counts.',
+    {},
+    async () => ({ content: [{ type: 'text' as const, text: JSON.stringify(getUsageSnapshotStatus(db), null, 2) }] })
+  );
   server.tool(
     'search_symbols',
     'Full-text search across all AOT objects',
@@ -60,7 +66,7 @@ export function registerMetadataTools(server: McpServer, db: Database) {
 
   server.tool(
     'find_references',
-    'Find usages of an AOT object (capped at 500 total)',
+    'Find structural/declared relationships of an AOT object, not compiler call sites (capped at 500 total). Use find_usages for the imported compiler snapshot.',
     {
       name: z.string(),
       type: z.enum(['Table', 'Class', 'Enum', 'Form', 'Edt']).optional(),

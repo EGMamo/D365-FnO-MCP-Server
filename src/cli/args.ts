@@ -66,6 +66,9 @@ Commands:
   index-xref                 Import compiler cross-reference snapshot from SQL Server
       --connection-string    SQL Server connection string (prefer D365_XREF_CONNECTION_STRING)
       --db-path <path>       SQLite index path (default ./d365_index.db)
+      --allow-empty         Explicitly permit replacing the snapshot with no references
+      --allow-source-locks  Allow serializable source reads if snapshot isolation is disabled
+      --store-raw           Retain raw SQL rows (larger database; off by default)
   doctor                    Validate environment and report issues (exit 1 on failure)
   digest --file <path>      Validate a draft knowledge base article and add it if it passes
       --slug <slug>          Filename slug override (kebab-case, no number prefix)

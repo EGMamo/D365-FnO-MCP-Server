@@ -11,6 +11,7 @@ import { registerLabelsTools } from '../tools/labels.js';
 import { registerGeneratorTools } from '../tools/generators.js';
 import { registerWriterTools } from '../tools/writers.js';
 import { registerKnowledgeResources, registerKnowledgeDigestTool } from '../tools/knowledge.js';
+import { registerWorkspaceTools } from '../tools/workspace.js';
 
 /** Boots the MCP server on the configured transport. */
 export async function startServer(): Promise<void> {
@@ -34,6 +35,25 @@ export async function startServer(): Promise<void> {
     registerWriterTools(server, db, {
       enableWriteTools: config.enableWriteTools,
       projectDir: config.projectDir,
+      workspaceDir: config.visualStudioWorkspaceDir,
+      customMetadataDir: config.customMetadataDir,
+      defaultProject: config.targetProject,
+      defaultPackage: config.targetPackage,
+      defaultModel: config.targetModel,
+      defaultSolution: config.targetSolution,
+      writableModels: config.writableModels,
+    });
+    registerWorkspaceTools(server, {
+      workspaceDir: config.visualStudioWorkspaceDir,
+      customMetadataDir: config.customMetadataDir,
+      targetProject: config.targetProject,
+      targetPackage: config.targetPackage,
+      targetModel: config.targetModel,
+      targetSolution: config.targetSolution,
+      writableModels: config.writableModels,
+      projectDir: config.projectDir,
+      customMetadataSource: config.customMetadataSource,
+      enableWriteTools: config.enableWriteTools,
     });
     registerKnowledgeResources(server);
     registerKnowledgeDigestTool(server, db, { enableWriteTools: config.enableWriteTools });
@@ -86,7 +106,7 @@ export async function startServer(): Promise<void> {
     sessionIdleTimeoutMs: config.sessionIdleTimeoutMs,
   });
 
-  startBackgroundIndexing();
+  if (config.indexOnStart) startBackgroundIndexing();
 
   const shutdown = () => {
     logger.info('Shutting down...');

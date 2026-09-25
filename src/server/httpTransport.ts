@@ -337,10 +337,16 @@ export function startHttpServer(
   const app = createHttpApp(createMcpServer, options);
 
   const httpServer = app.listen(options.port, () => {
+    const address = httpServer.address();
+    if (!address || typeof address === 'string') {
+      logger.error('HTTP listener did not report a TCP address');
+      return;
+    }
+    const port = address.port;
     logger.info('MCP HTTP transport listening', {
-      port: options.port,
-      endpoint: `http://localhost:${options.port}/mcp`,
-      health: `http://localhost:${options.port}/health`,
+      port,
+      endpoint: `http://localhost:${port}/mcp`,
+      health: `http://localhost:${port}/health`,
       trustProxyHops: options.trustProxyHops ?? 0,
     });
   });

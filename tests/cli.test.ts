@@ -3,14 +3,15 @@ import fs from 'fs';
 import path from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
+import { createRequire } from 'node:module';
 
 const execFileAsync = promisify(execFile);
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(testDir, '..');
 const fixturesDir = path.join(testDir, 'fixtures');
 const entry = path.join(repoRoot, 'src', 'index.ts');
-const tsx = path.join(repoRoot, 'node_modules', '.bin', 'tsx');
+const tsx = pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href;
 
 interface RunResult {
   code: number;
@@ -20,9 +21,12 @@ interface RunResult {
 
 async function runCli(args: string[], env: Record<string, string>, cwd: string): Promise<RunResult> {
   try {
-    const { stdout, stderr } = await execFileAsync(tsx, [entry, ...args], {
+    const inheritedEnv = Object.fromEntries(
+      Object.entries(process.env).filter(([name]) => !/^(D365_|MCP_|DOTENV_)/.test(name))
+    );
+    const { stdout, stderr } = await execFileAsync(process.execPath, ['--import', tsx, entry, ...args], {
       cwd,
-      env: { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '', ...env },
+      env: { ...inheritedEnv, ...env },
       timeout: 120_000,
     });
     return { code: 0, stdout, stderr };
@@ -91,20 +95,35 @@ describe('CLI', () => {
     expect(res.stdout).toContain('[WARN] api-key');
   }, 120_000);
 
-  it('index --force re-creates the DB and indexes fixtures', async () => {
-    fs.writeFileSync(dbPath, 'not-a-database');
-
+  it('index --force reparses objects without deleting compiler usage data', async () => {
+    const { openDb } = await import('../src/indexer/db.js');
+    const { replaceUsageRefs, findUsageRefs } = await import('../src/indexer/xrefUsage.js');
+    const seeded = openDb(dbPath);
+    replaceUsageRefs(seeded, [{
+      sourceType: 'Class', sourceName: 'Caller', targetName: 'Target',
+      referenceKind: 'Call', sourceTable: 'References', raw: {},
+    }]);
+    seeded.close();
     const res = await runCli(['index', '--force'], baseEnv, workDir);
     expect(res.code).toBe(0);
     expect(res.stdout).toContain('Indexing complete');
     expect(fs.existsSync(dbPath)).toBe(true);
 
-    const { openDb } = await import('../src/indexer/db.js');
     const db = openDb(dbPath);
     const count = db.prepare('SELECT COUNT(*) as c FROM ax_objects').get() as { c: number };
+    expect(findUsageRefs(db, 'Target')).toHaveLength(1);
     db.close();
     expect(count.c).toBeGreaterThanOrEqual(3);
   }, 120_000);
+
+  it('does not delete a damaged DB even with --force', async () => {
+    const damaged = path.join(workDir, 'damaged.db');
+    fs.writeFileSync(damaged, 'not-a-database');
+    const res = await runCli(['index', '--force'], { ...baseEnv, D365_INDEX_DB_PATH: damaged }, workDir);
+    expect(res.code).toBe(1);
+    expect(res.stderr).toContain('--force never deletes');
+    expect(fs.readFileSync(damaged, 'utf8')).toBe('not-a-database');
+  });
 
   it('index fails without D365_PACKAGES_DIR', async () => {
     const res = await runCli(
