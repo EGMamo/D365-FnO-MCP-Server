@@ -9,8 +9,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { openDb, upsertObject, rebuildFts } from '../src/indexer/db.js';
+import { openDb, upsertObject, rebuildFts, setMeta, META_KEYS } from '../src/indexer/db.js';
+import { publishIndex } from '../src/indexer/publishIndex.js';
 import { descriptorXml, projectXml, treeSnapshot } from './workspaceFixtures.js';
+import { startStaticServer, type StaticServer } from './helpers/indexFixtureServer.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const entry = path.join(repoRoot, 'dist', 'src', 'index.js');
@@ -19,6 +21,7 @@ let root: string;
 let environment: Record<string, string>;
 const clients: Client[] = [];
 const children: ChildProcess[] = [];
+const staticServers: StaticServer[] = [];
 
 beforeEach(() => {
   if (!fs.existsSync(entry)) throw new Error('Run npm run build before the compiled MCP integration tests.');
@@ -34,6 +37,10 @@ beforeEach(() => {
     file_path: path.join(classDir, 'AlreadyIndexed.xml'), raw_xml: '', file_mtime: 1,
   });
   rebuildFts(db);
+  // Build metadata lets the hosted-mode case publish this database as-is.
+  setMeta(db, META_KEYS.builtAt, '2026-09-25T20:00:00.000Z');
+  setMeta(db, META_KEYS.serverVersion, '0.1.0');
+  setMeta(db, META_KEYS.storeRawXml, '1');
   db.close();
   environment = {
     ...Object.fromEntries(Object.entries(process.env).filter(
@@ -57,13 +64,18 @@ afterEach(async () => {
       await exited;
     }
   }
+  await Promise.all(staticServers.splice(0).map((server) => server.close()));
   if (root) fs.rmSync(root, { recursive: true, force: true });
 });
 
-async function connect(transport: 'http' | 'stdio', indexOnStart: boolean): Promise<Client> {
+async function connect(
+  transport: 'http' | 'stdio',
+  indexOnStart: boolean,
+  baseEnv: Record<string, string> = environment
+): Promise<Client> {
   const client = new Client({ name: 'd365-integration-test', version: '1.0.0' });
   clients.push(client);
-  const env = { ...environment, MCP_TRANSPORT: transport, D365_INDEX_ON_START: indexOnStart ? '1' : '0' };
+  const env = { ...baseEnv, MCP_TRANSPORT: transport, D365_INDEX_ON_START: indexOnStart ? '1' : '0' };
   if (transport === 'stdio') {
     await client.connect(new StdioClientTransport({
       command: process.execPath, args: [entry, 'serve'], env, cwd: root, stderr: 'pipe',
@@ -95,13 +107,17 @@ async function connect(transport: 'http' | 'stdio', indexOnStart: boolean): Prom
   return client;
 }
 
+function textOf(result: Awaited<ReturnType<Client['callTool']>>): string {
+  if (!Array.isArray(result.content) || !result.content[0] || result.content[0].type !== 'text') {
+    throw new Error('Tool did not return text content.');
+  }
+  return result.content[0].text as string;
+}
+
 async function search(client: Client, query: string): Promise<unknown[]> {
   const result = await client.callTool({ name: 'search_symbols', arguments: { query } });
   expect(result.isError).not.toBe(true);
-  if (!Array.isArray(result.content) || !result.content[0] || result.content[0].type !== 'text') {
-    throw new Error('Search tool did not return text content.');
-  }
-  return JSON.parse(result.content[0].text) as unknown[];
+  return JSON.parse(textOf(result)) as unknown[];
 }
 
 describe.each(['stdio', 'http'] as const)('compiled MCP server over %s', (transport) => {
@@ -181,5 +197,52 @@ describe.each(['stdio', 'http'] as const)('compiled MCP server over %s', (transp
     expect((await client.callTool({
       name: 'apply_table_extension_change', arguments: { changeId, acknowledgeOfflineProject: true },
     })).isError).toBe(true);
+  }, 30_000);
+});
+
+describe('compiled MCP server in hosted mode', () => {
+  it('serves a published index over http with named keys and no packages directory', async () => {
+    const publishDir = path.join(root, 'publish');
+    const { manifest } = await publishIndex({
+      dbPath: environment.D365_INDEX_DB_PATH, outDir: publishDir, serverVersion: '0.1.0',
+    });
+    const server = await startStaticServer(publishDir);
+    staticServers.push(server);
+
+    const hostedDb = path.join(root, 'hosted', 'index.db');
+    const env: Record<string, string> = {
+      ...Object.fromEntries(Object.entries(environment).filter(
+        ([name]) => name !== 'D365_PACKAGES_DIR' && name !== 'MCP_API_KEY'
+      )),
+      D365_INDEX_URL: `${server.baseUrl}/latest/manifest.json?sv=test`,
+      D365_INDEX_DB_PATH: hostedDb,
+      MCP_API_KEYS: `alice=${apiKey}`,
+    };
+    const client = await connect('http', false, env);
+
+    const tools = (await client.listTools()).tools.map((tool) => tool.name);
+    expect(tools).toContain('search_symbols');
+    expect(tools).not.toContain('write_table_extension');
+    expect(await search(client, 'AlreadyIndexed')).toHaveLength(1);
+    expect(fs.existsSync(hostedDb)).toBe(true);
+
+    const stats = JSON.parse(textOf(await client.callTool({ name: 'get_index_stats', arguments: {} }))) as {
+      builtAt: string; totalObjects: number;
+    };
+    expect(stats.builtAt).toBe(manifest.builtAt);
+    expect(stats.totalObjects).toBe(1);
+
+    const staleness = JSON.parse(textOf(await client.callTool({ name: 'get_index_staleness', arguments: {} }))) as {
+      mode: string; version: string; builtAt: string; manifestUrl: string;
+    };
+    expect(staleness.mode).toBe('published');
+    expect(staleness.version).toBe(manifest.version);
+    expect(staleness.builtAt).toBe(manifest.builtAt);
+    expect(staleness.manifestUrl).toBe(`${server.baseUrl}/latest/manifest.json`);
+  }, 30_000);
+
+  it('runs over stdio without any API key', async () => {
+    const client = await connect('stdio', false, { ...environment, MCP_API_KEY: '' });
+    expect(await search(client, 'AlreadyIndexed')).toHaveLength(1);
   }, 30_000);
 });

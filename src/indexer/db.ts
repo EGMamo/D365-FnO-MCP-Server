@@ -171,6 +171,11 @@ export function openDb(dbPath: string): Database {
     CREATE INDEX IF NOT EXISTS idx_ax_xref_to ON ax_xref(to_type, to_name);
     CREATE INDEX IF NOT EXISTS idx_ax_labels_source_file ON ax_labels(source_file);
 
+    CREATE TABLE IF NOT EXISTS ax_meta (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
   `);
   createUsageSchema(db);
 
@@ -179,6 +184,35 @@ export function openDb(dbPath: string): Database {
     db.close();
     throw err;
   }
+}
+
+/** Keys the indexer records in `ax_meta` so consumers can tell what an index holds. */
+export const META_KEYS = {
+  builtAt: 'built_at',
+  serverVersion: 'server_version',
+  /** Basename and a short hash of the packages directory; never the full path. */
+  packagesDirBasename: 'packages_dir_basename',
+  packagesDirHash: 'packages_dir_sha256',
+  storeRawXml: 'store_raw_xml',
+  indexDurationMs: 'index_duration_ms',
+  schemaVersion: 'schema_version',
+} as const;
+
+export function setMeta(db: Database, key: string, value: string): void {
+  db.prepare(`
+    INSERT INTO ax_meta (key, value, updated_at) VALUES (?, ?, ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+  `).run(key, value, new Date().toISOString());
+}
+
+export function getMeta(db: Database, key: string): string | null {
+  const row = db.prepare(`SELECT value FROM ax_meta WHERE key = ?`).get(key) as { value: string } | undefined;
+  return row?.value ?? null;
+}
+
+export function getAllMeta(db: Database): Record<string, string> {
+  const rows = db.prepare(`SELECT key, value FROM ax_meta ORDER BY key`).all() as { key: string; value: string }[];
+  return Object.fromEntries(rows.map((row) => [row.key, row.value]));
 }
 
 export function upsertObject(db: Database, obj: any): number | bigint {

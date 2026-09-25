@@ -5,12 +5,16 @@ import rateLimit from 'express-rate-limit';
 import { createHash, randomUUID, timingSafeEqual } from 'crypto';
 import type { Server } from 'http';
 import { logger } from '../utils/logger.js';
+import type { ApiKeyEntry } from './apiKeys.js';
 
 export type ServerFactory = () => McpServer;
 
 export interface HttpTransportOptions {
   port: number;
-  mcpApiKey: string;
+  /** Interface to bind; empty or undefined binds every interface. */
+  host?: string;
+  /** Accepted API keys. At least one is required. */
+  apiKeys: ApiKeyEntry[];
   version: string;
   rateLimitMaxRequests: number;
   rateLimitWindowMs: number;
@@ -34,6 +38,8 @@ interface SessionEntry {
   lastActivity: number;
   /** False while the initialize handshake is still in flight (slot reserved). */
   initialized: boolean;
+  /** Name of the API key that opened the session; other keys may not use it. */
+  apiKeyName: string;
 }
 
 const SESSION_SWEEP_INTERVAL_MS = 60_000;
@@ -47,6 +53,18 @@ function safeEqual(a: string, b: string): boolean {
   const hashA = createHash('sha256').update(Buffer.from(a, 'utf-8')).digest();
   const hashB = createHash('sha256').update(Buffer.from(b, 'utf-8')).digest();
   return timingSafeEqual(hashA, hashB);
+}
+
+/**
+ * Finds the key entry matching `presented`. Every entry is compared, with no
+ * early exit, so the response time does not depend on which key matched.
+ */
+function authenticate(presented: string, keys: readonly ApiKeyEntry[]): ApiKeyEntry | undefined {
+  let match: ApiKeyEntry | undefined;
+  for (const entry of keys) {
+    if (safeEqual(presented, entry.key)) match = entry;
+  }
+  return match;
 }
 
 /** Extract a presented API key from `X-API-Key` or `Authorization: Bearer ...`. */
@@ -67,6 +85,9 @@ function extractApiKey(req: Request): string | undefined {
  * Exported separately from `startHttpServer` so tests can drive it directly.
  */
 export function createHttpApp(createMcpServer: ServerFactory, options: HttpTransportOptions): Express {
+  if (options.apiKeys.length === 0) {
+    throw new Error('The HTTP transport requires at least one API key.');
+  }
   const app = express();
   const sessions = new Map<string, SessionEntry>();
   const trustProxyHops = options.trustProxyHops ?? 0;
@@ -98,9 +119,8 @@ export function createHttpApp(createMcpServer: ServerFactory, options: HttpTrans
       legacyHeaders: false,
       skip: (req) => req.path === '/health',
       // Key on the client IP alone. The rate limiter runs before authentication,
-      // so a client-controlled credential header must not be part of the bucket key.
-      // When all clients share the same MCP_API_KEY, per-credential bucketing is not
-      // meaningful anyway; a real per-user throttle belongs behind verified auth.
+      // so a client-controlled credential header must not be part of the bucket key;
+      // a per-key throttle would belong behind verified auth.
       keyGenerator: (req: Request) => clientIp(req),
       handler: (req, res) => {
         logger.warn('Rate limit exceeded', { ip: clientIp(req), path: req.path });
@@ -117,12 +137,15 @@ export function createHttpApp(createMcpServer: ServerFactory, options: HttpTrans
   // ── API key auth ──────────────────────────────────────────────────────────
   app.use((req: Request, res: Response, next: NextFunction) => {
     const presented = extractApiKey(req);
-    if (!presented || !safeEqual(presented, options.mcpApiKey)) {
+    const entry = presented ? authenticate(presented, options.apiKeys) : undefined;
+    if (!entry) {
       logger.warn('Unauthorized request', { ip: clientIp(req), method: req.method, path: req.path });
       res.status(401).json({ error: 'Unauthorized: invalid or missing API key' });
       return;
     }
-    logger.info('Request', { method: req.method, path: req.path, ip: clientIp(req) });
+    // Only the key's name is recorded anywhere; the key itself is never logged.
+    res.locals.apiKeyName = entry.name;
+    logger.info('Request', { method: req.method, path: req.path, ip: clientIp(req), apiKey: entry.name });
     next();
   });
 
@@ -197,6 +220,10 @@ export function createHttpApp(createMcpServer: ServerFactory, options: HttpTrans
   sweep.unref?.();
   app.locals.sessionSweep = sweep;
   app.locals.sessions = sessions;
+  /** Closes every session; graceful shutdown uses it to end SSE streams. */
+  app.locals.closeAllSessions = (): void => {
+    for (const [sid, entry] of [...sessions]) closeSession(sid, entry, 'shutdown');
+  };
 
   /** First JSON-RPC message method in the body, if any. */
   const firstMethod = (body: unknown): string | undefined => {
@@ -224,6 +251,15 @@ export function createHttpApp(createMcpServer: ServerFactory, options: HttpTrans
           res.status(404).json({ error: 'Session not found. Please reconnect.' });
           return;
         }
+        if (existing.apiKeyName !== res.locals.apiKeyName) {
+          logger.warn('Session used with a different API key', {
+            sessionId,
+            sessionKey: existing.apiKeyName,
+            presentedKey: res.locals.apiKeyName,
+          });
+          res.status(403).json({ error: 'Session belongs to a different API key' });
+          return;
+        }
         existing.lastActivity = Date.now();
         await existing.transport.handleRequest(req, res, req.body);
         existing.lastActivity = Date.now();
@@ -249,12 +285,13 @@ export function createHttpApp(createMcpServer: ServerFactory, options: HttpTrans
       }
 
       const newSessionId = randomUUID();
+      const apiKeyName = res.locals.apiKeyName as string;
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => newSessionId,
         onsessioninitialized: (sid: string) => {
           const entry = sessions.get(sid);
           if (entry) entry.initialized = true;
-          logger.info('Session initialized', { sessionId: sid, active: sessions.size });
+          logger.info('Session initialized', { sessionId: sid, apiKey: apiKeyName, active: sessions.size });
         },
       });
 
@@ -264,6 +301,7 @@ export function createHttpApp(createMcpServer: ServerFactory, options: HttpTrans
         server: mcpServer,
         lastActivity: Date.now(),
         initialized: false,
+        apiKeyName,
       };
 
       // Reserve the slot synchronously so concurrent initializations cannot all
@@ -278,7 +316,7 @@ export function createHttpApp(createMcpServer: ServerFactory, options: HttpTrans
 
       transport.onclose = () => {
         if (sessions.delete(newSessionId)) {
-          logger.info('Session closed', { sessionId: newSessionId, active: sessions.size });
+          logger.info('Session closed', { sessionId: newSessionId, apiKey: apiKeyName, active: sessions.size });
         }
       };
 
@@ -329,14 +367,20 @@ export function createHttpApp(createMcpServer: ServerFactory, options: HttpTrans
   return app;
 }
 
+export interface RunningHttpServer {
+  server: Server;
+  /** Closes every MCP session so their SSE streams end before the listener closes. */
+  closeAllSessions: () => void;
+}
+
 /** Start the MCP Streamable HTTP transport server. */
 export function startHttpServer(
   createMcpServer: ServerFactory,
   options: HttpTransportOptions,
-): Server {
+): RunningHttpServer {
   const app = createHttpApp(createMcpServer, options);
 
-  const httpServer = app.listen(options.port, () => {
+  const onListening = () => {
     const address = httpServer.address();
     if (!address || typeof address === 'string') {
       logger.error('HTTP listener did not report a TCP address');
@@ -345,11 +389,16 @@ export function startHttpServer(
     const port = address.port;
     logger.info('MCP HTTP transport listening', {
       port,
+      host: options.host || 'all interfaces',
       endpoint: `http://localhost:${port}/mcp`,
       health: `http://localhost:${port}/health`,
       trustProxyHops: options.trustProxyHops ?? 0,
+      apiKeys: options.apiKeys.length,
     });
-  });
+  };
+  const httpServer = options.host
+    ? app.listen(options.port, options.host, onListening)
+    : app.listen(options.port, onListening);
 
   httpServer.on('close', () => {
     clearInterval(app.locals.sessionSweep as NodeJS.Timeout);
@@ -359,5 +408,5 @@ export function startHttpServer(
     logger.error('HTTP server error', { message: err.message });
   });
 
-  return httpServer;
+  return { server: httpServer, closeAllSessions: app.locals.closeAllSessions as () => void };
 }

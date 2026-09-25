@@ -22,3 +22,38 @@ jobs:
       - run: npm run lint
       - run: npm run build
       - run: npm test
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build image
+        run: docker build -t d365-fno-mcp-server:ci .
+      - name: Smoke test the container
+        run: |
+          set -euo pipefail
+          KEY=$(openssl rand -hex 32)
+          docker run -d --name mcp -p 8080:8080 -e MCP_API_KEYS="ci=$KEY" d365-fno-mcp-server:ci
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8080/health >/dev/null 2>&1; then break; fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:8080/health
+          echo
+          STATUS=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8080/mcp \
+            -H 'Content-Type: application/json' \
+            -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}')
+          test "$STATUS" = "401"
+          curl -fsS -X POST http://127.0.0.1:8080/mcp \
+            -H "X-API-Key: $KEY" -H 'Content-Type: application/json' \
+            -H 'Accept: application/json, text/event-stream' \
+            -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}' \
+            | grep -q '"serverInfo"'
+          # The optional SQL Server driver must not be in the image.
+          if docker exec mcp test -d node_modules/mssql; then echo "mssql should be omitted" && exit 1; fi
+      - name: Container logs
+        if: always()
+        run: docker logs mcp || true
+      - name: Cleanup
+        if: always()
+        run: docker rm -f mcp || true

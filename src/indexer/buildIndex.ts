@@ -2,8 +2,12 @@ import type { Database } from './db.js';
 import { scanPackagesDir } from './scanner.js';
 import * as dbUtils from './db.js';
 import * as parser from './parser.js';
+import { getUsageSnapshotStatus } from './xrefUsage.js';
 import fs from 'fs/promises';
+import path from 'path';
+import { createHash } from 'crypto';
 import { logger } from '../utils/logger.js';
+import { VERSION } from '../version.js';
 
 /** Above this share of failed parses the scan is treated as untrustworthy and pruning is skipped. */
 const MAX_PRUNE_ERROR_RATIO = 0.5;
@@ -22,7 +26,7 @@ export interface IndexStats {
   durationMs: number;
 }
 
-function shouldStoreRawXml(env: NodeJS.ProcessEnv = process.env): boolean {
+export function shouldStoreRawXml(env: NodeJS.ProcessEnv = process.env): boolean {
   const value = env.D365_INDEX_STORE_RAW_XML;
   if (value === undefined) return true;
   return !['0', 'false', 'no', 'off'].includes(value.trim().toLowerCase());
@@ -369,6 +373,7 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
   }
 
   stats.durationMs = Date.now() - startTime;
+  recordBuildMeta(db, packagesDir, storeRawXml, stats.durationMs);
   logger.info('Indexing complete', { ...stats });
 
   const summary = getIndexStats(db);
@@ -384,15 +389,71 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
   return stats;
 }
 
-export function getIndexStats(db: Database) {
+/**
+ * Records what this run produced so a copy of the index (for example one
+ * published to a hosted server) can report its own provenance. The packages
+ * directory is stored as a basename plus a short hash: the full path names the
+ * build user's profile folder and every reader of the index can see meta.
+ */
+function recordBuildMeta(db: Database, packagesDir: string, storeRawXml: boolean, durationMs: number): void {
+  const resolved = path.resolve(packagesDir);
+  const normalized = process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  const hash = createHash('sha256').update(normalized).digest('hex').slice(0, 16);
+  db.exec('BEGIN');
+  try {
+    dbUtils.setMeta(db, dbUtils.META_KEYS.builtAt, new Date().toISOString());
+    dbUtils.setMeta(db, dbUtils.META_KEYS.serverVersion, VERSION);
+    dbUtils.setMeta(db, dbUtils.META_KEYS.packagesDirBasename, path.basename(resolved));
+    dbUtils.setMeta(db, dbUtils.META_KEYS.packagesDirHash, hash);
+    dbUtils.setMeta(db, dbUtils.META_KEYS.storeRawXml, storeRawXml ? '1' : '0');
+    dbUtils.setMeta(db, dbUtils.META_KEYS.indexDurationMs, String(durationMs));
+    dbUtils.setMeta(db, dbUtils.META_KEYS.schemaVersion, '1');
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+}
+
+export interface IndexStatsSummary {
+  totalObjects: number;
+  byType: Record<string, number>;
+  totalLabels: number;
+  /** When `buildIndex` last completed on this database, or null if never recorded. */
+  builtAt: string | null;
+  /** Alias of `builtAt`, kept for callers that read the previous field name. */
+  lastIndexed: string | null;
+  serverVersion: string | null;
+  storeRawXml: boolean | null;
+  usageSnapshot: { status: string; importedAt: string | null; rowCount: number | null };
+}
+
+export function getIndexStats(db: Database): IndexStatsSummary {
   const totalObjects = (db.prepare(`SELECT COUNT(*) as count FROM ax_objects`).get() as any).count;
   const totalLabels = (db.prepare(`SELECT COUNT(*) as count FROM ax_labels`).get() as any).count;
-  
+
   const typesRows = db.prepare(`SELECT type, COUNT(*) as count FROM ax_objects GROUP BY type`).all() as any[];
   const byType: Record<string, number> = {};
   for (const row of typesRows) {
     byType[row.type] = row.count;
   }
 
-  return { totalObjects, byType, totalLabels, lastIndexed: new Date().toISOString() };
+  const builtAt = dbUtils.getMeta(db, dbUtils.META_KEYS.builtAt);
+  const storeRawXml = dbUtils.getMeta(db, dbUtils.META_KEYS.storeRawXml);
+  const usage = getUsageSnapshotStatus(db) as { status: string; importedAt?: string; rowCount?: number };
+
+  return {
+    totalObjects,
+    byType,
+    totalLabels,
+    builtAt,
+    lastIndexed: builtAt,
+    serverVersion: dbUtils.getMeta(db, dbUtils.META_KEYS.serverVersion),
+    storeRawXml: storeRawXml === null ? null : storeRawXml === '1',
+    usageSnapshot: {
+      status: usage.status,
+      importedAt: usage.importedAt ?? null,
+      rowCount: usage.rowCount ?? null,
+    },
+  };
 }

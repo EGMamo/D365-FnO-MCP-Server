@@ -11,7 +11,7 @@ import {
   rebuildLabelsFts,
 } from '../../src/indexer/db.js';
 import { registerGeneratorTools } from '../../src/tools/generators.js';
-import { registerMetadataTools } from '../../src/tools/metadata.js';
+import { registerMetadataTools, type MetadataToolOptions } from '../../src/tools/metadata.js';
 import { registerLabelsTools } from '../../src/tools/labels.js';
 
 export interface ToolResult {
@@ -35,7 +35,7 @@ export function collectGeneratorTools(db: Database): Map<string, Handler> {
 }
 
 /** Same stand-in, but for the metadata tool registrations. */
-export function collectMetadataTools(db: Database): Map<string, Handler> {
+export function collectMetadataTools(db: Database, options: MetadataToolOptions = {}): Map<string, Handler> {
   const handlers = new Map<string, Handler>();
   const fakeServer = {
     tool: (name: string, _desc: string, _schema: unknown, handler: Handler) => {
@@ -43,7 +43,7 @@ export function collectMetadataTools(db: Database): Map<string, Handler> {
     },
   } as unknown as McpServer;
 
-  registerMetadataTools(fakeServer, db);
+  registerMetadataTools(fakeServer, db, options);
   return handlers;
 }
 

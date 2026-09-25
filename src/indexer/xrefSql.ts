@@ -64,11 +64,27 @@ export function xrefPageQuery(table: XrefTableSchema, names?: XrefTableSchema): 
     OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY`;
 }
 
+/**
+ * `mssql` is an optional dependency: the hosted container and `npx` installs
+ * omit it because only `index-xref` needs SQL Server access.
+ */
+async function loadMssql() {
+  try {
+    return await import('mssql');
+  } catch (err) {
+    throw new Error(
+      "The optional 'mssql' driver is not installed (it is skipped by `npm install --omit=optional`). " +
+        'Run `npm install mssql` on the machine that executes index-xref.',
+      { cause: err }
+    );
+  }
+}
+
 export async function createMssqlClient(
   connectionString: string,
   options: { allowSourceLocks?: boolean; signal?: AbortSignal } = {}
 ): Promise<XrefSqlClient> {
-  const { default: sql } = await import('mssql');
+  const { default: sql } = await loadMssql();
   const pool = new sql.ConnectionPool(connectionString);
   let transaction: Sql.Transaction | undefined;
   let active = false;

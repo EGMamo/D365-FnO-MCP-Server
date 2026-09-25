@@ -69,7 +69,19 @@ Commands:
       --allow-empty         Explicitly permit replacing the snapshot with no references
       --allow-source-locks  Allow serializable source reads if snapshot isolation is disabled
       --store-raw           Retain raw SQL rows (larger database; off by default)
-  doctor                    Validate environment and report issues (exit 1 on failure)
+  doctor [--hosted]         Validate environment and report issues (exit 1 on failure)
+                            --hosted checks a published-index deployment (implied by D365_INDEX_URL)
+  pull-index                Download the published index instead of building one
+      --url <manifest-url>  Manifest URL (default D365_INDEX_URL), e.g. .../indexes/latest/manifest.json?<sas>
+      --db-path <path>      Destination SQLite path (default D365_INDEX_DB_PATH or ./d365_index.db)
+      --force               Re-download even when the local copy already matches
+  publish-index             Package the index for the hosted server: <out>/<version>/ + <out>/latest/manifest.json
+      --db-path <path>      Source SQLite index (default D365_INDEX_DB_PATH or ./d365_index.db)
+      --out <dir>           Output directory (default ./publish)
+      --db-url-prefix <url> Absolute URL prefix for the database blob (default: relative ../<version>/)
+      --allow-no-raw-xml    Publish even if raw XML was not stored (get_element_xml then fails on the host)
+      --integrity-check     Run PRAGMA integrity_check instead of quick_check (slow on large indexes)
+      --relative-paths      Rewrite indexed file paths relative to D365_PACKAGES_DIR in the published copy
   digest --file <path>      Validate a draft knowledge base article and add it if it passes
       --slug <slug>          Filename slug override (kebab-case, no number prefix)
       --dry-run              Validate only, do not write the file
