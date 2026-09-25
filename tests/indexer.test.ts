@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
+import fsp from 'fs/promises';
 import path from 'path';
 import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
@@ -514,19 +515,37 @@ describe('index lifecycle: pruning, renames and collisions', () => {
     fs.writeFileSync(first, 'SYS1=First\n');
     fs.writeFileSync(second, 'SYS1=Second\n');
     const retryDb = openDb(':memory:');
-    let survivor = '';
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    const realReadFile = fsp.readFile;
 
     try {
       await buildIndex(retryDb, duplicateRoot, true);
       const winner = retryDb.prepare(`SELECT source_file FROM ax_labels WHERE label_id = ?`).get('SYS1') as {
         source_file: string;
       };
-      survivor = winner.source_file === first ? second : first;
+      const survivor = winner.source_file === first ? second : first;
       fs.rmSync(winner.source_file);
 
-      // Make the survivor unreadable so the post-prune recovery pass fails.
-      fs.chmodSync(survivor, 0o000);
-      await buildIndex(retryDb, duplicateRoot, false);
+      // Fail reads of the survivor so the post-prune recovery pass fails. A
+      // chmod 0o000 cannot do this portably: Windows ignores POSIX permission
+      // bits and root bypasses them, so the file would stay readable.
+      const readFile = vi.spyOn(fsp, 'readFile').mockImplementation((async (file: unknown, ...rest: unknown[]) => {
+        if (file === survivor) {
+          throw Object.assign(new Error(`EACCES: permission denied, open '${survivor}'`), { code: 'EACCES' });
+        }
+        return (realReadFile as (...args: unknown[]) => Promise<unknown>)(file, ...rest);
+      }) as typeof fsp.readFile);
+      try {
+        await buildIndex(retryDb, duplicateRoot, false);
+        expect(readFile).toHaveBeenCalledWith(survivor, 'utf-8');
+      } finally {
+        readFile.mockRestore();
+      }
+
+      expect(warn).toHaveBeenCalledWith(
+        'Failed to re-apply label source after prune; will retry next run',
+        expect.objectContaining({ filePath: survivor })
+      );
 
       // The tracked mtime must be cleared so the next run cannot skip the file.
       const tracked = retryDb
@@ -534,7 +553,6 @@ describe('index lifecycle: pruning, renames and collisions', () => {
         .get(survivor) as { file_mtime: number };
       expect(tracked.file_mtime).toBe(0);
 
-      fs.chmodSync(survivor, 0o644);
       await buildIndex(retryDb, duplicateRoot, false);
 
       const row = retryDb.prepare(`SELECT source_file FROM ax_labels WHERE label_id = ?`).get('SYS1') as {
@@ -542,7 +560,7 @@ describe('index lifecycle: pruning, renames and collisions', () => {
       };
       expect(row?.source_file).toBe(survivor);
     } finally {
-      if (survivor) fs.chmodSync(survivor, 0o644);
+      warn.mockRestore();
       retryDb.close();
       fs.rmSync(duplicateRoot, { recursive: true, force: true });
     }
