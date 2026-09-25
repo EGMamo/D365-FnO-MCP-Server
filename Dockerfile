@@ -7,11 +7,18 @@
 # not /home, which App Service mounts as a network share where SQLite cannot
 # lock), then listens on MCP_PORT. Write tools stay disabled.
 
+# Builds behind a private registry or a TLS-inspecting proxy can pass an .npmrc
+# (registry, auth token, cafile) as a BuildKit secret without baking it in:
+#   docker build --secret id=npmrc,src=$HOME/.npmrc .
+# The mount is empty and harmless when no secret is given.
+
 FROM node:24-slim AS build
 WORKDIR /app
 COPY package.json package-lock.json tsconfig.json tsconfig.build.json ./
 # The optional mssql driver is only needed by index-xref, which never runs here.
-RUN npm ci --omit=optional
+RUN --mount=type=secret,id=npmrc,target=/root/.npmrc \
+    --mount=type=secret,id=cafile,target=/etc/npm-cafile.crt \
+    npm ci --omit=optional
 COPY src ./src
 RUN npm run build
 
@@ -24,7 +31,9 @@ ENV NODE_ENV=production \
     D365_INDEX_ON_START=0
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev --omit=optional && npm cache clean --force
+RUN --mount=type=secret,id=npmrc,target=/root/.npmrc \
+    --mount=type=secret,id=cafile,target=/etc/npm-cafile.crt \
+    npm ci --omit=dev --omit=optional && npm cache clean --force
 COPY --from=build /app/dist ./dist
 # findKnowledgeDir() walks up from dist/src/tools, so the knowledge base must sit next to dist/.
 COPY d365-fno-assistant-knowledge ./d365-fno-assistant-knowledge
