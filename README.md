@@ -10,6 +10,7 @@ A Model Context Protocol (MCP) server that gives AI coding assistants first-clas
 - **Dual MCP transport** — Streamable HTTP (API-key protected) for remote/shared use, and stdio for local clients such as Claude Desktop, Claude Code, or VS Code.
 - **SQLite index** — a local, incrementally updated index of `PackagesLocalDirectory`, so lookups are fast and offline.
 - **CLI** — `setup`, `doctor`, `index`, and `serve` commands for a scripted, one-command onboarding.
+- **Hosted mode** — run the server read-only on Azure App Service. It downloads a published index at start-up (`D365_INDEX_URL`), so developers connect over HTTPS with a personal API key and install nothing locally. See [docs/hosted-deployment.md](docs/hosted-deployment.md).
 
 ## Prerequisites
 
@@ -61,9 +62,12 @@ Configuration comes from environment variables (a `.env` file in the working dir
 | --- | --- | --- |
 | `MCP_TRANSPORT` | `http` | Transport to serve on: `http` or `stdio`. |
 | `MCP_PORT` | `3000` | HTTP listen port (HTTP transport only). |
-| `MCP_API_KEY` | _(required)_ | API key for HTTP authentication. Must be **at least 32 characters**. Still required in stdio mode for config validation. |
-| `D365_PACKAGES_DIR` | _(required)_ | Path to `PackagesLocalDirectory`. |
+| `MCP_HOST` | _(all interfaces)_ | Interface to bind, e.g. `127.0.0.1` to keep a local server off the network. |
+| `MCP_API_KEYS` | _(empty)_ | Named API keys for HTTP authentication: `name=key,name=key` (commas or newlines), each key **at least 32 characters**. Only the name is logged, and a session can only be used with the key that opened it. |
+| `MCP_API_KEY` | _(empty)_ | Single legacy key, reported under the name `default`. The HTTP transport needs at least one key from either variable; stdio needs none. |
+| `D365_PACKAGES_DIR` | _(empty)_ | Path to `PackagesLocalDirectory`. Required by `index`, `doctor` and `D365_INDEX_ON_START=1`; a server that serves a published index does not need it. |
 | `D365_INDEX_DB_PATH` | `./d365_index.db` | Location of the SQLite index file. |
+| `D365_INDEX_URL` | _(empty)_ | Manifest URL of a published index (see [Hosted mode](#hosted-mode-azure-app-service)). When set, `serve` downloads and verifies the index before listening; `D365_INDEX_ON_START=1` and write tools are refused. |
 | `D365_INDEX_ON_START` | `0` | Set to `1` to run a background indexing pass on startup (also enables indexing on start in stdio mode). |
 | `D365_INDEX_STORE_RAW_XML` | `1` | Set to `0` to keep full AOT XML out of `ax_objects.raw_xml` and reduce DB size. `get_element_xml` then reads the source XML from `file_path` on demand, so source files must remain available. |
 | `D365_ENABLE_WRITE_TOOLS` | `0` | Set to `1` to register metadata preview/apply tools. Model writes also require `D365_WRITABLE_MODELS`. |
@@ -98,7 +102,19 @@ Commands:
       --allow-empty        Intentionally replace usage data with an empty snapshot
       --allow-source-locks Allow serializable source reads if snapshot isolation is off
       --store-raw          Retain original SQL rows (off by default)
-  doctor                    Validate environment and report issues (exit 1 on failure)
+  doctor [--hosted]         Validate environment and report issues (exit 1 on failure)
+                            --hosted checks a published-index deployment (implied by D365_INDEX_URL)
+  pull-index                Download the published index instead of building one
+      --url <manifest-url>  Manifest URL (default D365_INDEX_URL), e.g. .../indexes/latest/manifest.json?<sas>
+      --db-path <path>      Destination SQLite path (default D365_INDEX_DB_PATH or ./d365_index.db)
+      --force               Re-download even when the local copy already matches
+  publish-index             Package the index for the hosted server: <out>/<version>/ + <out>/latest/manifest.json
+      --db-path <path>      Source SQLite index (default D365_INDEX_DB_PATH or ./d365_index.db)
+      --out <dir>           Output directory (default ./publish)
+      --db-url-prefix <url> Absolute URL prefix for the database blob (default: relative ../<version>/)
+      --allow-no-raw-xml    Publish even if raw XML was not stored (get_element_xml then fails on the host)
+      --integrity-check     Run PRAGMA integrity_check instead of quick_check (slow on large indexes)
+      --relative-paths      Rewrite indexed file paths relative to D365_PACKAGES_DIR in the published copy
   digest --file <path>      Validate a draft knowledge base article and add it if it passes
       --slug <slug>          Filename slug override (kebab-case, no number prefix)
       --dry-run              Validate only, do not write the file
@@ -222,11 +238,31 @@ Microsoft setup references:
 - [Create and build Finance Operations projects](https://learn.microsoft.com/training/modules/customize-visual-studio-finance-operations/2-projects)
 - [Manage metadata with Application Explorer](https://learn.microsoft.com/training/modules/customize-visual-studio-finance-operations/3-metadata)
 
+## Hosted mode (Azure App Service)
+
+Instead of every developer indexing locally, one scheduled job builds the index and the server
+runs on Azure, read-only, with no `PackagesLocalDirectory` of its own:
+
+1. On a machine that has `PackagesLocalDirectory`, `scripts/publish-index.ps1` runs `index`,
+   `index-xref` (against a `DynamicsXrefDB` copy in Azure SQL) and `publish-index`, uploads the
+   result to Blob Storage and restarts the web app.
+2. The web app starts with `D365_INDEX_URL` pointing at `.../indexes/latest/manifest.json?<sas>`.
+   `serve` fetches the manifest, streams the gzip database through a SHA-256 check into local disk,
+   verifies it, and only then listens. A stale local copy is served when the download fails.
+3. Developers add the HTTPS endpoint and their `X-API-Key` to Visual Studio 2022/2026, Claude Code
+   or VS Code. Nothing is installed locally.
+
+`doctor --hosted` validates such a deployment (manifest reachable, keys configured, write tools off,
+`TRUST_PROXY_HOPS=1` behind the App Service front end). The Bicep template, runbook and client
+configuration live in [`infra/`](infra/README.md) and [`docs/hosted-deployment.md`](docs/hosted-deployment.md);
+`Dockerfile` builds the image. Write tools stay disabled on the host; generators still return code
+and XML for Visual Studio to apply.
+
 ## Transport modes
 
 ### HTTP (default, `MCP_TRANSPORT=http`)
 
-Streamable HTTP endpoint at `http://localhost:3000/mcp`. Every request must present the API key as either `X-API-Key: <key>` or `Authorization: Bearer <key>`.
+Streamable HTTP endpoint at `http://localhost:3000/mcp`. Every request must present one of the configured API keys (`MCP_API_KEYS=alice=<key>,bob=<key>` or the single `MCP_API_KEY`) as either `X-API-Key: <key>` or `Authorization: Bearer <key>`.
 
 ```json
 {
@@ -253,15 +289,16 @@ For local MCP clients such as Claude Desktop, Claude Code, or VS Code. Logs are 
       "args": ["serve"],
       "env": {
         "MCP_TRANSPORT": "stdio",
-        "MCP_API_KEY": "unused-in-stdio-but-required-min-32-characters",
-        "D365_PACKAGES_DIR": "K:/AosService/PackagesLocalDirectory"
+        "D365_PACKAGES_DIR": "K:/AosService/PackagesLocalDirectory",
+        "D365_INDEX_DB_PATH": "C:/d365-mcp/d365_index.db"
       }
     }
   }
 }
 ```
 
-In stdio mode, background indexing is skipped unless `D365_INDEX_ON_START=1`.
+In stdio mode no API key is needed, background indexing is skipped unless `D365_INDEX_ON_START=1`, and
+`D365_INDEX_DB_PATH` should be absolute because the client decides the working directory.
 
 ## Indexing
 
@@ -281,13 +318,19 @@ Index statistics are also available at runtime through the `get_index_stats` too
 ## MCP tools
 
 Metadata:
-`search_symbols`, `get_table_schema`, `get_class_hierarchy`, `get_method_signature`, `find_references`, `find_usages`, `get_usage_snapshot_status`, `get_enum_values`, `get_edt_details`, `get_form_datasources`, `get_element_xml`, `list_objects`, `get_index_stats`, `get_visual_studio_workspace`
+`search_symbols`, `list_objects`, `list_packages`, `list_models`, `get_table_schema`, `get_class_hierarchy`, `get_method_signature`, `get_enum_values`, `get_edt_details`, `get_form_datasources`, `get_query_datasources`, `get_data_entity_details`, `get_element_xml`, `find_references`, `find_usages`, `get_usage_snapshot_status`, `get_index_stats`, `get_index_staleness`, `get_visual_studio_workspace`
 
 Labels:
-`resolve_label`, `search_labels`
+`resolve_label`, `resolve_label_by_language`, `search_labels`, `search_labels_fts`
 
 X++ generators (grounded against the index):
 `create_coc_extension`, `create_table_extension`, `create_class_extension`, `generate_xpp_class`, `create_runbase_batch`, `create_sys_operation`
+
+Write tools (only with `D365_ENABLE_WRITE_TOOLS=1`):
+`write_table_extension`, `apply_table_extension_change`, `digest_knowledge`
+
+Resources and prompts:
+`d365kb://{slug}` knowledge base topics, and the `d365_pattern_assistant` prompt.
 
 ## Optional compiler cross-reference usage data
 
@@ -344,32 +387,38 @@ separate structural/declared relationship query and should not be interpreted as
 
 ## Development
 
-```
-
-Build before running the full suite: compiled-server integration tests launch `dist/src/index.js`
-and use real SDK clients over stdio and HTTP. They cover tool discovery, resources/prompts, disabled
-writes, and startup indexing flags. `.worktrees` are excluded from discovery. CI runs Node 24 on
-Linux and Windows; these checks do not substitute for a live Finance Operations compiler test.
-
-An opt-in SQL contract test executes only read queries against a populated development xref
-database. Set `D365_RUN_SQL_INTEGRATION=1` and `D365_XREF_CONNECTION_STRING`, then run
-`npx vitest run tests/xrefSql.live.test.ts`. If source locks are acceptable, additionally set
-`D365_TEST_ALLOW_SOURCE_LOCKS=1`. Without opt-in this test is reported as skipped, not live-validated.bash
+```bash
 npm install
 npm run typecheck   # tsc --noEmit
 npm run lint        # eslint src/ tests/
 npm run build       # emits to dist/
 npm test            # vitest run
 npm run dev         # tsx watch src/index.ts
+docker build -t d365-fno-mcp-server:local .   # hosted image (needs Docker with BuildKit)
 ```
+
+Build before running the full suite: compiled-server integration tests launch `dist/src/index.js`
+and use real SDK clients over stdio and HTTP. They cover tool discovery, resources/prompts, disabled
+writes, startup indexing flags, and hosted mode (a published index served from a local HTTP fixture
+with named API keys). `.worktrees` are excluded from discovery. CI runs Node 24 on Linux and Windows
+and builds and smoke-tests the container image; these checks do not substitute for a live Finance
+Operations compiler test.
+
+An opt-in SQL contract test executes only read queries against a populated development xref
+database. Set `D365_RUN_SQL_INTEGRATION=1` and `D365_XREF_CONNECTION_STRING`, then run
+`npx vitest run tests/xrefSql.live.test.ts`. If source locks are acceptable, additionally set
+`D365_TEST_ALLOW_SOURCE_LOCKS=1`. Without opt-in this test is reported as skipped, not live-validated.
+
+`mssql` is an optional dependency: only `index-xref` loads it, so the container image and
+`npm install --omit=optional` leave it out.
 
 ## Security notes
 
-- **API key** — `MCP_API_KEY` must be at least 32 characters; generate one with `openssl rand -hex 32`. It is compared on every HTTP request; the `/health` endpoint is the only unauthenticated route.
+- **API keys** — every key must be at least 32 characters; generate one per person with `openssl rand -hex 32` and list them in `MCP_API_KEYS`. Each request is checked against every key in constant time, only the key's name is logged, and a session is bound to the key that opened it. The `/health` endpoint is the only unauthenticated route.
 - **Rate limiting** — requests are limited per client IP (`RATE_LIMIT_MAX_REQUESTS` per `RATE_LIMIT_WINDOW_MS`). Limiting is deliberately keyed on IP only, so rotating credentials cannot bypass the limit.
 - **Trust proxy** — `TRUST_PROXY_HOPS` defaults to `0`, meaning `X-Forwarded-For` is ignored and the socket address is used. Only raise it when the server genuinely sits behind that many trusted proxies; otherwise clients can spoof their IP and evade rate limiting.
 - **Session limits** — `MAX_CONCURRENT_SESSIONS` and `SESSION_IDLE_TIMEOUT_MS` bound memory use and clean up abandoned sessions.
-- **Exposure** — the server grants read access to your source metadata and should not be exposed to untrusted networks. Prefer binding to localhost or fronting it with TLS.
+- **Exposure** — the server grants read access to your source metadata and should not be exposed to untrusted networks. It binds every interface unless `MCP_HOST` says otherwise; set `MCP_HOST=127.0.0.1` for a local server, and front a shared one with TLS (App Service terminates HTTPS in hosted mode).
 
 ## License
 

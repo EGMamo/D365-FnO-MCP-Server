@@ -81,4 +81,29 @@ describe('get_index_staleness', () => {
     const stale = await json('get_index_staleness', { limit: 2 });
     expect(stale.length).toBe(2);
   });
+
+  it('reports the snapshot provenance instead of scanning files on a hosted server', async () => {
+    const published = {
+      manifestUrl: 'https://acct.blob.core.windows.net/indexes/latest/manifest.json',
+      syncedAt: '2026-09-26T01:00:00.000Z',
+      builtAt: '2026-09-25T20:00:00.000Z',
+      version: '20260925T200000Z-abcdef01',
+    };
+    const hosted = collectMetadataTools(db, { published });
+    const handler = hosted.get('get_index_staleness');
+    if (!handler) throw new Error('get_index_staleness not registered');
+    const report = JSON.parse((await handler({ limit: 100 })).content[0].text);
+    expect(report).toMatchObject({ mode: 'published', ...published });
+    expect(JSON.stringify(report)).not.toContain('missing');
+  });
+});
+
+describe('get_index_stats', () => {
+  it('reports counts and null provenance for a seeded database', async () => {
+    const stats = await json('get_index_stats');
+    expect(stats.totalObjects).toBe(5);
+    expect(stats.builtAt).toBeNull();
+    expect(stats.lastIndexed).toBeNull();
+    expect(stats.usageSnapshot).toEqual({ status: 'not-imported', importedAt: null, rowCount: null });
+  });
 });

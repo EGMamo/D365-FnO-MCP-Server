@@ -1,0 +1,85 @@
+name: Deploy
+
+# Builds the server image, pushes it to Azure Container Registry, points the
+# App Service web app at it and waits for the server to come up. Signs in to
+# Azure with OpenID Connect; see infra/README.md for the one-time setup.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: Image tag to build and deploy (defaults to the commit SHA)
+        required: false
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  IMAGE_NAME: d365-fno-mcp-server
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Resolve image tag
+        id: tag
+        run: echo "tag=${{ github.event.inputs.image_tag || github.sha }}" >> "$GITHUB_OUTPUT"
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign in to the container registry
+        id: acr
+        run: |
+          az acr login --name "${{ vars.ACR_NAME }}"
+          echo "server=$(az acr show --name "${{ vars.ACR_NAME }}" --query loginServer -o tsv)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and push the image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ steps.acr.outputs.server }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}
+            ${{ steps.acr.outputs.server }}/${{ env.IMAGE_NAME }}:latest
+
+      - name: Point the web app at the new image
+        run: |
+          az webapp config container set \
+            --resource-group "${{ vars.RESOURCE_GROUP }}" --name "${{ vars.WEBAPP_NAME }}" \
+            --container-image-name "${{ steps.acr.outputs.server }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}"
+          az webapp restart --resource-group "${{ vars.RESOURCE_GROUP }}" --name "${{ vars.WEBAPP_NAME }}"
+
+      - name: Wait for the server (it downloads the index before listening)
+        run: |
+          URL="https://${{ vars.WEBAPP_NAME }}.azurewebsites.net"
+          for _ in $(seq 1 150); do
+            if curl -fsS "$URL/health" >/dev/null 2>&1; then
+              curl -fsS "$URL/health"; echo
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "The server did not become healthy within 25 minutes." >&2
+          exit 1
+
+      - name: Smoke test with the CI key
+        run: |
+          URL="https://${{ vars.WEBAPP_NAME }}.azurewebsites.net"
+          curl -fsS -X POST "$URL/mcp" \
+            -H "X-API-Key: ${{ secrets.MCP_SMOKE_API_KEY }}" \
+            -H 'Content-Type: application/json' \
+            -H 'Accept: application/json, text/event-stream' \
+            -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"deploy-smoke","version":"0"}}}' \
+            | grep -q '"serverInfo"'

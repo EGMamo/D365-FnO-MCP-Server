@@ -5,6 +5,8 @@ import { discoverVisualStudioWorkspace, selectVisualStudioProject } from '../wor
 import { resolveModelTarget } from '../workspace/models.js';
 import { metadataProvenance, workspaceCapabilities } from '../workspace/capabilities.js';
 import { canonicalRoot, contained, errorMessage } from '../workspace/safety.js';
+import { describeApiKeys, parseApiKeys } from '../server/apiKeys.js';
+import { fetchManifest, redactUrl } from '../indexer/remoteIndex.js';
 
 export interface CheckResult {
   name: string;
@@ -128,15 +130,81 @@ function checkDb(dbPath: string): CheckResult[] {
   return results;
 }
 
-async function checkDbOpen(dbPath: string): Promise<CheckResult> {
+async function checkDbOpen(dbPath: string, hosted: boolean): Promise<CheckResult[]> {
+  let objects = 0;
   try {
     const { openDb } = await import('../indexer/db.js');
     const db = openDb(dbPath);
-    db.close();
-    return { name: 'db-open', status: 'pass', message: `Opened SQLite DB at ${dbPath}` };
+    try {
+      objects = Number((db.prepare('SELECT COUNT(*) AS n FROM ax_objects').get() as { n: number | bigint }).n);
+    } finally {
+      db.close();
+    }
   } catch (err) {
-    return { name: 'db-open', status: 'fail', message: `Cannot open SQLite DB: ${String(err)}` };
+    return [{ name: 'db-open', status: 'fail', message: `Cannot open SQLite DB: ${String(err)}` }];
   }
+  return [
+    { name: 'db-open', status: 'pass', message: `Opened SQLite DB at ${dbPath}` },
+    objects > 0
+      ? { name: 'db-objects', status: 'pass', message: `${objects} objects indexed` }
+      : {
+          name: 'db-objects',
+          status: 'warn',
+          message: hosted
+            ? 'No objects indexed yet; `serve` downloads the published index on start, or run `pull-index`.'
+            : 'No objects indexed yet; run `d365-fno-mcp-server index`.',
+        },
+  ];
+}
+
+/** Hosted profile: the published index manifest must be reachable and well-formed. */
+async function checkIndexUrl(url: string | undefined): Promise<CheckResult> {
+  if (!url) {
+    return {
+      name: 'index-url',
+      status: 'fail',
+      message: 'D365_INDEX_URL is not set. Point it at the published index manifest (.../indexes/latest/manifest.json?<sas>).',
+    };
+  }
+  if (!/^https?:\/\//i.test(url)) {
+    return { name: 'index-url', status: 'fail', message: `D365_INDEX_URL must be an http(s) URL (got ${redactUrl(url)}).` };
+  }
+  try {
+    const manifest = await fetchManifest(url, { timeoutMs: 30_000 });
+    const megabytes = (manifest.db.bytes / (1024 * 1024)).toFixed(1);
+    return {
+      name: 'index-url',
+      status: 'pass',
+      message: `Manifest OK at ${redactUrl(url)}: version ${manifest.version}, built ${manifest.builtAt}, ${manifest.stats.objects} objects, ${megabytes} MB gzip.`,
+    };
+  } catch (err) {
+    return {
+      name: 'index-url',
+      status: 'fail',
+      message: `Cannot read the index manifest at ${redactUrl(url)}: ${errorMessage(err)}`,
+    };
+  }
+}
+
+function checkTrustProxy(env: NodeJS.ProcessEnv): CheckResult {
+  const hops = Number(env.TRUST_PROXY_HOPS ?? '0');
+  return hops > 0
+    ? { name: 'trust-proxy', status: 'pass', message: `TRUST_PROXY_HOPS=${hops}` }
+    : {
+        name: 'trust-proxy',
+        status: 'warn',
+        message: 'TRUST_PROXY_HOPS is 0. Behind Azure App Service (or any reverse proxy) set TRUST_PROXY_HOPS=1 so rate limiting keys on the real client IP.',
+      };
+}
+
+function checkWriteToolsDisabled(env: NodeJS.ProcessEnv): CheckResult {
+  return env.D365_ENABLE_WRITE_TOOLS === '1'
+    ? {
+        name: 'write-tools',
+        status: 'fail',
+        message: 'D365_ENABLE_WRITE_TOOLS=1 cannot be combined with a published index; the host has no Visual Studio workspace to write to.',
+      }
+    : { name: 'write-tools', status: 'pass', message: 'Write tools disabled' };
 }
 
 export function checkVisualStudioIntegration(env: NodeJS.ProcessEnv): CheckResult[] {
@@ -214,44 +282,75 @@ export function checkVisualStudioIntegration(env: NodeJS.ProcessEnv): CheckResul
   return results;
 }
 
-function checkApiKey(apiKey: string | undefined): CheckResult {
-  if (!apiKey) {
+/**
+ * API keys are a warning for a local setup (stdio needs none) but a failure
+ * for a hosted deployment, which only serves HTTP.
+ */
+function checkApiKeys(env: NodeJS.ProcessEnv, hosted: boolean): CheckResult {
+  const parsed = parseApiKeys(env.MCP_API_KEYS, env.MCP_API_KEY);
+  const severity = hosted ? 'fail' : 'warn';
+  if (parsed.errors.length > 0) {
+    return { name: 'api-keys', status: severity, message: parsed.errors.join(' ') };
+  }
+  if (parsed.keys.length === 0) {
     return {
-      name: 'api-key',
-      status: 'warn',
-      message: 'MCP_API_KEY is not set. Required for the HTTP transport.',
+      name: 'api-keys',
+      status: severity,
+      message: 'No API key configured (MCP_API_KEYS or MCP_API_KEY). Required for the HTTP transport.',
     };
   }
-  if (apiKey.length < 32) {
-    return {
-      name: 'api-key',
-      status: 'warn',
-      message: `MCP_API_KEY is only ${apiKey.length} characters; at least 32 are required for the HTTP transport.`,
-    };
-  }
-  return { name: 'api-key', status: 'pass', message: 'MCP_API_KEY is set' };
+  return {
+    name: 'api-keys',
+    status: 'pass',
+    message: `${parsed.keys.length} API key(s) configured: ${describeApiKeys(parsed.keys)}`,
+  };
 }
 
-export async function runChecks(env: NodeJS.ProcessEnv = process.env): Promise<CheckResult[]> {
+export interface DoctorOptions {
+  /** Check a published-index deployment; implied when D365_INDEX_URL is set. */
+  hosted?: boolean;
+}
+
+export async function runChecks(
+  env: NodeJS.ProcessEnv = process.env,
+  options: DoctorOptions = {}
+): Promise<CheckResult[]> {
+  const hosted = options.hosted === true || Boolean(env.D365_INDEX_URL);
   const dbPath = env.D365_INDEX_DB_PATH ?? './d365_index.db';
   const results: CheckResult[] = [checkNode()];
 
-  results.push(...(await checkPackagesDir(env.D365_PACKAGES_DIR)));
+  if (hosted) {
+    results.push({
+      name: 'packages-dir',
+      status: 'pass',
+      message: 'Not required: this server serves a published index (D365_INDEX_URL).',
+    });
+    results.push(await checkIndexUrl(env.D365_INDEX_URL));
+  } else {
+    results.push(...(await checkPackagesDir(env.D365_PACKAGES_DIR)));
+  }
 
   const dbDirResults = checkDb(dbPath);
   results.push(...dbDirResults);
   if (dbDirResults.every((r) => r.status === 'pass')) {
-    results.push(await checkDbOpen(dbPath));
+    results.push(...(await checkDbOpen(dbPath, hosted)));
   }
 
-  results.push(checkApiKey(env.MCP_API_KEY));
+  results.push(checkApiKeys(env, hosted));
+  if (hosted) {
+    results.push(checkTrustProxy(env));
+    results.push(checkWriteToolsDisabled(env));
+  }
   results.push(...checkVisualStudioIntegration(env));
   return results;
 }
 
 /** Runs all environment checks, prints a report, and returns the process exit code. */
-export async function doctorCommand(env: NodeJS.ProcessEnv = process.env): Promise<number> {
-  const results = await runChecks(env);
+export async function doctorCommand(
+  env: NodeJS.ProcessEnv = process.env,
+  options: DoctorOptions = {}
+): Promise<number> {
+  const results = await runChecks(env, options);
   const icon = { pass: 'PASS', warn: 'WARN', fail: 'FAIL' } as const;
 
   console.log('D365 FnO MCP Server — environment check\n');

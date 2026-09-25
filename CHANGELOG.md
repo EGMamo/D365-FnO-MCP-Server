@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Hosted mode: `D365_INDEX_URL` makes `serve` download a published index (manifest + gzip SQLite,
+  SHA-256 verified) into local disk before listening, so the server runs read-only on Azure App
+  Service without a `PackagesLocalDirectory`.
+- `MCP_API_KEYS`: named API keys (`name=key,...`) alongside the legacy `MCP_API_KEY`; requests log
+  the key name only and a session is bound to the key that opened it.
+- `publish-index` (compact `VACUUM INTO` copy, gzip, versioned and `latest` manifests, optional
+  `--relative-paths`), `pull-index`, and `doctor --hosted`.
+- `ax_meta` build metadata (`built_at`, server version, raw-XML setting); `get_index_stats` reports
+  it and `get_index_staleness` reports `mode: "published"` on a hosted server.
+- `MCP_HOST` to bind a single interface; graceful shutdown that closes sessions before exit.
+- `Dockerfile`, `.dockerignore`, `scripts/publish-index.ps1`, Bicep infrastructure with a runbook
+  (`infra/`), a `deploy.yml` workflow (OIDC → ACR → App Service), a CI job that builds and
+  smoke-tests the image, and `docs/hosted-deployment.md` with Visual Studio / Claude Code / VS Code
+  client configuration.
+
+### Changed
+
+- `D365_PACKAGES_DIR` is required only for indexing; `MCP_API_KEY` is no longer required for stdio.
+- `getIndexStats().lastIndexed` now reports the recorded build time instead of the call time.
+- `mssql` moved to `optionalDependencies`; the container image and `--omit=optional` installs leave
+  it out and `index-xref` explains how to install it.
+- Configuration parsing is a pure `loadConfig()` (`src/configLoader.ts`) with tests.
+
 - Initial project scaffold: strict TypeScript configuration, ESLint flat config, and build pipeline.
 - AOT metadata parsers and indexer covering tables, classes, enums, EDTs, forms, and labels, with all object types wired into the indexer.
 - SQLite index with incremental passes (path + mtime based), `--force` full rebuild, stale-entry pruning, rename detection, and duplicate-name collision reporting.

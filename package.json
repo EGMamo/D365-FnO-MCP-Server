@@ -29,6 +29,9 @@
     "serve": "node dist/src/index.js serve",
     "doctor": "node dist/src/index.js doctor",
     "index": "node dist/src/index.js index",
+    "index-xref": "node dist/src/index.js index-xref",
+    "pull-index": "node dist/src/index.js pull-index",
+    "publish-index": "node dist/src/index.js publish-index",
     "digest": "node dist/src/index.js digest",
     "lint": "eslint src/ tests/",
     "test": "vitest run",
@@ -41,8 +44,10 @@
     "express-rate-limit": "^8.7.0",
     "fast-xml-parser": "^4.5.1",
     "glob": "^11.0.0",
-    "mssql": "^11.0.2",
     "zod": "^3.23.8"
+  },
+  "optionalDependencies": {
+    "mssql": "^11.0.2"
   },
   "devDependencies": {
     "@types/express": "^5.0.6",

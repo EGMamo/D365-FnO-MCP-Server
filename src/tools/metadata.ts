@@ -6,7 +6,21 @@ import { getIndexStats } from '../indexer/buildIndex.js';
 import fs from 'fs/promises';
 import { findUsageRefs, getUsageSnapshotStatus } from '../indexer/xrefUsage.js';
 
-export function registerMetadataTools(server: McpServer, db: Database) {
+/** Provenance of a published index served by a hosted (read-only) server. */
+export interface PublishedIndexInfo {
+  /** Manifest URL with any query string (SAS token) removed. */
+  manifestUrl: string;
+  syncedAt: string | null;
+  builtAt: string | null;
+  version: string | null;
+}
+
+export interface MetadataToolOptions {
+  /** Set when the server serves a published index rather than a locally built one. */
+  published?: PublishedIndexInfo;
+}
+
+export function registerMetadataTools(server: McpServer, db: Database, options: MetadataToolOptions = {}) {
   server.tool(
     'get_usage_snapshot_status',
     'Inspect compiler usage import provenance and completeness. Check this before interpreting empty find_usages results as no usages. Static references are not runtime execution counts.',
@@ -261,12 +275,21 @@ export function registerMetadataTools(server: McpServer, db: Database) {
 
   server.tool(
     'get_index_staleness',
-    'List indexed objects whose source file changed on disk or no longer exists (examines up to 1000 rows)',
+    'List indexed objects whose source file changed on disk or no longer exists (examines up to 1000 rows). A server that serves a published index has no source files and reports the snapshot build time instead.',
     {
       limit: z.number().int().min(1).max(100).default(100),
       maxScan: z.number().int().min(1).max(5000).default(1000),
     },
     async ({ limit, maxScan }) => {
+      if (options.published) {
+        const report = {
+          mode: 'published',
+          ...options.published,
+          message:
+            'This server serves a published index snapshot; source files are not present, so per-file staleness cannot be checked. Compare builtAt with your local PackagesLocalDirectory.',
+        };
+        return { content: [{ type: 'text', text: JSON.stringify(report, null, 2) }] };
+      }
       const stale = await dbUtils.getIndexStaleness(db, limit, maxScan);
       return { content: [{ type: 'text', text: JSON.stringify(stale, null, 2) }] };
     }

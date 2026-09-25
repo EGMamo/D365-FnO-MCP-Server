@@ -12,3 +12,6 @@ tests/.tmp-packages-*
 *.icloudbak
 tests/.tmp-cli-*
 tests/.tmp-metadata-*
+publish/
+*.manifest.json
+*.download

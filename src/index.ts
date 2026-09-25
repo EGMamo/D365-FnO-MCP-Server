@@ -1,7 +1,11 @@
 #!/usr/bin/env node
 import { parseArgs, flagString, HELP_TEXT } from './cli/args.js';
+import { VERSION } from './version.js';
 
-const CLI_VERSION = '0.1.0';
+/** Reads a boolean flag given as `--flag` or `--flag=true`. */
+function flagBool(flags: Record<string, string | boolean>, name: string): boolean {
+  return flags[name] === true || flags[name] === 'true';
+}
 
 export interface CliResult {
   code: number;
@@ -17,7 +21,7 @@ export async function run(argv: string[]): Promise<CliResult> {
     return { code: 0 };
   }
   if (flags.version === true || flags.v === true || command === 'version') {
-    console.log(CLI_VERSION);
+    console.log(VERSION);
     return { code: 0 };
   }
 
@@ -47,7 +51,30 @@ export async function run(argv: string[]): Promise<CliResult> {
     }
     case 'doctor': {
       const { doctorCommand } = await import('./cli/doctor.js');
-      return { code: await doctorCommand() };
+      return { code: await doctorCommand(process.env, { hosted: flagBool(flags, 'hosted') }) };
+    }
+    case 'pull-index': {
+      const { pullIndexCommand } = await import('./cli/pull-index-command.js');
+      return {
+        code: await pullIndexCommand({
+          url: flagString(flags, 'url'),
+          dbPath: flagString(flags, 'db-path'),
+          force: flagBool(flags, 'force'),
+        }),
+      };
+    }
+    case 'publish-index': {
+      const { publishIndexCommand } = await import('./cli/publish-index-command.js');
+      return {
+        code: await publishIndexCommand({
+          dbPath: flagString(flags, 'db-path'),
+          out: flagString(flags, 'out'),
+          dbUrlPrefix: flagString(flags, 'db-url-prefix'),
+          allowNoRawXml: flagBool(flags, 'allow-no-raw-xml'),
+          integrityCheck: flagBool(flags, 'integrity-check'),
+          relativePaths: flagBool(flags, 'relative-paths'),
+        }),
+      };
     }
     case 'digest': {
       const { digestCommand } = await import('./cli/digest.js');

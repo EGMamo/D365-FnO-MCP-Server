@@ -5,6 +5,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { createHttpApp } from '../src/server/httpTransport.js';
 
 const API_KEY = 'test-api-key-1234567890-abcdefghijklmnop';
+const SECOND_KEY = 'second-api-key-0987654321-zyxwvutsrqpon';
 
 let server: Server;
 let baseUrl: string;
@@ -16,7 +17,10 @@ function makeApp(
 ) {
   const app = createHttpApp(factory, {
     port: 0,
-    mcpApiKey: API_KEY,
+    apiKeys: [
+      { name: 'test', key: API_KEY },
+      { name: 'second', key: SECOND_KEY },
+    ],
     version: '0.1.0',
     rateLimitMaxRequests: 10_000,
     rateLimitWindowMs: 60_000,
@@ -74,6 +78,32 @@ describe('http transport auth', () => {
     });
     // Passes auth, fails JSON-RPC validation instead of 401.
     expect(res.status).toBe(400);
+  });
+
+  it('accepts every configured key and logs its name, never its value', async () => {
+    const lines: string[] = [];
+    const write = vi.spyOn(process.stderr, 'write').mockImplementation(((chunk: string | Uint8Array) => {
+      lines.push(chunk.toString());
+      return true;
+    }) as typeof process.stderr.write);
+    try {
+      const res = await fetch(`${baseUrl}/mcp`, {
+        method: 'POST',
+        headers: { 'X-API-Key': SECOND_KEY, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1 }),
+      });
+      expect(res.status).toBe(400);
+    } finally {
+      write.mockRestore();
+    }
+    const request = lines.map((line) => JSON.parse(line) as { message: string; apiKey?: string })
+      .find((entry) => entry.message === 'Request');
+    expect(request?.apiKey).toBe('second');
+    expect(lines.join('')).not.toContain(SECOND_KEY);
+  });
+
+  it('refuses to start without any API key', () => {
+    expect(() => makeApp(undefined, { apiKeys: [] })).toThrow(/at least one API key/);
   });
 });
 
@@ -238,6 +268,33 @@ describe('session lifecycle', () => {
 
     expect(res.status).toBe(500);
     expect(sessions.size).toBe(0);
+  });
+
+  it('binds a session to the API key that created it', async () => {
+    const { app } = makeApp();
+    const url = await listen(app);
+
+    const init = await fetch(`${url}/mcp`, { method: 'POST', headers: initHeaders, body: JSON.stringify(initBody) });
+    expect(init.status).toBe(200);
+    await init.text();
+    const sessionId = init.headers.get('mcp-session-id');
+    expect(sessionId).toBeTruthy();
+
+    const listBody = JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
+    const otherKey = await fetch(`${url}/mcp`, {
+      method: 'POST',
+      headers: { ...initHeaders, 'X-API-Key': SECOND_KEY, 'mcp-session-id': sessionId! },
+      body: listBody,
+    });
+    expect(otherKey.status).toBe(403);
+
+    const sameKey = await fetch(`${url}/mcp`, {
+      method: 'POST',
+      headers: { ...initHeaders, 'mcp-session-id': sessionId! },
+      body: listBody,
+    });
+    expect(sameKey.status).toBe(200);
+    await sameKey.text();
   });
 
   it('closes idle sessions via the sweep', async () => {
