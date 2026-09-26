@@ -10,7 +10,9 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { openDb, upsertObject, rebuildFts, setMeta, META_KEYS } from '../src/indexer/db.js';
-import { publishIndex } from '../src/indexer/publishIndex.js';
+import { publishIndex, snapshotIndex } from '../src/indexer/publishIndex.js';
+import { compressFile } from '../src/indexer/compression.js';
+import { IndexUploadClient } from '../src/indexer/uploadClient.js';
 import { descriptorXml, projectXml, treeSnapshot } from './workspaceFixtures.js';
 import { startStaticServer, type StaticServer } from './helpers/indexFixtureServer.js';
 
@@ -68,6 +70,8 @@ afterEach(async () => {
   if (root) fs.rmSync(root, { recursive: true, force: true });
 });
 
+let lastHttpPort = 0;
+
 async function connect(
   transport: 'http' | 'stdio',
   indexOnStart: boolean,
@@ -100,6 +104,7 @@ async function connect(
         }
       });
     });
+    lastHttpPort = port;
     await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`), {
       requestInit: { headers: { 'X-API-Key': apiKey } },
     }));
@@ -245,4 +250,53 @@ describe('compiled MCP server in hosted mode', () => {
     const client = await connect('stdio', false, { ...environment, MCP_API_KEY: '' });
     expect(await search(client, 'AlreadyIndexed')).toHaveLength(1);
   }, 30_000);
+});
+
+describe('compiled MCP server index upload', () => {
+  it('swaps in an uploaded index, closes old sessions, and keeps it across a restart', async () => {
+    environment.D365_INDEX_UPLOAD_KEYS = 'default';
+    const first = await connect('http', false);
+    expect(await search(first, 'AlreadyIndexed')).toHaveLength(1);
+
+    const source = path.join(root, 'upload-source.db');
+    const db = openDb(source);
+    upsertObject(db, {
+      type: 'Class', name: 'UploadedClass', package: 'Package', model: 'Model',
+      file_path: 'Package/Model/AxClass/UploadedClass.xml', raw_xml: '<AxClass/>', file_mtime: 1,
+    });
+    rebuildFts(db);
+    setMeta(db, META_KEYS.builtAt, '2026-09-26T09:00:00.000Z');
+    setMeta(db, META_KEYS.serverVersion, '0.1.0');
+    setMeta(db, META_KEYS.storeRawXml, '1');
+    db.close();
+    const snapshot = snapshotIndex(source, path.join(root, 'upload-snapshot.db'));
+    const packageFile = path.join(root, 'upload.gz');
+    const packed = await compressFile(snapshot.file, packageFile, 'gzip', 'fastest');
+
+    const baseUrl = `http://127.0.0.1:${lastHttpPort}`;
+    const outcome = await new IndexUploadClient(baseUrl, apiKey).upload({
+      serverUrl: baseUrl, apiKey, packageFile, packed, objects: snapshot.stats.objects, chunkSize: 2048, pollIntervalMs: 20,
+    });
+    expect(outcome).toMatchObject({ state: 'completed', checksumMatches: true });
+    expect(await new IndexUploadClient(baseUrl, apiKey).info()).toMatchObject({
+      index: { source: 'upload', objects: 1, uploadedBy: 'default', builtAt: '2026-09-26T09:00:00.000Z' },
+    });
+
+    // The session opened on the old index was closed by the swap.
+    await expect(first.callTool({ name: 'search_symbols', arguments: { query: 'AlreadyIndexed' } })).rejects.toThrow();
+    const second = await connect('http', false);
+    expect(await search(second, 'UploadedClass')).toHaveLength(1);
+    expect(await search(second, 'AlreadyIndexed')).toHaveLength(0);
+    const staleness = JSON.parse(textOf(await second.callTool({ name: 'get_index_staleness', arguments: {} })));
+    expect(staleness).toMatchObject({ mode: 'published', source: 'upload', uploadedBy: 'default' });
+
+    // A restart serves the uploaded index from disk.
+    for (const child of children.splice(0)) {
+      const exited = once(child, 'exit');
+      child.kill('SIGTERM');
+      await exited;
+    }
+    const third = await connect('http', false);
+    expect(await search(third, 'UploadedClass')).toHaveLength(1);
+  }, 60_000);
 });

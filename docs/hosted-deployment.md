@@ -190,7 +190,7 @@ files.
 
 | Task | How |
 | --- | --- |
-| Refresh the index | The scheduled `publish-index.ps1`; or run it by hand |
+| Refresh the index | The scheduled `publish-index.ps1`; or run it by hand; or `upload-index` / the Visual Studio extension |
 | Roll back | Copy an older `<version>/manifest.json` over `latest/manifest.json` (fix `db.url` to `../<version>/…`) and restart the app |
 | Add or revoke a key | New version of the `MCP-API-KEYS` secret, then restart |
 | Rotate the SAS | New SAS, new version of `INDEX-SAS-URL`, restart; put the expiry in a calendar |
@@ -209,12 +209,31 @@ Limits to keep in mind:
 - **Start-up takes as long as the download.** `/health` answers only once the
   index is ready; `WEBSITES_CONTAINER_START_TIME_LIMIT` is set to 30 minutes.
 
+## Uploading an index instead of publishing it
+
+The scheduled publish job is one way to refresh the index. The other is to upload it: a developer
+builds an index on their machine and sends it to the running server over HTTPS, either with the
+`upload-index` command or from Visual Studio with the D365 F&O MCP extension's **Index and Upload**
+window ([visual-studio-extension.md](visual-studio-extension.md)).
+
+- `D365_INDEX_UPLOAD_KEYS` names the API keys allowed to upload; every other key gets HTTP 403.
+- The upload is compressed (gzip, Brotli or none) and sent whole or in parallel chunks. Keep
+  chunking on for App Service: its front end ends requests that take longer than about 230 seconds.
+- Each chunk carries its own SHA-256. Before switching, the server re-hashes the assembled package
+  and the decompressed database and compares both with what the client declared. The client then
+  compares the server's SHA-256 with its own.
+- `D365_INDEX_PUBLISH_URL` (a create+write SAS on the `indexes` container, set through the Bicep
+  `indexPublishSasUrl` parameter) makes the server publish a verified upload in the same layout as
+  `publish-index`. A restart then serves the uploaded version. Without it, the upload lasts until
+  the next restart.
+
+```bash
+export D365_MCP_API_KEY=<a key named in D365_INDEX_UPLOAD_KEYS>
+d365-fno-mcp-server upload-index --server https://<app>.azurewebsites.net --compression brotli --chunk-size 32
+```
+
 ## Applying writes from Visual Studio
 
-The hosted server returns X++ and XML (`create_coc_extension`,
-`create_table_extension`, …) but never writes files. Applying a generated
-element belongs in Visual Studio, where the metadata provider, compiler and
-project system live. A Visual Studio extension that takes the server's output
-and adds it to the open project is the intended next step; until then, paste
-the generated code into the project, or run a local server with the write
-tools enabled against a `pull-index` copy of the same index.
+The hosted server returns X++ and XML (`create_coc_extension`, `create_table_extension`, …) but
+never writes files. Paste the generated code into the project, or run a local server with the
+write tools enabled against a `pull-index` copy of the same index.

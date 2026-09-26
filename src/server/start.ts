@@ -3,9 +3,13 @@ import fsSync from 'fs';
 import path from 'path';
 import { config, VERSION } from '../config.js';
 import { openDb } from '../indexer/db.js';
-import { buildIndex } from '../indexer/buildIndex.js';
-import { readManifestCache, redactUrl, syncIndexFromManifest } from '../indexer/remoteIndex.js';
-import { startHttpServer } from './httpTransport.js';
+import { buildIndex, getIndexStats } from '../indexer/buildIndex.js';
+import { publishToContainer } from '../indexer/blobStore.js';
+import {
+  readManifestCache, redactUrl, syncIndexFromManifest, writeManifestCache, type CachedManifest,
+} from '../indexer/remoteIndex.js';
+import { startHttpServer, type AdminRoutes } from './httpTransport.js';
+import { createIndexAdminRouter, IndexUploadManager } from './indexUpload.js';
 import { startStdioServer } from './stdioTransport.js';
 import { logger } from '../utils/logger.js';
 import { registerMetadataTools, type PublishedIndexInfo } from '../tools/metadata.js';
@@ -31,7 +35,17 @@ async function preparePublishedIndex(): Promise<PublishedIndexInfo> {
       manifestUrl: config.indexUrl,
       dbPath: config.indexDbPath,
       expectedServerVersion: VERSION,
+      keepNewerUpload: true,
     });
+    if (result.status === 'kept-upload') {
+      const cached = readManifestCache(config.indexDbPath);
+      logger.info('Serving an uploaded index that is newer than the published one', {
+        version: cached?.version ?? null,
+        builtAt: cached?.builtAt ?? null,
+        publishedVersion: result.manifest.version,
+      });
+      if (cached) return uploadInfo(cached);
+    }
     logger.info('Published index ready', {
       status: result.status,
       version: result.manifest.version,
@@ -44,7 +58,7 @@ async function preparePublishedIndex(): Promise<PublishedIndexInfo> {
       result.status === 'downloaded'
         ? new Date().toISOString()
         : (readManifestCache(config.indexDbPath)?.downloadedAt ?? new Date().toISOString());
-    return { manifestUrl, syncedAt, builtAt: result.manifest.builtAt, version: result.manifest.version };
+    return { source: 'manifest', manifestUrl, syncedAt, builtAt: result.manifest.builtAt, version: result.manifest.version };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (fsSync.existsSync(config.indexDbPath)) {
@@ -54,7 +68,9 @@ async function preparePublishedIndex(): Promise<PublishedIndexInfo> {
         message,
         version: cached?.version ?? null,
       });
+      if (cached?.source === 'upload') return uploadInfo(cached);
       return {
+        source: 'manifest',
         manifestUrl,
         syncedAt: cached?.downloadedAt ?? null,
         builtAt: cached?.builtAt ?? null,
@@ -64,6 +80,17 @@ async function preparePublishedIndex(): Promise<PublishedIndexInfo> {
     logger.fatal('Published index sync failed and no local index exists', { url: manifestUrl, message });
     process.exit(1);
   }
+}
+
+function uploadInfo(cache: CachedManifest): PublishedIndexInfo {
+  return {
+    source: 'upload',
+    manifestUrl: null,
+    uploadedBy: cache.uploadedBy,
+    syncedAt: cache.downloadedAt,
+    builtAt: cache.builtAt,
+    version: cache.version,
+  };
 }
 
 /** Boots the MCP server on the configured transport. */
@@ -77,11 +104,19 @@ export async function startServer(): Promise<void> {
   if (config.indexDbPath !== ':memory:') {
     fsSync.mkdirSync(path.dirname(path.resolve(config.indexDbPath)), { recursive: true });
   }
-  const published = config.hostedMode ? await preparePublishedIndex() : undefined;
+  let published = config.hostedMode ? await preparePublishedIndex() : undefined;
+  if (!published && config.indexDbPath !== ':memory:') {
+    // A local index that arrived by upload has no source files on this host either.
+    const cached = readManifestCache(config.indexDbPath);
+    if (cached?.source === 'upload' && fsSync.existsSync(config.indexDbPath)) published = uploadInfo(cached);
+  }
 
-  // Open shared SQLite index database
-  const db = openDb(config.indexDbPath);
+  // Open shared SQLite index database. `db` and `published` are replaced when
+  // an uploaded index is activated; sessions created afterwards see the new ones.
+  let db = openDb(config.indexDbPath);
   logger.info('Opened SQLite DB', { path: config.indexDbPath });
+  let backgroundIndexing = false;
+  let closeAllSessions: () => void = () => {};
 
   /**
    * Factory: create a new McpServer instance with all tools registered.
@@ -141,13 +176,87 @@ export async function startServer(): Promise<void> {
       return;
     }
 
+    backgroundIndexing = true;
     buildIndex(db, config.packagesDir, false)
+      .finally(() => {
+        backgroundIndexing = false;
+      })
       .then((stats) => {
         logger.info('Background indexing complete', { ...stats });
       })
       .catch((err: unknown) => {
         logger.error('Background indexing failed', { message: String(err) });
       });
+  }
+
+  /**
+   * Swaps a verified uploaded database in. Synchronous, so no request sees a
+   * closed handle. If the file cannot be moved into place, the previous index
+   * is reopened and the upload fails instead of leaving the server without one.
+   */
+  function activateUpload(incoming: string, cache: CachedManifest): void {
+    closeAllSessions();
+    db.close();
+    try {
+      for (const suffix of ['-wal', '-shm']) fsSync.rmSync(`${config.indexDbPath}${suffix}`, { force: true });
+      fsSync.renameSync(incoming, config.indexDbPath);
+    } catch (err) {
+      db = openDb(config.indexDbPath);
+      throw err;
+    }
+    try {
+      db = openDb(config.indexDbPath);
+    } catch (err) {
+      logger.fatal('The activated index could not be opened', { message: String(err) });
+      process.exit(1);
+    }
+    writeManifestCache(config.indexDbPath, cache);
+    published = uploadInfo(cache);
+  }
+
+  function describeIndex(): Record<string, unknown> {
+    const stats = getIndexStats(db);
+    return {
+      source: published?.source ?? 'local',
+      version: published?.version ?? null,
+      builtAt: stats.builtAt,
+      objects: stats.totalObjects,
+      labels: stats.totalLabels,
+      usageSnapshot: stats.usageSnapshot,
+      serverVersion: stats.serverVersion,
+      uploadedBy: published?.uploadedBy ?? null,
+      activatedAt: published?.syncedAt ?? null,
+    };
+  }
+
+  function createAdminRoutes(): AdminRoutes {
+    const publishUrl = config.indexPublishUrl;
+    const uploads = config.indexUploadKeys.length > 0 && config.indexDbPath !== ':memory:'
+      ? new IndexUploadManager({
+          workDir: config.indexUploadDir || path.join(path.dirname(path.resolve(config.indexDbPath)), '.uploads'),
+          indexDbPath: path.resolve(config.indexDbPath),
+          serverVersion: VERSION,
+          maxBytes: config.indexUploadMaxBytes,
+          maxChunkBytes: config.indexUploadMaxChunkBytes,
+          activate: activateUpload,
+          persist: publishUrl ? (file, manifest) => publishToContainer(publishUrl, file, manifest) : undefined,
+          blockedReason: () => (backgroundIndexing ? 'The server is indexing; try the upload again when it finishes.' : undefined),
+        })
+      : undefined;
+    if (uploads) {
+      logger.info('Index uploads enabled', {
+        keys: config.indexUploadKeys.join(', '),
+        persistent: publishUrl ? redactUrl(publishUrl) : 'no (lost on restart when the index disk is ephemeral)',
+      });
+    }
+    return {
+      router: createIndexAdminRouter({
+        uploads,
+        uploadKeyNames: new Set(config.indexUploadKeys),
+        describeIndex,
+        version: VERSION,
+      }),
+    };
   }
 
   if (config.transport === 'stdio') {
@@ -160,6 +269,7 @@ export async function startServer(): Promise<void> {
     return;
   }
 
+  const admin = createAdminRoutes();
   const http = startHttpServer(createMcpServer, {
     port: config.port,
     host: config.host || undefined,
@@ -171,7 +281,9 @@ export async function startServer(): Promise<void> {
     trustProxyHops: config.trustProxyHops,
     maxConcurrentSessions: config.maxConcurrentSessions,
     sessionIdleTimeoutMs: config.sessionIdleTimeoutMs,
+    admin,
   });
+  closeAllSessions = http.closeAllSessions;
 
   if (config.indexOnStart) startBackgroundIndexing();
 

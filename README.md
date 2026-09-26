@@ -11,6 +11,8 @@ A Model Context Protocol (MCP) server that gives AI coding assistants first-clas
 - **SQLite index** — a local, incrementally updated index of `PackagesLocalDirectory`, so lookups are fast and offline.
 - **CLI** — `setup`, `doctor`, `index`, and `serve` commands for a scripted, one-command onboarding.
 - **Hosted mode** — run the server read-only on Azure App Service. It downloads a published index at start-up (`D365_INDEX_URL`), so developers connect over HTTPS with a personal API key and install nothing locally. See [docs/hosted-deployment.md](docs/hosted-deployment.md).
+- **Index uploads** — `upload-index` sends a freshly built index to a running server, compressed (gzip, Brotli or none) and in parallel chunks, each carrying its own SHA-256. The server checks the whole package and the decompressed database before it switches over (`D365_INDEX_UPLOAD_KEYS`).
+- **Visual Studio extension** — sets up the MCP connection for Copilot in Visual Studio 2022/2026 (`.mcp.json` plus a connection test), and indexes `PackagesLocalDirectory` and the XRef database and uploads the result from inside the IDE. See [docs/visual-studio-extension.md](docs/visual-studio-extension.md).
 
 ## Prerequisites
 
@@ -68,6 +70,11 @@ Configuration comes from environment variables (a `.env` file in the working dir
 | `D365_PACKAGES_DIR` | _(empty)_ | Path to `PackagesLocalDirectory`. Required by `index`, `doctor` and `D365_INDEX_ON_START=1`; a server that serves a published index does not need it. |
 | `D365_INDEX_DB_PATH` | `./d365_index.db` | Location of the SQLite index file. |
 | `D365_INDEX_URL` | _(empty)_ | Manifest URL of a published index (see [Hosted mode](#hosted-mode-azure-app-service)). When set, `serve` downloads and verifies the index before listening; `D365_INDEX_ON_START=1` and write tools are refused. |
+| `D365_INDEX_UPLOAD_KEYS` | _(empty)_ | Comma-separated key names from `MCP_API_KEYS` that may upload a new index to `/admin/index/uploads` (HTTP transport only). Empty disables uploads. See [docs/visual-studio-extension.md](docs/visual-studio-extension.md#server-setup). |
+| `D365_INDEX_UPLOAD_MAX_GB` | `50` | Largest upload package accepted. |
+| `D365_INDEX_UPLOAD_MAX_CHUNK_MB` | `256` | Largest upload chunk accepted. |
+| `D365_INDEX_UPLOAD_DIR` | `<index folder>/.uploads` | Upload scratch folder; must be on the same volume as `D365_INDEX_DB_PATH`. |
+| `D365_INDEX_PUBLISH_URL` | _(empty)_ | Blob container URL with a create+write SAS. Verified uploads are published there (`<version>/` then `latest/manifest.json`) so a restarted hosted server serves them again. |
 | `D365_INDEX_ON_START` | `0` | Set to `1` to run a background indexing pass on startup (also enables indexing on start in stdio mode). |
 | `D365_INDEX_STORE_RAW_XML` | `1` | Set to `0` to keep full AOT XML out of `ax_objects.raw_xml` and reduce DB size. `get_element_xml` then reads the source XML from `file_path` on demand, so source files must remain available. |
 | `D365_ENABLE_WRITE_TOOLS` | `0` | Set to `1` to register metadata preview/apply tools. Model writes also require `D365_WRITABLE_MODELS`. |
@@ -97,6 +104,8 @@ d365-fno-mcp-server <command> [options]
 Commands:
   serve                     Start the MCP server (default command)
   index [--force]           Run a foreground indexing pass
+      --packages-dir <dir>  PackagesLocalDirectory (default D365_PACKAGES_DIR)
+      --db-path <path>      SQLite index path (default D365_INDEX_DB_PATH or ./d365_index.db)
   index-xref               Import a consistent compiler-usage snapshot from SQL Server
       --db-path <path>      SQLite index path (default ./d365_index.db)
       --allow-empty        Intentionally replace usage data with an empty snapshot
@@ -115,6 +124,19 @@ Commands:
       --allow-no-raw-xml    Publish even if raw XML was not stored (get_element_xml then fails on the host)
       --integrity-check     Run PRAGMA integrity_check instead of quick_check (slow on large indexes)
       --relative-paths      Rewrite indexed file paths relative to D365_PACKAGES_DIR in the published copy
+      --compression <c>     gzip (default), brotli or none
+      --level <l>           fastest, balanced (default) or smallest
+  upload-index              Package the local index and upload it to a running server (API key in D365_MCP_API_KEY)
+      --server <url>        Server base URL (default D365_MCP_SERVER_URL)
+      --db-path <path>      Source SQLite index (default D365_INDEX_DB_PATH or ./d365_index.db)
+      --compression <c>     gzip (default), brotli or none
+      --level <l>           fastest, balanced (default) or smallest
+      --chunk-size <MiB>    Chunk size (default 32); each chunk carries its own SHA-256
+      --no-chunks           Send the whole package in a single request
+      --parallel <n>        Chunks in flight at once (default 4)
+      --retries <n>         Retries per chunk (default 4)
+      --relative-paths      Rewrite indexed file paths relative to D365_PACKAGES_DIR in the uploaded copy
+      --progress json       One JSON event per line on stdout
   digest --file <path>      Validate a draft knowledge base article and add it if it passes
       --slug <slug>          Filename slug override (kebab-case, no number prefix)
       --dry-run              Validate only, do not write the file
@@ -257,6 +279,11 @@ runs on Azure, read-only, with no `PackagesLocalDirectory` of its own:
 configuration live in [`infra/`](infra/README.md) and [`docs/hosted-deployment.md`](docs/hosted-deployment.md);
 `Dockerfile` builds the image. Write tools stay disabled on the host; generators still return code
 and XML for Visual Studio to apply.
+
+A hosted server can also take an index directly: with `D365_INDEX_UPLOAD_KEYS` set, `upload-index`
+(or the Visual Studio extension's **Index and Upload** window) sends a new index over HTTPS in
+verified chunks. With `D365_INDEX_PUBLISH_URL` set, the server also publishes it to Blob Storage so
+it survives restarts. See [docs/visual-studio-extension.md](docs/visual-studio-extension.md).
 
 ## Transport modes
 

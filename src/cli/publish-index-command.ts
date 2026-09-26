@@ -1,5 +1,6 @@
 import path from 'path';
 import { publishIndex } from '../indexer/publishIndex.js';
+import { parseCompressionLevel, parseEncoding } from '../indexer/compression.js';
 import { VERSION } from '../version.js';
 
 export interface PublishIndexCommandOptions {
@@ -9,6 +10,8 @@ export interface PublishIndexCommandOptions {
   allowNoRawXml?: boolean;
   integrityCheck?: boolean;
   relativePaths?: boolean;
+  compression?: string;
+  level?: string;
 }
 
 /**
@@ -33,6 +36,8 @@ export async function publishIndexCommand(
 
   console.log(`Publishing ${path.resolve(dbPath)} -> ${path.resolve(out)}`);
   try {
+    const encoding = parseEncoding(options.compression ?? 'gzip');
+    const level = parseCompressionLevel(options.level ?? 'balanced');
     const result = await publishIndex({
       dbPath,
       outDir: out,
@@ -41,6 +46,8 @@ export async function publishIndexCommand(
       allowNoRawXml: options.allowNoRawXml === true,
       integrityCheck: options.integrityCheck === true,
       relativePathsRoot,
+      encoding,
+      level,
     });
     const { manifest } = result;
     console.log('\nPublished:');
@@ -53,7 +60,8 @@ export async function publishIndexCommand(
     console.log(`  usage rows    : ${manifest.stats.usageRows}`);
     console.log(`  xref imported : ${manifest.xref?.importedAt ?? 'none'}`);
     console.log(`  db bytes      : ${manifest.db.rawBytes}`);
-    console.log(`  gzip bytes    : ${manifest.db.bytes}`);
+    console.log(`  encoding      : ${manifest.db.encoding ?? 'gzip'}`);
+    console.log(`  package bytes : ${manifest.db.bytes}`);
     console.log(`  sha256        : ${manifest.db.sha256}`);
     console.log(`\nUpload the '${result.version}' folder first and latest/manifest.json last.`);
     return 0;

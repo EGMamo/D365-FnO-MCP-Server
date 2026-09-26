@@ -6,14 +6,14 @@ import path from 'path';
  * so `index` works without an MCP_API_KEY (which only the HTTP transport needs).
  */
 export async function indexCommand(
-  options: { force: boolean },
+  options: { force: boolean; packagesDir?: string; dbPath?: string },
   env: NodeJS.ProcessEnv = process.env
 ): Promise<number> {
-  const packagesDir = env.D365_PACKAGES_DIR;
-  const dbPath = env.D365_INDEX_DB_PATH ?? './d365_index.db';
+  const packagesDir = options.packagesDir ?? env.D365_PACKAGES_DIR;
+  const dbPath = options.dbPath ?? env.D365_INDEX_DB_PATH ?? './d365_index.db';
 
   if (!packagesDir) {
-    console.error('D365_PACKAGES_DIR is not set. Run `d365-fno-mcp-server setup` first.');
+    console.error('D365_PACKAGES_DIR is not set. Pass --packages-dir or run `d365-fno-mcp-server setup` first.');
     return 1;
   }
   if (!fs.existsSync(packagesDir)) {

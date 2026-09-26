@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Everything that does not need Visual Studio: settings, .mcp.json, connection
+       checks, CLI command lines and progress parsing. Tested on every OS. -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>D365FnoMcp.Core</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="D365FnoMcp.Core.Tests" />
+  </ItemGroup>
+</Project>

@@ -35,7 +35,13 @@ export async function run(argv: string[]): Promise<CliResult> {
     }
     case 'index': {
       const { indexCommand } = await import('./cli/index-command.js');
-      return { code: await indexCommand({ force: flags.force === true || flags.force === 'true' }) };
+      return {
+        code: await indexCommand({
+          force: flags.force === true || flags.force === 'true',
+          packagesDir: flagString(flags, 'packages-dir'),
+          dbPath: flagString(flags, 'db-path'),
+        }),
+      };
     }
     case 'index-xref': {
       const { indexXrefCommand } = await import('./cli/index-xref-command.js');
@@ -73,6 +79,28 @@ export async function run(argv: string[]): Promise<CliResult> {
           allowNoRawXml: flagBool(flags, 'allow-no-raw-xml'),
           integrityCheck: flagBool(flags, 'integrity-check'),
           relativePaths: flagBool(flags, 'relative-paths'),
+          compression: flagString(flags, 'compression'),
+          level: flagString(flags, 'level'),
+        }),
+      };
+    }
+    case 'upload-index': {
+      const { uploadIndexCommand } = await import('./cli/upload-index-command.js');
+      return {
+        code: await uploadIndexCommand({
+          server: flagString(flags, 'server'),
+          dbPath: flagString(flags, 'db-path'),
+          compression: flagString(flags, 'compression'),
+          level: flagString(flags, 'level'),
+          chunkSizeMb: flagString(flags, 'chunk-size'),
+          noChunks: flagBool(flags, 'no-chunks'),
+          parallel: flagString(flags, 'parallel'),
+          retries: flagString(flags, 'retries'),
+          relativePaths: flagBool(flags, 'relative-paths'),
+          allowNoRawXml: flagBool(flags, 'allow-no-raw-xml'),
+          integrityCheck: flagBool(flags, 'integrity-check'),
+          workDir: flagString(flags, 'work-dir'),
+          progress: flagString(flags, 'progress'),
         }),
       };
     }

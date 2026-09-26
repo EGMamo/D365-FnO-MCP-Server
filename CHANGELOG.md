@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Index uploads: `POST/PUT/GET/DELETE /admin/index/uploads` accept a packaged index whole or in
+  chunks (per-chunk SHA-256, resend on mismatch), verify the assembled package, the decompressed
+  database and its object count, then swap it in without a restart (open sessions reconnect).
+  Uploads are enabled per key with `D365_INDEX_UPLOAD_KEYS`; `D365_INDEX_PUBLISH_URL` publishes a
+  verified upload to Blob Storage so restarts keep it. `GET /admin/index` reports the served index
+  and whether the caller may upload.
+- `upload-index` command: snapshot, compress (gzip, Brotli or none; fastest/balanced/smallest),
+  upload in parallel chunks with retries, compare the server's SHA-256, `--progress json` events.
+- Visual Studio 2022/2026 extension (`vs-extension/`): *Configure Connection* writes a `.mcp.json`
+  for Copilot after testing the server and stores the key in Windows Credential Manager; *Test
+  Connection*; *Index and Upload* indexes a chosen `PackagesLocalDirectory`, imports the XRef
+  database and uploads with the chosen compression and chunking. CI builds the `.vsix`.
+- `publish-index --compression/--level`; manifests record `db.encoding` and `db.rawSha256`, and
+  `pull-index`/hosted start-up verify the decompressed database too.
+- `index --packages-dir/--db-path`.
+- `index-xref` signs in with Windows authentication (`Trusted_Connection=yes`) through the optional
+  `msnodesqlv8` driver, which also reaches LocalDB.
+
 - Hosted mode: `D365_INDEX_URL` makes `serve` download a published index (manifest + gzip SQLite,
   SHA-256 verified) into local disk before listening, so the server runs read-only on Azure App
   Service without a `PackagesLocalDirectory`.
@@ -31,6 +49,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `mssql` moved to `optionalDependencies`; the container image and `--omit=optional` installs leave
   it out and `index-xref` explains how to install it.
 - Configuration parsing is a pure `loadConfig()` (`src/configLoader.ts`) with tests.
+- Manifest `db.gzip` is a boolean alongside the new `db.encoding`; older gzip manifests still load.
+
+### Removed
+
+- `docs/vs-addin-plan.md`: the extension that applies generated code was not pursued; the Visual
+  Studio extension now handles connection setup and index uploads instead.
 
 - Initial project scaffold: strict TypeScript configuration, ESLint flat config, and build pipeline.
 - AOT metadata parsers and indexer covering tables, classes, enums, EDTs, forms, and labels, with all object types wired into the indexer.

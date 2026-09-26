@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import express, { type Express, type NextFunction, type Request, type Response } from 'express';
+import express, { type Express, type NextFunction, type Request, type Response, type Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import { createHash, randomUUID, timingSafeEqual } from 'crypto';
 import type { Server } from 'http';
@@ -24,7 +24,25 @@ export interface HttpTransportOptions {
   maxConcurrentSessions?: number;
   sessionIdleTimeoutMs?: number;
   sessionSweepIntervalMs?: number;
+  /** Routes mounted at `/admin` after authentication (index info and uploads). */
+  admin?: AdminRoutes;
 }
+
+export interface AdminRoutes {
+  router: Router;
+  /**
+   * Requests per rate-limit window for `/admin/index/uploads`. Chunked uploads
+   * send many requests, so they have their own, larger budget.
+   */
+  uploadRateLimitMaxRequests?: number;
+  /**
+   * Node's per-request timeout for the listener (0 disables it). A single-request
+   * upload of a large index takes longer than Node's 5-minute default.
+   */
+  requestTimeoutMs?: number;
+}
+
+const UPLOAD_PATH = '/admin/index/uploads';
 
 interface JsonRpcErrorBody {
   jsonrpc: '2.0';
@@ -117,7 +135,7 @@ export function createHttpApp(createMcpServer: ServerFactory, options: HttpTrans
       max: options.rateLimitMaxRequests,
       standardHeaders: true,
       legacyHeaders: false,
-      skip: (req) => req.path === '/health',
+      skip: (req) => req.path === '/health' || (options.admin !== undefined && req.path.startsWith(UPLOAD_PATH)),
       // Key on the client IP alone. The rate limiter runs before authentication,
       // so a client-controlled credential header must not be part of the bucket key;
       // a per-key throttle would belong behind verified auth.
@@ -128,6 +146,25 @@ export function createHttpApp(createMcpServer: ServerFactory, options: HttpTrans
       },
     }),
   );
+
+  if (options.admin) {
+    // Still keyed on the IP and still ahead of authentication, so upload
+    // paths are no way around brute-force throttling; only the budget differs.
+    app.use(
+      UPLOAD_PATH,
+      rateLimit({
+        windowMs: options.rateLimitWindowMs,
+        max: options.admin.uploadRateLimitMaxRequests ?? options.rateLimitMaxRequests * 20,
+        standardHeaders: true,
+        legacyHeaders: false,
+        keyGenerator: (req: Request) => clientIp(req),
+        handler: (req, res) => {
+          logger.warn('Upload rate limit exceeded', { ip: clientIp(req), path: req.path });
+          res.status(429).json({ error: 'Too many upload requests' });
+        },
+      }),
+    );
+  }
 
   // ── Health check (unauthenticated) ────────────────────────────────────────
   app.get('/health', (_req: Request, res: Response) => {
@@ -148,6 +185,11 @@ export function createHttpApp(createMcpServer: ServerFactory, options: HttpTrans
     logger.info('Request', { method: req.method, path: req.path, ip: clientIp(req), apiKey: entry.name });
     next();
   });
+
+  // ── Admin routes (index info, uploads) ────────────────────────────────────
+  // Mounted before the JSON-RPC checks and the MCP response timeout: upload
+  // bodies are raw bytes and a chunk may take longer than a tool call.
+  if (options.admin) app.use('/admin', options.admin.router);
 
   // ── JSON-RPC envelope validation ──────────────────────────────────────────
   app.use((req: Request, res: Response, next: NextFunction) => {
@@ -399,6 +441,8 @@ export function startHttpServer(
   const httpServer = options.host
     ? app.listen(options.port, options.host, onListening)
     : app.listen(options.port, onListening);
+
+  if (options.admin) httpServer.requestTimeout = options.admin.requestTimeoutMs ?? 0;
 
   httpServer.on('close', () => {
     clearInterval(app.locals.sessionSweep as NodeJS.Timeout);

@@ -117,6 +117,26 @@ describe('syncIndexFromManifest', () => {
     expect((await syncIndexFromManifest({ manifestUrl, dbPath })).status).toBe('downloaded');
   });
 
+  it('keeps a local upload built after the published index, and replaces an older one', async () => {
+    const dbPath = path.join(root, 'upload-kept', 'index.db');
+    await syncIndexFromManifest({ manifestUrl, dbPath });
+    const cache = readManifestCache(dbPath)!;
+    const writeCache = (builtAt: string) => fs.writeFileSync(manifestCachePath(dbPath), JSON.stringify({
+      ...cache, builtAt, source: 'upload', uploadedBy: 'alice', db: { ...cache.db, sha256: 'f'.repeat(64) },
+    }));
+
+    writeCache('2099-01-01T00:00:00.000Z');
+    const kept = await syncIndexFromManifest({ manifestUrl, dbPath, keepNewerUpload: true });
+    expect(kept.status).toBe('kept-upload');
+    expect(readManifestCache(dbPath)?.source).toBe('upload');
+    // Without the option the published index always wins.
+    expect((await syncIndexFromManifest({ manifestUrl, dbPath })).status).toBe('downloaded');
+
+    writeCache('2000-01-01T00:00:00.000Z');
+    expect((await syncIndexFromManifest({ manifestUrl, dbPath, keepNewerUpload: true })).status).toBe('downloaded');
+    expect(readManifestCache(dbPath)?.source).toBe('manifest');
+  });
+
   it('rejects a checksum mismatch and leaves the existing index untouched', async () => {
     const dbPath = path.join(root, 'hosted', 'index.db');
     const before = fs.readFileSync(dbPath);

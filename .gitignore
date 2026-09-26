@@ -15,3 +15,7 @@ tests/.tmp-metadata-*
 publish/
 *.manifest.json
 *.download
+vs-extension/**/bin/
+vs-extension/**/obj/
+vs-extension/**/TestResults/
+*.vsix

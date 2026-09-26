@@ -1,12 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
-import { Readable, Transform } from 'node:stream';
+import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import type { ReadableStream as WebReadableStream } from 'node:stream/web';
-import { createGunzip } from 'node:zlib';
 import { z } from 'zod';
+import { createDecompressor, HashingTap, INDEX_ENCODINGS, type IndexEncoding } from './compression.js';
 import { logger } from '../utils/logger.js';
 
 /**
@@ -36,7 +35,14 @@ export const manifestSchema = z.object({
     sha256: z.string().regex(/^[0-9a-f]{64}$/),
     bytes: z.number().int().nonnegative(),
     rawBytes: z.number().int().nonnegative(),
-    gzip: z.literal(true),
+    /** SHA-256 of the database itself; absent in manifests written before it was recorded. */
+    rawSha256: z.string().regex(/^[0-9a-f]{64}$/).optional(),
+    /** True for gzip. Kept so older readers still recognise gzip manifests. */
+    gzip: z.boolean(),
+    /** Transfer encoding; absent in older manifests, which were always gzip. */
+    encoding: z.enum(INDEX_ENCODINGS).optional(),
+  }).refine((db) => db.encoding === undefined ? db.gzip : db.gzip === (db.encoding === 'gzip'), {
+    message: 'gzip and encoding disagree',
   }),
   stats: z.object({
     objects: z.number().int().nonnegative(),
@@ -47,6 +53,11 @@ export const manifestSchema = z.object({
 });
 
 export type IndexManifest = z.infer<typeof manifestSchema>;
+
+/** Transfer encoding of a manifest's database blob. */
+export function manifestEncoding(db: IndexManifest['db']): IndexEncoding {
+  return db.encoding ?? (db.gzip ? 'gzip' : 'identity');
+}
 
 export type RemoteIndexErrorCode = 'manifest' | 'invalid' | 'download' | 'checksum';
 
@@ -87,7 +98,13 @@ export function manifestCachePath(dbPath: string): string {
   return `${dbPath}.manifest.json`;
 }
 
-const cachedManifestSchema = manifestSchema.extend({ downloadedAt: z.string() });
+const cachedManifestSchema = manifestSchema.extend({
+  downloadedAt: z.string(),
+  /** How the index arrived: pulled from a manifest URL (default) or uploaded to the server. */
+  source: z.enum(['manifest', 'upload']).optional(),
+  /** Name of the API key that uploaded the index. */
+  uploadedBy: z.string().optional(),
+});
 export type CachedManifest = z.infer<typeof cachedManifestSchema>;
 
 /** The manifest of the index currently on disk, or null when none was recorded. */
@@ -98,6 +115,10 @@ export function readManifestCache(dbPath: string): CachedManifest | null {
   } catch {
     return null;
   }
+}
+
+export function writeManifestCache(dbPath: string, cache: CachedManifest): void {
+  fs.writeFileSync(manifestCachePath(dbPath), JSON.stringify(cache, null, 2));
 }
 
 export interface FetchManifestOptions {
@@ -147,12 +168,18 @@ export interface SyncOptions extends FetchManifestOptions {
   force?: boolean;
   /** Warn when the index was built by another server version. */
   expectedServerVersion?: string;
+  /**
+   * Keep a local index that was uploaded to this server when it was built
+   * after the published one, instead of replacing it with an older snapshot.
+   */
+  keepNewerUpload?: boolean;
   /** Override the deadline for downloading the database payload. */
   downloadTimeoutMs?: number;
 }
 
 export interface SyncResult {
-  status: 'downloaded' | 'up-to-date';
+  /** `kept-upload`: the local copy is an upload newer than the published index. */
+  status: 'downloaded' | 'up-to-date' | 'kept-upload';
   manifest: IndexManifest;
   /** Compressed bytes transferred (0 when up to date). */
   bytes: number;
@@ -179,6 +206,12 @@ export async function syncIndexFromManifest(options: SyncOptions): Promise<SyncR
   if (!options.force && cached && cached.db.sha256 === manifest.db.sha256 && fs.existsSync(dbPath)) {
     return { status: 'up-to-date', manifest, bytes: 0 };
   }
+  if (
+    !options.force && options.keepNewerUpload && cached?.source === 'upload' && fs.existsSync(dbPath) &&
+    Date.parse(cached.builtAt) > Date.parse(manifest.builtAt)
+  ) {
+    return { status: 'kept-upload', manifest: cached, bytes: 0 };
+  }
 
   fs.mkdirSync(path.dirname(path.resolve(dbPath)), { recursive: true });
   const tmp = `${dbPath}.download`;
@@ -199,21 +232,14 @@ export async function syncIndexFromManifest(options: SyncOptions): Promise<SyncR
     throw new RemoteIndexError('download', `Index download failed with HTTP ${response.status}`, response.status);
   }
 
-  const hash = createHash('sha256');
-  let received = 0;
-  const tap = new Transform({
-    transform(chunk: Buffer, _encoding, callback) {
-      hash.update(chunk);
-      received += chunk.length;
-      callback(null, chunk);
-    },
-  });
-
+  const encoded = new HashingTap();
+  const decoded = new HashingTap();
   try {
     await pipeline(
       Readable.fromWeb(response.body as WebReadableStream<Uint8Array>),
-      tap,
-      createGunzip(),
+      encoded,
+      createDecompressor(manifestEncoding(manifest.db)),
+      decoded,
       fs.createWriteStream(tmp)
     );
   } catch (err) {
@@ -221,12 +247,21 @@ export async function syncIndexFromManifest(options: SyncOptions): Promise<SyncR
     throw new RemoteIndexError('download', `Index download failed: ${errorMessage(err)}`);
   }
 
-  const digest = hash.digest('hex');
+  const digest = encoded.digest();
+  const received = encoded.bytes;
   if (digest !== manifest.db.sha256 || received !== manifest.db.bytes) {
     fs.rmSync(tmp, { force: true });
     throw new RemoteIndexError(
       'checksum',
       `Downloaded index does not match the manifest (expected sha256 ${manifest.db.sha256.slice(0, 12)}… / ${manifest.db.bytes} bytes, got ${digest.slice(0, 12)}… / ${received} bytes)`
+    );
+  }
+  const rawDigest = decoded.digest();
+  if (decoded.bytes !== manifest.db.rawBytes || (manifest.db.rawSha256 && rawDigest !== manifest.db.rawSha256)) {
+    fs.rmSync(tmp, { force: true });
+    throw new RemoteIndexError(
+      'checksum',
+      `Decompressed index does not match the manifest (expected ${manifest.db.rawBytes} bytes, got ${decoded.bytes})`
     );
   }
 
@@ -242,8 +277,7 @@ export async function syncIndexFromManifest(options: SyncOptions): Promise<SyncR
   for (const suffix of ['-wal', '-shm']) fs.rmSync(`${dbPath}${suffix}`, { force: true });
   fs.renameSync(tmp, dbPath);
 
-  const cache: CachedManifest = { ...manifest, downloadedAt: new Date().toISOString() };
-  fs.writeFileSync(manifestCachePath(dbPath), JSON.stringify(cache, null, 2));
+  writeManifestCache(dbPath, { ...manifest, downloadedAt: new Date().toISOString(), source: 'manifest' });
 
   return { status: 'downloaded', manifest, bytes: received };
 }
