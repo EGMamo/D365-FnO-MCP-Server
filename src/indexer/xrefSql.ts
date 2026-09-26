@@ -65,10 +65,45 @@ export function xrefPageQuery(table: XrefTableSchema, names?: XrefTableSchema): 
 }
 
 /**
- * `mssql` is an optional dependency: the hosted container and `npx` installs
- * omit it because only `index-xref` needs SQL Server access.
+ * True for connection strings that sign in as the current Windows user
+ * (`Trusted_Connection=yes` or `Integrated Security=SSPI|true`), which the
+ * default tedious driver cannot do.
  */
-async function loadMssql() {
+export function usesWindowsAuthentication(connectionString: string): boolean {
+  return /(?:^|;)\s*(?:trusted_connection\s*=\s*(?:yes|true)|integrated security\s*=\s*(?:sspi|true|yes))\s*(?:;|$)/i
+    .test(connectionString);
+}
+
+export const DEFAULT_ODBC_DRIVER = 'ODBC Driver 17 for SQL Server';
+
+/**
+ * ODBC connection string for the msnodesqlv8 driver: `Integrated Security`
+ * becomes `Trusted_Connection=yes` and a driver is added when none is named.
+ */
+export function toOdbcConnectionString(connectionString: string): string {
+  const parts = connectionString.split(';').map((part) => part.trim()).filter((part) => part.length > 0)
+    .map((part) => (/^integrated security\s*=/i.test(part) ? 'Trusted_Connection=yes' : part));
+  if (!parts.some((part) => /^driver\s*=/i.test(part))) parts.unshift(`Driver={${DEFAULT_ODBC_DRIVER}}`);
+  return `${parts.join(';')};`;
+}
+
+/**
+ * `mssql` is an optional dependency: the hosted container and `npx` installs
+ * omit it because only `index-xref` needs SQL Server access. Windows
+ * authentication additionally needs the native `msnodesqlv8` driver.
+ */
+async function loadMssql(windowsAuthentication: boolean) {
+  if (windowsAuthentication) {
+    try {
+      return await import('mssql/msnodesqlv8.js');
+    } catch (err) {
+      throw new Error(
+        "Windows authentication (Trusted_Connection=yes) needs the optional 'msnodesqlv8' driver and an ODBC driver for SQL Server. " +
+          'Run `npm install msnodesqlv8` where this CLI is installed (add -g for a global install), or use a SQL login instead.',
+        { cause: err }
+      );
+    }
+  }
   try {
     return await import('mssql');
   } catch (err) {
@@ -84,8 +119,11 @@ export async function createMssqlClient(
   connectionString: string,
   options: { allowSourceLocks?: boolean; signal?: AbortSignal } = {}
 ): Promise<XrefSqlClient> {
-  const { default: sql } = await loadMssql();
-  const pool = new sql.ConnectionPool(connectionString);
+  const windowsAuthentication = usesWindowsAuthentication(connectionString);
+  const { default: sql } = await loadMssql(windowsAuthentication);
+  const pool = windowsAuthentication
+    ? new sql.ConnectionPool({ connectionString: toOdbcConnectionString(connectionString) } as unknown as Sql.config)
+    : new sql.ConnectionPool(connectionString);
   let transaction: Sql.Transaction | undefined;
   let active = false;
 

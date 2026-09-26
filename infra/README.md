@@ -11,7 +11,7 @@ What `main.bicep` creates:
 | --- | --- |
 | Storage account with private `indexes` and `bacpac` containers | Published index versions; BACPAC upload for the SQL import |
 | Azure Container Registry (Basic) | Server image |
-| Key Vault (RBAC) with `MCP-API-KEYS` and `INDEX-SAS-URL` | Secrets the web app reads through Key Vault references |
+| Key Vault (RBAC) with `MCP-API-KEYS`, `INDEX-SAS-URL` and optionally `INDEX-PUBLISH-SAS-URL` | Secrets the web app reads through Key Vault references |
 | App Service plan (Linux) + Web App for Containers | The MCP server, one instance, system-assigned identity with `AcrPull` and `Key Vault Secrets User` |
 | Azure SQL logical server + `DynamicsXrefDB` (serverless, auto-pause 60 min) | Source for `index-xref` |
 | Log Analytics (optional) | Container, HTTP and platform logs |
@@ -65,6 +65,22 @@ az webapp config appsettings set -g rg-d365-mcp -n <webAppName> \
 
 Rotation: generate a new SAS, set a new secret version, restart the web app.
 Put the expiry date in a calendar; an expired SAS makes every restart fail.
+
+### Optional: uploads from Visual Studio
+
+To let developers upload a new index (`upload-index` or the Visual Studio extension), name the
+allowed keys and give the web app a write SAS so it can publish verified uploads:
+
+```bash
+WSAS=$(az storage container generate-sas --account-name "$SA" --account-key "$KEY" \
+  --name indexes --permissions rcwl --expiry "$(date -u -d '+1 year' +%Y-%m-%dT%H:%MZ)" -o tsv)
+export INDEX_UPLOAD_KEYS=alice
+export INDEX_PUBLISH_SAS_URL="https://$SA.blob.core.windows.net/indexes?$WSAS"
+az deployment group create -g rg-d365-mcp -f infra/main.bicep -p infra/main.bicepparam
+```
+
+This stores the URL as the `INDEX-PUBLISH-SAS-URL` secret and sets `D365_INDEX_UPLOAD_KEYS` and
+`D365_INDEX_PUBLISH_URL`. Rotate it like the read SAS.
 
 ## 3. Build and deploy the image
 

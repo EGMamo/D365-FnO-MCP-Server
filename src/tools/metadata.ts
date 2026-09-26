@@ -6,10 +6,14 @@ import { getIndexStats } from '../indexer/buildIndex.js';
 import fs from 'fs/promises';
 import { findUsageRefs, getUsageSnapshotStatus } from '../indexer/xrefUsage.js';
 
-/** Provenance of a published index served by a hosted (read-only) server. */
+/** Provenance of a snapshot index (published or uploaded) the server serves without source files. */
 export interface PublishedIndexInfo {
-  /** Manifest URL with any query string (SAS token) removed. */
-  manifestUrl: string;
+  /** `manifest`: pulled from a published manifest; `upload`: uploaded to this server. */
+  source?: 'manifest' | 'upload';
+  /** Manifest URL with any query string (SAS token) removed; null for an upload. */
+  manifestUrl: string | null;
+  /** Name of the API key that uploaded the index. */
+  uploadedBy?: string;
   syncedAt: string | null;
   builtAt: string | null;
   version: string | null;

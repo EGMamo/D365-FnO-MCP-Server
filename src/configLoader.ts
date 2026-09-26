@@ -24,6 +24,16 @@ const configSchema = z.object({
   /** Manifest URL of a published index; enables hosted (read-only) mode. */
   D365_INDEX_URL: z.string().default(''),
   D365_INDEX_ON_START: z.coerce.number().default(0),
+  /** Names (from MCP_API_KEYS) allowed to upload a new index over HTTP; empty disables uploads. */
+  D365_INDEX_UPLOAD_KEYS: z.string().default('').transform((value) =>
+    value.split(',').map((entry) => entry.trim()).filter((entry) => entry.length > 0)
+  ),
+  D365_INDEX_UPLOAD_MAX_GB: z.coerce.number().positive().default(50),
+  D365_INDEX_UPLOAD_MAX_CHUNK_MB: z.coerce.number().int().positive().max(4096).default(256),
+  /** Upload scratch folder; default `<dir of D365_INDEX_DB_PATH>/.uploads` (same volume as the index). */
+  D365_INDEX_UPLOAD_DIR: z.string().default(''),
+  /** Container SAS URL (create + write) where uploaded indexes are published so restarts keep them. */
+  D365_INDEX_PUBLISH_URL: z.string().default(''),
   D365_ENABLE_WRITE_TOOLS: z.coerce.number().default(0),
   D365_PROJECT_DIR: z.string().default(''),
   D365_VISUAL_STUDIO_WORKSPACE_DIR: z.string().default(''),
@@ -56,6 +66,23 @@ const configSchemaWithGuards = configSchema.superRefine((env, ctx) => {
       'MCP_API_KEYS',
       'The HTTP transport requires at least one API key: set MCP_API_KEYS (name=key,name=key; keys >= 32 characters) or MCP_API_KEY'
     );
+  }
+
+  const keyNames = new Set(apiKeys.keys.map((entry) => entry.name));
+  for (const name of env.D365_INDEX_UPLOAD_KEYS) {
+    if (!keyNames.has(name)) {
+      issue('D365_INDEX_UPLOAD_KEYS', `'${name}' is not the name of a key in MCP_API_KEYS`);
+    }
+  }
+  if (env.D365_INDEX_UPLOAD_KEYS.length > 0 && env.MCP_TRANSPORT !== 'http') {
+    issue('D365_INDEX_UPLOAD_KEYS', 'Index uploads need the HTTP transport (MCP_TRANSPORT=http)');
+  }
+  const publishUrl = env.D365_INDEX_PUBLISH_URL.trim();
+  if (publishUrl.length > 0 && !/^https?:\/\/[^?]+\?.+/i.test(publishUrl)) {
+    issue('D365_INDEX_PUBLISH_URL', 'D365_INDEX_PUBLISH_URL must be a blob container URL with a SAS query string');
+  }
+  if (publishUrl.length > 0 && env.D365_INDEX_UPLOAD_KEYS.length === 0) {
+    issue('D365_INDEX_PUBLISH_URL', 'D365_INDEX_PUBLISH_URL only applies to uploads; set D365_INDEX_UPLOAD_KEYS as well');
   }
 
   const indexUrl = env.D365_INDEX_URL.trim();
@@ -126,6 +153,11 @@ function buildConfig(env: ParsedEnv) {
     /** True when the server serves a published index downloaded from `indexUrl`. */
     hostedMode: indexUrl.length > 0,
     indexOnStart: env.D365_INDEX_ON_START === 1,
+    indexUploadKeys: env.D365_INDEX_UPLOAD_KEYS,
+    indexUploadMaxBytes: Math.floor(env.D365_INDEX_UPLOAD_MAX_GB * 1024 ** 3),
+    indexUploadMaxChunkBytes: env.D365_INDEX_UPLOAD_MAX_CHUNK_MB * 1024 ** 2,
+    indexUploadDir: env.D365_INDEX_UPLOAD_DIR.trim(),
+    indexPublishUrl: env.D365_INDEX_PUBLISH_URL.trim(),
     enableWriteTools: env.D365_ENABLE_WRITE_TOOLS === 1,
     projectDir: env.D365_PROJECT_DIR,
     visualStudioWorkspaceDir: env.D365_VISUAL_STUDIO_WORKSPACE_DIR,

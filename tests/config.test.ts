@@ -32,6 +32,31 @@ describe('loadConfig', () => {
     expect(config.apiKeys.map((entry) => entry.name)).toEqual(['alice', 'bob', 'default']);
   });
 
+  it('enables index uploads only for named keys over HTTP', () => {
+    const keys = `alice=${key('a')},bob=${key('b')}`;
+    const config = loadConfig({ MCP_API_KEYS: keys, D365_INDEX_UPLOAD_KEYS: ' alice ,', D365_INDEX_UPLOAD_MAX_CHUNK_MB: '64' });
+    expect(config.indexUploadKeys).toEqual(['alice']);
+    expect(config.indexUploadMaxChunkBytes).toBe(64 * 1024 * 1024);
+    expect(config.indexUploadMaxBytes).toBe(50 * 1024 ** 3);
+    expect(issuesOf({ MCP_API_KEYS: keys, D365_INDEX_UPLOAD_KEYS: 'carol' })).toEqual([
+      expect.stringMatching(/D365_INDEX_UPLOAD_KEYS: 'carol' is not the name of a key/),
+    ]);
+    expect(issuesOf({ MCP_TRANSPORT: 'stdio', MCP_API_KEYS: keys, D365_INDEX_UPLOAD_KEYS: 'alice' })).toEqual([
+      expect.stringMatching(/need the HTTP transport/),
+    ]);
+  });
+
+  it('requires a SAS container URL and uploads for D365_INDEX_PUBLISH_URL', () => {
+    const keys = `alice=${key('a')}`;
+    expect(issuesOf({ MCP_API_KEYS: keys, D365_INDEX_UPLOAD_KEYS: 'alice', D365_INDEX_PUBLISH_URL: 'https://acct.blob.core.windows.net/indexes' }))
+      .toEqual([expect.stringMatching(/SAS query string/)]);
+    expect(issuesOf({ MCP_API_KEYS: keys, D365_INDEX_PUBLISH_URL: 'https://acct.blob.core.windows.net/indexes?sv=1&sig=x' }))
+      .toEqual([expect.stringMatching(/set D365_INDEX_UPLOAD_KEYS as well/)]);
+    expect(loadConfig({
+      MCP_API_KEYS: keys, D365_INDEX_UPLOAD_KEYS: 'alice', D365_INDEX_PUBLISH_URL: 'https://acct.blob.core.windows.net/indexes?sv=1&sig=x',
+    }).indexPublishUrl).toContain('?sv=1');
+  });
+
   it('reports malformed keys in either transport', () => {
     expect(issuesOf({ MCP_TRANSPORT: 'stdio', MCP_API_KEY: 'short' })).toEqual([
       expect.stringMatching(/MCP_API_KEYS: MCP_API_KEY: key for 'default' is 5 characters/),

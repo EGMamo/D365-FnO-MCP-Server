@@ -40,6 +40,13 @@ param mcpApiKeys string
 @description('Manifest URL carrying a read SAS for the indexes container. Leave empty on the first deployment; the app then starts with an empty index until the secret is set and the app restarted.')
 param indexSasUrl string = ''
 
+@description('Names from MCP_API_KEYS (comma-separated) allowed to upload a new index over HTTPS, for example from the Visual Studio extension. Leave empty to disable uploads.')
+param indexUploadKeys string = ''
+
+@secure()
+@description('Container URL of the indexes container with a create+write SAS. Uploaded indexes are published there so a restart serves them again. Leave empty to keep uploads only until the next restart.')
+param indexPublishSasUrl string = ''
+
 @description('Object ID of the user or service principal that runs scripts/publish-index.ps1. Gets Storage Blob Data Contributor and Website Contributor. Leave empty to skip.')
 param publisherPrincipalId string = ''
 
@@ -130,6 +137,12 @@ resource indexUrlSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (!em
   properties: { value: indexSasUrl }
 }
 
+resource indexPublishUrlSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (!empty(indexPublishSasUrl)) {
+  parent: keyVault
+  name: 'INDEX-PUBLISH-SAS-URL'
+  properties: { value: indexPublishSasUrl }
+}
+
 // ── Logging (optional) ───────────────────────────────────────────────────────
 resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2023-09-01' = if (enableLogAnalytics) {
   name: '${namePrefix}-logs'
@@ -175,7 +188,9 @@ var baseAppSettings = {
 
 var appSettings = union(
   baseAppSettings,
-  empty(indexSasUrl) ? {} : { D365_INDEX_URL: '@Microsoft.KeyVault(VaultName=${keyVault.name};SecretName=INDEX-SAS-URL)' }
+  empty(indexSasUrl) ? {} : { D365_INDEX_URL: '@Microsoft.KeyVault(VaultName=${keyVault.name};SecretName=INDEX-SAS-URL)' },
+  empty(indexUploadKeys) ? {} : { D365_INDEX_UPLOAD_KEYS: indexUploadKeys },
+  empty(indexUploadKeys) || empty(indexPublishSasUrl) ? {} : { D365_INDEX_PUBLISH_URL: '@Microsoft.KeyVault(VaultName=${keyVault.name};SecretName=INDEX-PUBLISH-SAS-URL)' }
 )
 
 resource webApp 'Microsoft.Web/sites@2023-12-01' = {

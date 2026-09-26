@@ -63,6 +63,8 @@ export const HELP_TEXT = `d365-fno-mcp-server <command> [options]
 Commands:
   serve                     Start the MCP server (default command)
   index [--force]           Run a foreground indexing pass
+      --packages-dir <dir>  PackagesLocalDirectory to index (default D365_PACKAGES_DIR)
+      --db-path <path>      SQLite index path (default D365_INDEX_DB_PATH or ./d365_index.db)
   index-xref                 Import compiler cross-reference snapshot from SQL Server
       --connection-string    SQL Server connection string (prefer D365_XREF_CONNECTION_STRING)
       --db-path <path>       SQLite index path (default ./d365_index.db)
@@ -82,6 +84,22 @@ Commands:
       --allow-no-raw-xml    Publish even if raw XML was not stored (get_element_xml then fails on the host)
       --integrity-check     Run PRAGMA integrity_check instead of quick_check (slow on large indexes)
       --relative-paths      Rewrite indexed file paths relative to D365_PACKAGES_DIR in the published copy
+      --compression <c>     gzip (default), brotli or none
+      --level <l>           fastest, balanced (default) or smallest
+  upload-index              Package the local index and upload it to a running server (API key in D365_MCP_API_KEY)
+      --server <url>        Server base URL (default D365_MCP_SERVER_URL), e.g. https://<app>.azurewebsites.net
+      --db-path <path>      Source SQLite index (default D365_INDEX_DB_PATH or ./d365_index.db)
+      --compression <c>     gzip (default), brotli or none
+      --level <l>           fastest, balanced (default) or smallest
+      --chunk-size <MiB>    Chunk size in MiB (default 32); each chunk carries its own SHA-256
+      --no-chunks           Send the whole package in a single request
+      --parallel <n>        Chunks in flight at once (default 4)
+      --retries <n>         Retries per chunk (default 4)
+      --relative-paths      Rewrite indexed file paths relative to D365_PACKAGES_DIR in the uploaded copy
+      --allow-no-raw-xml    Upload even if raw XML was not stored
+      --integrity-check     Run PRAGMA integrity_check on the copy instead of quick_check
+      --work-dir <dir>      Where to stage the package (default: the system temp folder)
+      --progress json       One JSON event per line on stdout (used by the Visual Studio extension)
   digest --file <path>      Validate a draft knowledge base article and add it if it passes
       --slug <slug>          Filename slug override (kebab-case, no number prefix)
       --dry-run              Validate only, do not write the file

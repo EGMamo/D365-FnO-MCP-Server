@@ -1,17 +1,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
-import { Transform } from 'node:stream';
-import { pipeline } from 'node:stream/promises';
-import { createGzip } from 'node:zlib';
 import { getMeta, META_KEYS, openDb } from './db.js';
 import { getIndexStats } from './buildIndex.js';
 import { manifestSchema, type IndexManifest } from './remoteIndex.js';
+import { compressFile, ENCODING_SUFFIX, type CompressedFile, type CompressionLevel, type IndexEncoding } from './compression.js';
 
 /**
- * Packages a built index for the hosted server: a compact, gzip-compressed
- * copy of the database plus a manifest that `syncIndexFromManifest` verifies
+ * Packages a built index for the hosted server: a compact, compressed (gzip
+ * by default) copy of the database plus a manifest that `syncIndexFromManifest` verifies
  * against. Output layout (relative to `outDir`):
  *
  *   <version>/d365_index.db.gz
@@ -42,6 +39,9 @@ export interface PublishOptions {
   integrityCheck?: boolean;
   /** Rewrite indexed file paths relative to this packages directory in the copy. */
   relativePathsRoot?: string;
+  /** Transfer encoding of the published database (default gzip). */
+  encoding?: IndexEncoding;
+  level?: CompressionLevel;
   now?: () => Date;
 }
 
@@ -123,20 +123,6 @@ function verifyCopy(dbFile: string, expectedObjects: number, integrityCheck: boo
   }
 }
 
-async function gzipFile(source: string, destination: string): Promise<{ sha256: string; bytes: number }> {
-  const hash = createHash('sha256');
-  let bytes = 0;
-  const tap = new Transform({
-    transform(chunk: Buffer, _encoding, callback) {
-      hash.update(chunk);
-      bytes += chunk.length;
-      callback(null, chunk);
-    },
-  });
-  await pipeline(fs.createReadStream(source), createGzip({ level: 6 }), tap, fs.createWriteStream(destination));
-  return { sha256: hash.digest('hex'), bytes };
-}
-
 export async function publishIndex(options: PublishOptions): Promise<PublishResult> {
   const now = options.now ?? (() => new Date());
   const dbPath = path.resolve(options.dbPath);
@@ -155,20 +141,35 @@ export async function publishIndex(options: PublishOptions): Promise<PublishResu
   }
 }
 
-async function publishInto(
-  dbPath: string,
-  outDir: string,
-  staging: string,
-  options: PublishOptions,
-  now: () => Date
-): Promise<PublishResult> {
-  const stagedDb = path.join(staging, 'd365_index.db');
+/** A compact, verified single-file copy of an index plus the facts a manifest records. */
+export interface IndexSnapshot {
+  file: string;
+  builtAt: string;
+  serverVersion: string | null;
+  stats: { objects: number; labels: number; usageRows: number };
+  /** When the compiler usage snapshot was imported, or null when none was. */
+  xrefImportedAt: string | null;
+}
 
+export interface SnapshotOptions {
+  allowNoRawXml?: boolean;
+  integrityCheck?: boolean;
+  relativePathsRoot?: string;
+}
+
+/**
+ * Writes a compact copy of `dbPath` to `destination` (VACUUM INTO), optionally
+ * rewrites indexed paths, and verifies it. The source is only read, so a
+ * server may keep serving it meanwhile.
+ */
+export function snapshotIndex(dbPath: string, destination: string, options: SnapshotOptions = {}): IndexSnapshot {
   let builtAt: string;
+  let serverVersion: string | null;
   let objects: number;
   let labels: number;
   let usageRows: number;
-  let importedAt: string | null;
+  let xrefImportedAt: string | null;
+  fs.rmSync(destination, { force: true });
   const source = openDb(dbPath);
   try {
     const recorded = getMeta(source, META_KEYS.builtAt);
@@ -176,6 +177,7 @@ async function publishInto(
       throw new Error('The index has no build metadata; run `index` (this server version) before publishing.');
     }
     builtAt = recorded;
+    serverVersion = getMeta(source, META_KEYS.serverVersion);
     if (getMeta(source, META_KEYS.storeRawXml) === '0' && !options.allowNoRawXml) {
       throw new Error(
         'The index was built with D365_INDEX_STORE_RAW_XML=0. A hosted server has no source files, so get_element_xml would fail; rebuild with raw XML stored or pass --allow-no-raw-xml.'
@@ -185,51 +187,93 @@ async function publishInto(
     objects = stats.totalObjects;
     labels = stats.totalLabels;
     usageRows = Number((source.prepare('SELECT COUNT(*) AS n FROM ax_usage_refs').get() as { n: number | bigint }).n);
-    importedAt = stats.usageSnapshot.status === 'imported' ? stats.usageSnapshot.importedAt : null;
+    xrefImportedAt = stats.usageSnapshot.status === 'imported' ? stats.usageSnapshot.importedAt : null;
 
     // Fold the WAL into the main file, then write a compact single-file copy.
     source.exec('PRAGMA wal_checkpoint(TRUNCATE)');
-    source.exec(`VACUUM INTO '${escapeSqlString(stagedDb)}'`);
+    source.exec(`VACUUM INTO '${escapeSqlString(destination)}'`);
   } finally {
     source.close();
   }
 
-  normalizeCopy(stagedDb, options.relativePathsRoot);
-  verifyCopy(stagedDb, objects, options.integrityCheck === true);
-  const rawBytes = fs.statSync(stagedDb).size;
+  normalizeCopy(destination, options.relativePathsRoot);
+  verifyCopy(destination, objects, options.integrityCheck === true);
+  return { file: destination, builtAt, serverVersion, stats: { objects, labels, usageRows }, xrefImportedAt };
+}
 
-  const stagedGz = path.join(staging, PUBLISHED_DB_FILE);
-  const { sha256, bytes } = await gzipFile(stagedDb, stagedGz);
-  const version = `${compactTimestamp(builtAt)}-${sha256.slice(0, 8)}`;
+/** Folder and blob name of a published version: `<built_at compacted>-<sha256 prefix>`. */
+export function versionName(builtAt: string, sha256: string): string {
+  return `${compactTimestamp(builtAt)}-${sha256.slice(0, 8)}`;
+}
+
+/** Published file name of the database for an encoding (`d365_index.db.gz`, `.br`, or bare). */
+export function publishedDbFileName(encoding: IndexEncoding): string {
+  return `d365_index.db${ENCODING_SUFFIX[encoding]}`;
+}
+
+async function publishInto(
+  dbPath: string,
+  outDir: string,
+  staging: string,
+  options: PublishOptions,
+  now: () => Date
+): Promise<PublishResult> {
+  const stagedDb = path.join(staging, 'd365_index.db');
+  const snapshot = snapshotIndex(dbPath, stagedDb, options);
+  const encoding = options.encoding ?? 'gzip';
+  const fileName = publishedDbFileName(encoding);
+
+  const stagedPackage = path.join(staging, `package${ENCODING_SUFFIX[encoding] || '.db'}`);
+  const packed = await compressFile(stagedDb, stagedPackage, encoding, options.level ?? 'balanced');
+  const version = versionName(snapshot.builtAt, packed.sha256);
   const versionDir = path.join(outDir, version);
   fs.rmSync(versionDir, { recursive: true, force: true });
   fs.mkdirSync(versionDir, { recursive: true });
-  const dbFile = path.join(versionDir, PUBLISHED_DB_FILE);
-  fs.renameSync(stagedGz, dbFile);
+  const dbFile = path.join(versionDir, fileName);
+  fs.renameSync(stagedPackage, dbFile);
 
   const manifestFor = (url: string): IndexManifest =>
-    manifestSchema.parse({
-      schema: 1,
-      version,
-      serverVersion: options.serverVersion,
-      builtAt,
-      publishedAt: now().toISOString(),
-      db: { url, sha256, bytes, rawBytes, gzip: true },
-      stats: { objects, labels, usageRows },
-      xref: importedAt ? { importedAt } : null,
-    });
+    buildManifest({ version, serverVersion: options.serverVersion, snapshot, packed, url, publishedAt: now().toISOString() });
 
-  const versionedManifest = manifestFor(PUBLISHED_DB_FILE);
+  const versionedManifest = manifestFor(fileName);
   fs.writeFileSync(path.join(versionDir, MANIFEST_FILE), JSON.stringify(versionedManifest, null, 2));
 
   const prefix = options.dbUrlPrefix?.replace(/\/+$/, '');
-  const latestManifest = manifestFor(
-    prefix ? `${prefix}/${version}/${PUBLISHED_DB_FILE}` : `../${version}/${PUBLISHED_DB_FILE}`
-  );
+  const latestManifest = manifestFor(prefix ? `${prefix}/${version}/${fileName}` : `../${version}/${fileName}`);
   const latestDir = path.join(outDir, LATEST_DIR);
   fs.mkdirSync(latestDir, { recursive: true });
   const latestManifestPath = path.join(latestDir, MANIFEST_FILE);
   fs.writeFileSync(latestManifestPath, JSON.stringify(latestManifest, null, 2));
 
   return { version, versionDir, dbFile, latestManifestPath, manifest: latestManifest };
+}
+
+/** The manifest describing a packaged snapshot at `url`. */
+export function buildManifest(input: {
+  version: string;
+  serverVersion: string;
+  snapshot: Pick<IndexSnapshot, 'builtAt' | 'stats' | 'xrefImportedAt'>;
+  packed: CompressedFile;
+  url: string;
+  publishedAt: string;
+}): IndexManifest {
+  const { packed, snapshot } = input;
+  return manifestSchema.parse({
+    schema: 1,
+    version: input.version,
+    serverVersion: input.serverVersion,
+    builtAt: snapshot.builtAt,
+    publishedAt: input.publishedAt,
+    db: {
+      url: input.url,
+      sha256: packed.sha256,
+      bytes: packed.bytes,
+      rawBytes: packed.rawBytes,
+      rawSha256: packed.rawSha256,
+      gzip: packed.encoding === 'gzip',
+      encoding: packed.encoding,
+    },
+    stats: snapshot.stats,
+    xref: snapshot.xrefImportedAt ? { importedAt: snapshot.xrefImportedAt } : null,
+  });
 }
