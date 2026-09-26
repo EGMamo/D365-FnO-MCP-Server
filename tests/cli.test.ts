@@ -90,11 +90,19 @@ describe('CLI', () => {
     expect(res.stdout).toContain('[FAIL] packages-dir');
   }, 120_000);
 
-  it('doctor warns on a short API key without echoing it', async () => {
+  it('doctor fails on a malformed API key without echoing it', async () => {
     const res = await runCli(['doctor'], { ...baseEnv, MCP_API_KEY: 'shortkey' }, workDir);
-    expect(res.code).toBe(0);
-    expect(res.stdout).toContain('[WARN] api-keys');
+    expect(res.code).toBe(1);
+    expect(res.stdout).toContain('[FAIL] api-keys');
     expect(res.stdout).not.toContain('shortkey');
+  }, 120_000);
+
+  it('doctor fails an HTTP deployment without API keys', async () => {
+    const env = { ...baseEnv };
+    delete env.MCP_API_KEY;
+    const res = await runCli(['doctor'], env, workDir);
+    expect(res.code).toBe(1);
+    expect(res.stdout).toContain('[FAIL] api-keys');
   }, 120_000);
 
   it('doctor accepts named keys from MCP_API_KEYS', async () => {
