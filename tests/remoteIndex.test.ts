@@ -189,4 +189,19 @@ describe('syncIndexFromManifest', () => {
       fs.writeFileSync(latestManifestPath, originalManifest);
     }
   });
+
+  it('times out a stalled database download', async () => {
+    const dbPath = path.join(root, 'timeout', 'index.db');
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = String(input);
+      if (url.includes('manifest.json')) return fetch(input, init);
+      return await new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(init.signal?.reason ?? new Error('aborted')), { once: true });
+      });
+    };
+
+    await expectError(syncIndexFromManifest({ manifestUrl, dbPath, timeoutMs: 20, fetchImpl }), 'download');
+    expect(fs.existsSync(`${dbPath}.download`)).toBe(false);
+    expect(fs.existsSync(dbPath)).toBe(false);
+  });
 });

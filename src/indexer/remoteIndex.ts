@@ -105,13 +105,17 @@ export interface FetchManifestOptions {
   timeoutMs?: number;
 }
 
+function requestTimeoutSignal(timeoutMs: number | undefined): AbortSignal {
+  return AbortSignal.timeout(timeoutMs ?? 30_000);
+}
+
 export async function fetchManifest(manifestUrl: string, options: FetchManifestOptions = {}): Promise<IndexManifest> {
   const fetchImpl = options.fetchImpl ?? fetch;
   let response: Response;
   try {
     response = await fetchImpl(manifestUrl, {
       headers: { accept: 'application/json' },
-      signal: AbortSignal.timeout(options.timeoutMs ?? 30_000),
+      signal: requestTimeoutSignal(options.timeoutMs),
     });
   } catch (err) {
     throw new RemoteIndexError('manifest', `Could not fetch the index manifest: ${errorMessage(err)}`);
@@ -180,7 +184,7 @@ export async function syncIndexFromManifest(options: SyncOptions): Promise<SyncR
 
   let response: Response;
   try {
-    response = await fetchImpl(dbUrl);
+    response = await fetchImpl(dbUrl, { signal: requestTimeoutSignal(options.timeoutMs) });
   } catch (err) {
     throw new RemoteIndexError('download', `Index download failed: ${errorMessage(err)}`);
   }

@@ -126,6 +126,43 @@ describe('workspace doctor checks', () => {
     });
     expect(checks.find((check) => check.status === 'fail')?.message).toContain('ModelModule');
   });
+
+  it('fails HTTP doctor checks with missing API keys but only warns for stdio', async () => {
+    const original = Object.getOwnPropertyDescriptor(process.versions, 'node')!;
+    Object.defineProperty(process.versions, 'node', { ...original, value: '24.0.0' });
+    try {
+      const httpChecks = await runChecks({
+        D365_PACKAGES_DIR: fixture.metadataDir,
+        D365_INDEX_DB_PATH: path.join(fixture.root, 'doctor-http.db'),
+      });
+      expect(httpChecks.find((check) => check.name === 'api-keys')).toMatchObject({ status: 'fail' });
+
+      const stdioChecks = await runChecks({
+        MCP_TRANSPORT: 'stdio',
+        D365_PACKAGES_DIR: fixture.metadataDir,
+        D365_INDEX_DB_PATH: path.join(fixture.root, 'doctor-stdio.db'),
+      });
+      expect(stdioChecks.find((check) => check.name === 'api-keys')).toMatchObject({ status: 'warn' });
+    } finally {
+      Object.defineProperty(process.versions, 'node', original);
+    }
+  });
+
+  it('fails malformed API keys even on stdio', async () => {
+    const original = Object.getOwnPropertyDescriptor(process.versions, 'node')!;
+    Object.defineProperty(process.versions, 'node', { ...original, value: '24.0.0' });
+    try {
+      const checks = await runChecks({
+        MCP_TRANSPORT: 'stdio',
+        MCP_API_KEY: 'shortkey',
+        D365_PACKAGES_DIR: fixture.metadataDir,
+        D365_INDEX_DB_PATH: path.join(fixture.root, 'doctor-bad-key.db'),
+      });
+      expect(checks.find((check) => check.name === 'api-keys')).toMatchObject({ status: 'fail' });
+    } finally {
+      Object.defineProperty(process.versions, 'node', original);
+    }
+  });
 });
 
 describe('workspace configuration', () => {
