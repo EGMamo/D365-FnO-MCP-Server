@@ -105,13 +105,20 @@ export interface FetchManifestOptions {
   timeoutMs?: number;
 }
 
+const DEFAULT_MANIFEST_TIMEOUT_MS = 30_000;
+const DEFAULT_DOWNLOAD_TIMEOUT_MS = 5 * 60_000;
+
+function requestTimeoutSignal(timeoutMs: number | undefined, defaultTimeoutMs: number): AbortSignal {
+  return AbortSignal.timeout(timeoutMs ?? defaultTimeoutMs);
+}
+
 export async function fetchManifest(manifestUrl: string, options: FetchManifestOptions = {}): Promise<IndexManifest> {
   const fetchImpl = options.fetchImpl ?? fetch;
   let response: Response;
   try {
     response = await fetchImpl(manifestUrl, {
       headers: { accept: 'application/json' },
-      signal: AbortSignal.timeout(options.timeoutMs ?? 30_000),
+      signal: requestTimeoutSignal(options.timeoutMs, DEFAULT_MANIFEST_TIMEOUT_MS),
     });
   } catch (err) {
     throw new RemoteIndexError('manifest', `Could not fetch the index manifest: ${errorMessage(err)}`);
@@ -140,6 +147,8 @@ export interface SyncOptions extends FetchManifestOptions {
   force?: boolean;
   /** Warn when the index was built by another server version. */
   expectedServerVersion?: string;
+  /** Override the deadline for downloading the database payload. */
+  downloadTimeoutMs?: number;
 }
 
 export interface SyncResult {
@@ -180,7 +189,9 @@ export async function syncIndexFromManifest(options: SyncOptions): Promise<SyncR
 
   let response: Response;
   try {
-    response = await fetchImpl(dbUrl);
+    response = await fetchImpl(dbUrl, {
+      signal: requestTimeoutSignal(options.downloadTimeoutMs, DEFAULT_DOWNLOAD_TIMEOUT_MS),
+    });
   } catch (err) {
     throw new RemoteIndexError('download', `Index download failed: ${errorMessage(err)}`);
   }

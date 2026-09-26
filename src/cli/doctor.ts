@@ -282,21 +282,26 @@ export function checkVisualStudioIntegration(env: NodeJS.ProcessEnv): CheckResul
   return results;
 }
 
+function configuredTransport(env: NodeJS.ProcessEnv): 'http' | 'stdio' {
+  return env.MCP_TRANSPORT === 'stdio' ? 'stdio' : 'http';
+}
+
 /**
- * API keys are a warning for a local setup (stdio needs none) but a failure
- * for a hosted deployment, which only serves HTTP.
+ * Invalid API key configuration is always a failure. Missing keys are only
+ * tolerated on stdio, which does not authenticate HTTP requests.
  */
-function checkApiKeys(env: NodeJS.ProcessEnv, hosted: boolean): CheckResult {
+function checkApiKeys(env: NodeJS.ProcessEnv, transport: 'http' | 'stdio'): CheckResult {
   const parsed = parseApiKeys(env.MCP_API_KEYS, env.MCP_API_KEY);
-  const severity = hosted ? 'fail' : 'warn';
   if (parsed.errors.length > 0) {
-    return { name: 'api-keys', status: severity, message: parsed.errors.join(' ') };
+    return { name: 'api-keys', status: 'fail', message: parsed.errors.join(' ') };
   }
   if (parsed.keys.length === 0) {
     return {
       name: 'api-keys',
-      status: severity,
-      message: 'No API key configured (MCP_API_KEYS or MCP_API_KEY). Required for the HTTP transport.',
+      status: transport === 'http' ? 'fail' : 'warn',
+      message: transport === 'http'
+        ? 'No API key configured (MCP_API_KEYS or MCP_API_KEY). Required for the HTTP transport.'
+        : 'No API key configured (MCP_API_KEYS or MCP_API_KEY). Fine for stdio; required if you switch to HTTP.',
     };
   }
   return {
@@ -316,6 +321,7 @@ export async function runChecks(
   options: DoctorOptions = {}
 ): Promise<CheckResult[]> {
   const hosted = options.hosted === true || Boolean(env.D365_INDEX_URL);
+  const transport = configuredTransport(env);
   const dbPath = env.D365_INDEX_DB_PATH ?? './d365_index.db';
   const results: CheckResult[] = [checkNode()];
 
@@ -336,7 +342,7 @@ export async function runChecks(
     results.push(...(await checkDbOpen(dbPath, hosted)));
   }
 
-  results.push(checkApiKeys(env, hosted));
+  results.push(checkApiKeys(env, transport));
   if (hosted) {
     results.push(checkTrustProxy(env));
     results.push(checkWriteToolsDisabled(env));
