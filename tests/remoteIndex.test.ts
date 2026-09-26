@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { gzipSync } from 'node:zlib';
 import {
   RemoteIndexError,
   manifestCachePath,
@@ -192,21 +193,32 @@ describe('syncIndexFromManifest', () => {
 
   it('times out a stalled database download', async () => {
     const dbPath = path.join(root, 'timeout', 'index.db');
+    const manifestBody = fs.readFileSync(latestManifestPath, 'utf8');
+    const gzippedBody = gzipSync(Buffer.from('partial index contents '.repeat(1024)));
+    const firstChunk = gzippedBody.subarray(0, gzippedBody.length - 8);
     const fetchImpl: typeof fetch = async (input, init) => {
       const url = String(input);
       if (url.includes('manifest.json')) {
-        return new Response(fs.readFileSync(latestManifestPath, 'utf8'), { status: 200 });
+        return new Response(manifestBody, {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
       }
       const signal = init?.signal;
-      return new Response(new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(new Uint8Array([0x1f, 0x8b]));
-          signal?.addEventListener('abort', () => controller.error(signal.reason ?? new Error('aborted')), { once: true });
-        },
-      }));
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(firstChunk);
+            signal?.addEventListener('abort', () => controller.error(signal.reason ?? new Error('aborted')), {
+              once: true,
+            });
+          },
+        }),
+        { status: 200 }
+      );
     };
 
-    await expectError(syncIndexFromManifest({ manifestUrl, dbPath, timeoutMs: 20, fetchImpl }), 'download');
+    await expectError(syncIndexFromManifest({ manifestUrl, dbPath, downloadTimeoutMs: 20, fetchImpl }), 'download');
     expect(fs.existsSync(`${dbPath}.download`)).toBe(false);
     expect(fs.existsSync(dbPath)).toBe(false);
   });
