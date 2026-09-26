@@ -194,10 +194,16 @@ describe('syncIndexFromManifest', () => {
     const dbPath = path.join(root, 'timeout', 'index.db');
     const fetchImpl: typeof fetch = async (input, init) => {
       const url = String(input);
-      if (url.includes('manifest.json')) return fetch(input, init);
-      return await new Promise<Response>((_resolve, reject) => {
-        init?.signal?.addEventListener('abort', () => reject(init.signal?.reason ?? new Error('aborted')), { once: true });
-      });
+      if (url.includes('manifest.json')) {
+        return new Response(fs.readFileSync(latestManifestPath, 'utf8'), { status: 200 });
+      }
+      const signal = init?.signal;
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array([0x1f, 0x8b]));
+          signal?.addEventListener('abort', () => controller.error(signal.reason ?? new Error('aborted')), { once: true });
+        },
+      }));
     };
 
     await expectError(syncIndexFromManifest({ manifestUrl, dbPath, timeoutMs: 20, fetchImpl }), 'download');
