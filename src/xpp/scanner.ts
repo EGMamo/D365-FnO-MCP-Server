@@ -87,10 +87,25 @@ export function maskXpp(source: string): MaskedSource {
   return { code: out.slice(0, source.length), comments };
 }
 
+/** Newline offsets of the last text `lineAt` saw; checks call it many times on one method. */
+let lineIndex: { code: string; newlines: number[] } | undefined;
+
+/** 1-based line of `offset`, by binary search over a cached newline index (linear scans made checks quadratic). */
 export function lineAt(code: string, offset: number): number {
-  let line = 1;
-  for (let i = 0; i < offset && i < code.length; i++) if (code[i] === '\n') line++;
-  return line;
+  if (lineIndex?.code !== code) {
+    const newlines: number[] = [];
+    for (let i = code.indexOf('\n'); i >= 0; i = code.indexOf('\n', i + 1)) newlines.push(i);
+    lineIndex = { code, newlines };
+  }
+  const { newlines } = lineIndex;
+  let low = 0;
+  let high = newlines.length;
+  while (low < high) {
+    const mid = (low + high) >>> 1;
+    if (newlines[mid] < offset) low = mid + 1;
+    else high = mid;
+  }
+  return low + 1;
 }
 
 /** Index just past the bracket matching the one at `open`, or code.length when unbalanced. */
@@ -156,15 +171,29 @@ export function findLoops(code: string): XppBlock[] {
   return loops;
 }
 
-const XML_METHOD_RE = /<Method>\s*<Name>([^<]+)<\/Name>[\s\S]*?<Source>\s*<!\[CDATA\[([\s\S]*?)\]\]>\s*<\/Source>/g;
+const XML_METHOD_HEAD_RE = /^<Method>\s*<Name>([^<]+)<\/Name>/;
+const XML_SOURCE_RE = /<Source>\s*<!\[CDATA\[([\s\S]*?)\]\]>\s*<\/Source>/;
 const XML_DECL_RE = /<Declaration>\s*<!\[CDATA\[([\s\S]*?)\]\]>\s*<\/Declaration>/;
 
-/** Method sources of any AOT element with X++ code (class, table, form, data entity, map…). */
+/**
+ * Method sources of any AOT element with X++ code (class, table, form, data entity, map…).
+ * Each `<Method>` is cut at the next one before its source is matched, so a method
+ * without a source cannot make the search rescan the rest of the document.
+ */
 export function extractMethodSources(xml: string): XppMethodSource[] {
   const out: XppMethodSource[] = [];
-  const decl = XML_DECL_RE.exec(xml);
+  const declEnd = xml.indexOf('</Declaration>');
+  const declStart = declEnd < 0 ? -1 : xml.lastIndexOf('<Declaration>', declEnd);
+  const decl = declStart < 0 ? null : XML_DECL_RE.exec(xml.slice(declStart, declEnd + '</Declaration>'.length));
   if (decl && decl[1].trim()) out.push({ name: 'classDeclaration', source: decl[1] });
-  for (const m of xml.matchAll(XML_METHOD_RE)) out.push({ name: m[1].trim(), source: m[2] });
+  for (let start = xml.indexOf('<Method>'); start >= 0; ) {
+    const next = xml.indexOf('<Method>', start + 1);
+    const segment = xml.slice(start, next < 0 ? xml.length : next);
+    const head = XML_METHOD_HEAD_RE.exec(segment);
+    const source = head ? XML_SOURCE_RE.exec(segment) : null;
+    if (head && source) out.push({ name: head[1].trim(), source: source[1] });
+    start = next;
+  }
   return out;
 }
 

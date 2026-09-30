@@ -1,6 +1,6 @@
 import type { Database } from '../indexer/db.js';
 import * as dbUtils from '../indexer/db.js';
-import fs from 'fs';
+import { loadObjectXmlSync } from '../indexer/sourceFiles.js';
 
 export interface AxMethod {
   name: string;
@@ -169,14 +169,6 @@ function stripXppComments(source: string): string {
     .replace(/\/\/[^\n]*/g, ' ');
 }
 
-function readSourceIfAvailable(filePath: string): string {
-  try {
-    return fs.readFileSync(filePath, 'utf-8');
-  } catch {
-    return '';
-  }
-}
-
 /**
  * Split an X++ parameter list into its parameter identifiers, ignoring any
  * default values (`boolean _skip = false` yields `_skip`).
@@ -214,7 +206,7 @@ export function validateCoCTarget(db: Database, className: string): CoCTargetRes
 
   const isFinal = obj.properties?.isFinal === 'true' || obj.properties?.IsFinal === 'true';
   const declarationSource =
-    obj.properties?.declaration || obj.properties?.Declaration || obj.raw_xml || readSourceIfAvailable(obj.file_path);
+    obj.properties?.declaration || obj.properties?.Declaration || loadObjectXmlSync(obj);
   const isExtensionOf =
     typeof declarationSource === 'string' &&
     EXTENSION_OF_ATTRIBUTE_RE.test(stripXppComments(declarationSource));

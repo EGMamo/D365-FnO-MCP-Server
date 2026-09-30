@@ -3,7 +3,7 @@ import type { Database } from '../indexer/db.js';
 import { z } from 'zod';
 import * as dbUtils from '../indexer/db.js';
 import { getIndexStats } from '../indexer/buildIndex.js';
-import fs from 'fs/promises';
+import { loadObjectXml, sourceFileReadsAllowed } from '../indexer/sourceFiles.js';
 import { findUsageRefs, getUsageSnapshotStatus } from '../indexer/xrefUsage.js';
 
 /** Provenance of a snapshot index (published or uploaded) the server serves without source files. */
@@ -95,7 +95,7 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
     async ({ className, methodName }) => {
       const obj = dbUtils.getObjectByName(db, className, 'Class');
       if (!obj) return { content: [{ type: 'text', text: `Class ${className} not found.` }] };
-      const method = obj.methods.find((m: any) => m.name === methodName);
+      const method = obj.methods.find((m) => m.name === methodName);
       if (!method) return { content: [{ type: 'text', text: `Method ${methodName} not found in ${className}.` }] };
       return { content: [{ type: 'text', text: JSON.stringify(method, null, 2) }] };
     }
@@ -243,21 +243,19 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
     async ({ name, type }) => {
       const obj = dbUtils.getObjectByName(db, name, type);
       if (!obj) return { content: [{ type: 'text', text: `Object ${name} of type ${type} not found.` }] };
-      if (obj.raw_xml) return { content: [{ type: 'text', text: obj.raw_xml }] };
-
-      try {
-        const xml = await fs.readFile(obj.file_path, 'utf-8');
-        return { content: [{ type: 'text', text: xml }] };
-      } catch {
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Raw XML for ${type} ${name} is not stored in the index and the source file could not be read at ${obj.file_path}.`,
-            },
-          ],
-        };
-      }
+      const xml = await loadObjectXml(obj);
+      if (xml) return { content: [{ type: 'text', text: xml }] };
+      return {
+        content: [
+          {
+            type: 'text',
+            // The path is only worth showing (and only safe to echo) for an index built on this machine.
+            text: sourceFileReadsAllowed()
+              ? `Raw XML for ${type} ${name} is not stored in the index and the source file could not be read at ${obj.file_path}.`
+              : `Raw XML for ${type} ${name} is not stored in the index and its source file is not available on this server.`,
+          },
+        ],
+      };
     }
   );
 

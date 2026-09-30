@@ -240,7 +240,7 @@ export function registerGeneratorTools(server: McpServer, db: Database) {
           params: z.string().optional(),
           returnType: z.string().optional(),
         })
-      ),
+      ).max(200),
     },
     async ({ targetClass, extensionName, methods }) => {
       const naming = validateNaming(extensionName);
@@ -383,7 +383,7 @@ export function registerGeneratorTools(server: McpServer, db: Database) {
         .array(
           z.object({
             name: z.string(),
-            fields: z.array(z.string()),
+            fields: z.array(z.string()).max(1000),
             allowDuplicates: z.boolean().optional(),
           })
         )
@@ -430,7 +430,7 @@ export function registerGeneratorTools(server: McpServer, db: Database) {
     {
       className: z.string(),
       extends: z.string().optional(),
-      implements: z.array(z.string()).optional(),
+      implements: z.array(z.string()).max(50).optional(),
       isAbstract: z.boolean().optional(),
       description: z.string().optional(),
     },

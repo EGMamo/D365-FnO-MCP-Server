@@ -175,6 +175,7 @@ export async function run(argv: string[]): Promise<CliResult> {
         apiKey: flagString(flags, 'api-key'),
         dbPath: flagString(flags, 'db-path'),
         transport: flagString(flags, 'transport'),
+        force: flagBool(flags, 'force'),
       });
       return { code };
     }

@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `MCP_LOG_LEVEL` filters the structured stderr log (`DEBUG` by default, or `INFO`, `WARN`, `ERROR`, `FATAL`, `SILENT`).
 - Code quality tools, adapted from GitHub community projects (all MIT):
   - `check_xpp_best_practices`: heuristic X++ checks modelled on AppChecker's rule catalog.
   - `find_field_access`: read vs write uses of a table field, after TRUDUtils.
@@ -100,6 +101,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Upgraded glob to 13, fast-xml-parser to 5, ESLint to 10 and Vitest to 5, and moved the CI and deploy workflows to action versions that run on Node 24. `npm ci` no longer reports deprecated packages or audit findings.
 - `D365_PACKAGES_DIR` is required only for indexing; `MCP_API_KEY` is no longer required for stdio.
 - `getIndexStats().lastIndexed` now reports the recorded build time instead of the call time.
 - `mssql` moved to `optionalDependencies`; the container image and `--omit=optional` installs leave
@@ -112,6 +114,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `docs/vs-addin-plan.md`: the extension that applies generated code was not pursued; the Visual
   Studio extension now handles connection setup and index uploads instead.
 
+### Added (initial scaffold)
+
 - Initial project scaffold: strict TypeScript configuration, ESLint flat config, and build pipeline.
 - AOT metadata parsers and indexer covering tables, classes, enums, EDTs, forms, and labels, with all object types wired into the indexer.
 - SQLite index with incremental passes (path + mtime based), `--force` full rebuild, stale-entry pruning, rename detection, and duplicate-name collision reporting.
@@ -120,10 +124,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - X++ generators grounded against the index with validation gates: `create_coc_extension`, `create_table_extension`, `create_class_extension`, `generate_xpp_class`, `create_runbase_batch`, `create_sys_operation`.
 - stdio transport in addition to the Streamable HTTP transport, for local MCP clients.
 - CLI with `serve`, `index`, `doctor`, and `setup` commands, including non-interactive setup flags.
-- Packaging and documentation polish: comprehensive README, `files`/`keywords` metadata, CHANGELOG, and a GitHub Actions CI workflow running typecheck, lint, build, and tests on Node 22.
+- Packaging and documentation polish: comprehensive README, `files`/`keywords` metadata, CHANGELOG, and a GitHub Actions CI workflow running typecheck, lint, build, and tests (now on Node 24).
 
 ### Fixed
 
+- `search_symbols` matches name prefixes (`Cust` finds `CustTable`), ranks exact names first and
+  falls back to a substring match on the name.
+- Object lookups by name are case-insensitive, as X++ names are; an exact spelling still wins.
+- `search_labels` treats `%` and `_` in the query as literal text.
+- A hosted server no longer fails to start when a large index takes longer than five minutes to
+  download: the download timeout is now a two-minute stall timeout.
+- `setup` refuses to overwrite an existing `.env` unless `--force` is given, and a replaced file is
+  made owner-only again.
 - Parser and indexer robustness issues, including interface declarations and enum implicit counter edge cases.
 - Chain of Command wrappers now preserve the original method's access modifier and `static` flag.
 - Generators fail closed on ungrounded Chain of Command and table extension input instead of emitting unverified code.
@@ -136,3 +148,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rate limiting is keyed on client IP only, preventing bypass through credential rotation.
 - Proxy trust is opt-in via `TRUST_PROXY_HOPS` (default `0`), so `X-Forwarded-For` cannot be spoofed to evade rate limiting by default.
 - Concurrent session cap and idle-session timeout bound resource usage.
+- Tools never read the source file an index names when the index was downloaded or uploaded, so a
+  crafted index cannot make `get_element_xml` return server files such as the process environment.
+- Decoding an uploaded or downloaded index stops at the declared size (compression bombs), the
+  manifest SAS is only forwarded to a database on the manifest's own host, and only the key that
+  started an upload may send its chunks or complete it.
+- X++ best-practice checks, method extraction and security export parsing run in linear time on
+  hostile input (a 500 KB method used to block the server for about a minute), `find_field_access`
+  no longer loads every candidate's XML at once, and tool array inputs have upper bounds.
+- Keys containing `change-me` are refused; `.env.example` no longer ships a usable placeholder key.
+- CI's token is read-only, Dependabot is configured, and `SECURITY.md` explains how to report a
+  vulnerability.

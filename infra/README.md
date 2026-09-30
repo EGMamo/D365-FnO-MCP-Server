@@ -92,12 +92,13 @@ or on demand, pushes it to ACR, points the web app at it and waits for
 APP_ID=$(az ad app create --display-name d365-mcp-deployer --query appId -o tsv)
 az ad sp create --id "$APP_ID"
 az ad app federated-credential create --id "$APP_ID" --parameters '{
-  "name": "github-tags",
+  "name": "github-production",
   "issuer": "https://token.actions.githubusercontent.com",
-  "subject": "repo:<owner>/<repo>:ref:refs/tags/v0.1.0",
+  "subject": "repo:<owner>/<repo>:environment:production",
   "audiences": ["api://AzureADTokenExchange"]
 }'
-# repeat for "repo:<owner>/<repo>:environment:production" (workflow_dispatch)
+# The deploy job runs in the `production` environment, so GitHub issues this
+# subject for tag pushes and manual runs alike; no per-tag credential is needed.
 az ad sp show --id "$APP_ID" --query id -o tsv        # -> DEPLOYER_PRINCIPAL_ID, then redeploy the Bicep
 ```
 

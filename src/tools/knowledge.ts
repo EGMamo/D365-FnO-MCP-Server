@@ -181,7 +181,7 @@ export function registerKnowledgeDigestTool(
       'against that list yourself for CONCEPTUAL duplication (the same underlying pattern described in ' +
       'different words). The `duplicates` field only catches near-identical phrasing and will miss that.',
     {
-      content: z.string().min(1).describe('Full markdown content of the draft article, already sanitized.'),
+      content: z.string().min(1).max(200_000).describe('Full markdown content of the draft article, already sanitized.'),
       slug: z.string().optional().describe('Optional filename slug override (kebab-case, no number prefix).'),
       dryRun: z.boolean().optional().describe('When true, only validate; never write the file.'),
       force: z

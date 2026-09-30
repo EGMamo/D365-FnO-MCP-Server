@@ -157,11 +157,14 @@ describe('trace tools', () => {
     const file = path.join(dir, 'invoice.json');
     fs.writeFileSync(file, JSON.stringify(SNAPSHOT));
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const missing = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
       expect(await indexTraceCommand({ fromJson: file, dbPath }, {})).toBe(0);
       expect(await indexTraceCommand({ fromJson: file, dbPath, trace: 'Missing' }, {})).toBe(1);
+      expect(missing).toHaveBeenCalledWith(expect.stringContaining('No sessions found for trace "Missing"'));
     } finally {
       log.mockRestore();
+      missing.mockRestore();
     }
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {

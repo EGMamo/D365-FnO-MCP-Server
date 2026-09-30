@@ -6,6 +6,7 @@ import { promisify } from 'util';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { createRequire } from 'node:module';
 import { startStaticServer, type StaticServer } from './helpers/indexFixtureServer.js';
+import { HELP_TEXT } from '../src/cli/args.js';
 
 const execFileAsync = promisify(execFile);
 const testDir = path.dirname(fileURLToPath(import.meta.url));
@@ -261,6 +262,19 @@ describe('CLI', () => {
     expect(envFile).toContain('D365_INDEX_DB_PATH=./data/index.db');
     expect(fs.existsSync(path.join(setupDir, 'data'))).toBe(true);
 
+    // A second run leaves the existing file alone unless --force is given.
+    const args = ['setup', '--non-interactive', '--packages-dir', packagesDir, '--api-key', 'n'.repeat(40)];
+    const env = { DOTENV_CONFIG_PATH: path.join(setupDir, '.env.absent') };
+    const again = await runCli(args, env, setupDir);
+    expect(again.code).toBe(1);
+    expect(again.stderr).toContain('--force');
+    expect(fs.readFileSync(path.join(setupDir, '.env'), 'utf-8')).toBe(envFile);
+    fs.chmodSync(path.join(setupDir, '.env'), 0o644);
+    expect((await runCli([...args, '--force'], env, setupDir)).code).toBe(0);
+    expect(fs.readFileSync(path.join(setupDir, '.env'), 'utf-8')).toContain(`MCP_API_KEY=${'n'.repeat(40)}`);
+    // The replaced file holds a new key, so it must not stay readable by others.
+    if (process.platform !== 'win32') expect(fs.statSync(path.join(setupDir, '.env')).mode & 0o777).toBe(0o600);
+
     fs.rmSync(setupDir, { recursive: true, force: true });
   }, 120_000);
 
@@ -287,4 +301,9 @@ describe('CLI', () => {
     expect(res.code).toBe(0);
     expect(res.stdout).toContain('Commands:');
   }, 120_000);
+
+  it('keeps the README CLI reference identical to --help', () => {
+    const readme = fs.readFileSync(path.join(testDir, '..', 'README.md'), 'utf-8').replace(/\r\n/g, '\n');
+    expect(readme).toContain(`\`\`\`\n${HELP_TEXT.trimEnd()}\n\`\`\``);
+  });
 });

@@ -48,6 +48,13 @@ const EXPORT = `<?xml version="1.0" encoding="utf-8"?>
 </SecurityDatabaseCustomizations>`;
 
 describe('security converter', () => {
+  it('parses an export full of unclosed elements in linear time', () => {
+    const started = Date.now();
+    expect(parseSecurityExport('<AxSecurityRole>'.repeat(120_000))).toEqual([]);
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
+
   it('parses elements and their own names, not reference names', () => {
     const elements = parseSecurityExport(EXPORT);
     expect(elements.map((e) => `${e.kind}:${e.name}`)).toEqual(['Role:MyClerk', 'Duty:MyDuty', 'Privilege:MyPriv']);

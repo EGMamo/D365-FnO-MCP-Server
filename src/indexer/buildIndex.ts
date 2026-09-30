@@ -180,8 +180,7 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
 
       // Keep the previous mtime until parsing succeeds, so a failed parse does not
       // permanently poison the incremental index by marking the object as up to date.
-      let parsed: any;
-      const xrefs: any[] = [];
+      const xrefs: dbUtils.XrefInput[] = [];
 
       writer.runInTransaction(() => {
         const objectId = writer.upsertObject({
@@ -196,7 +195,7 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
 
         switch (file.type) {
           case 'Table': {
-            parsed = parser.parseAxTable(content, file.name, file.package);
+            const parsed = parser.parseAxTable(content, file.name, file.package);
             writer.upsertFields(objectId, parsed.fields);
             writer.upsertMethods(objectId, parsed.methods);
             writer.upsertProperties(objectId, {
@@ -216,7 +215,7 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
             break;
           }
           case 'Class': {
-            parsed = parser.parseAxClass(content, file.name, file.package);
+            const parsed = parser.parseAxClass(content, file.name, file.package);
             writer.upsertMethods(objectId, parsed.methods);
             writer.upsertProperties(objectId, {
               extends: parsed.extends,
@@ -233,13 +232,13 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
             break;
           }
           case 'Enum': {
-            parsed = parser.parseAxEnum(content, file.name, file.package);
+            const parsed = parser.parseAxEnum(content, file.name, file.package);
             writer.upsertEnumValues(objectId, parsed.values);
             writer.upsertProperties(objectId, { label: parsed.label, isExtensible: parsed.isExtensible });
             break;
           }
           case 'Form': {
-            parsed = parser.parseAxForm(content, file.name, file.package);
+            const parsed = parser.parseAxForm(content, file.name, file.package);
             writer.upsertDataSources(objectId, parsed.dataSources);
             writer.upsertFormControls(objectId, parsed.controls);
             writer.upsertProperties(objectId, {
@@ -255,7 +254,7 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
             break;
           }
           case 'Query': {
-            parsed = parser.parseAxQuery(content, file.name, file.package);
+            const parsed = parser.parseAxQuery(content, file.name, file.package);
             writer.upsertDataSources(objectId, parsed.dataSources);
             writer.upsertProperties(objectId, { title: parsed.title });
             for (const ds of parsed.dataSources) {
@@ -266,7 +265,7 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
             break;
           }
           case 'DataEntity': {
-            parsed = parser.parseAxDataEntity(content, file.name, file.package);
+            const parsed = parser.parseAxDataEntity(content, file.name, file.package);
             writer.upsertFields(objectId, parsed.fields);
             writer.upsertDataSources(objectId, parsed.dataSources);
             writer.upsertProperties(objectId, {
@@ -284,7 +283,7 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
             break;
           }
           case 'Edt': {
-            parsed = parser.parseAxEdt(content, file.name, file.package);
+            const parsed = parser.parseAxEdt(content, file.name, file.package);
             writer.upsertProperties(objectId, {
               extends: parsed.extends,
               label: parsed.labelId,
@@ -299,7 +298,7 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
           }
           case 'SecurityRole':
           case 'SecurityRoleExtension': {
-            parsed = parser.parseAxSecurityRole(content, file.name, file.package);
+            const parsed = parser.parseAxSecurityRole(content, file.name, file.package);
             writer.upsertProperties(objectId, { label: parsed.label, description: parsed.description });
             const from = { fromType: file.type, fromName: file.name };
             for (const duty of parsed.duties) {
@@ -318,7 +317,7 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
           }
           case 'SecurityDuty':
           case 'SecurityDutyExtension': {
-            parsed = parser.parseAxSecurityDuty(content, file.name, file.package);
+            const parsed = parser.parseAxSecurityDuty(content, file.name, file.package);
             writer.upsertProperties(objectId, { label: parsed.label, description: parsed.description });
             for (const priv of parsed.privileges) {
               xrefs.push({ fromType: file.type, fromName: file.name, toType: 'SecurityPrivilege', toName: priv, xrefKind: 'duty_privilege' });
@@ -329,7 +328,7 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
             break;
           }
           case 'SecurityPrivilege': {
-            parsed = parser.parseAxSecurityPrivilege(content, file.name, file.package);
+            const parsed = parser.parseAxSecurityPrivilege(content, file.name, file.package);
             writer.upsertProperties(objectId, { label: parsed.label, description: parsed.description });
             writer.upsertSecurityGrants(objectId, parsed.grants);
             for (const g of parsed.grants) {
@@ -346,7 +345,7 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
           case 'MenuItemDisplay':
           case 'MenuItemAction':
           case 'MenuItemOutput': {
-            parsed = parser.parseAxMenuItem(content, file.type, file.name);
+            const parsed = parser.parseAxMenuItem(content, file.type, file.name);
             writer.upsertProperties(objectId, {
               label: parsed.label,
               object: parsed.object,
@@ -492,10 +491,10 @@ export interface IndexStatsSummary {
 }
 
 export function getIndexStats(db: Database): IndexStatsSummary {
-  const totalObjects = (db.prepare(`SELECT COUNT(*) as count FROM ax_objects`).get() as any).count;
-  const totalLabels = (db.prepare(`SELECT COUNT(*) as count FROM ax_labels`).get() as any).count;
+  const totalObjects = (db.prepare(`SELECT COUNT(*) as count FROM ax_objects`).get() as { count: number }).count;
+  const totalLabels = (db.prepare(`SELECT COUNT(*) as count FROM ax_labels`).get() as { count: number }).count;
 
-  const typesRows = db.prepare(`SELECT type, COUNT(*) as count FROM ax_objects GROUP BY type`).all() as any[];
+  const typesRows = db.prepare(`SELECT type, COUNT(*) as count FROM ax_objects GROUP BY type`).all() as { type: string; count: number }[];
   const byType: Record<string, number> = {};
   for (const row of typesRows) {
     byType[row.type] = row.count;

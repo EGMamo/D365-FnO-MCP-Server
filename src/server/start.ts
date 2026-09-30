@@ -8,6 +8,7 @@ import { publishToContainer } from '../indexer/blobStore.js';
 import {
   readManifestCache, redactUrl, syncIndexFromManifest, writeManifestCache, type CachedManifest,
 } from '../indexer/remoteIndex.js';
+import { setSourceFileReads } from '../indexer/sourceFiles.js';
 import { startHttpServer, type AdminRoutes } from './httpTransport.js';
 import { createIndexAdminRouter, IndexUploadManager } from './indexUpload.js';
 import { startStdioServer } from './stdioTransport.js';
@@ -116,6 +117,11 @@ export async function startServer(): Promise<void> {
     const cached = readManifestCache(config.indexDbPath);
     if (cached?.source === 'upload' && fsSync.existsSync(config.indexDbPath)) published = uploadInfo(cached);
   }
+  // An index that was downloaded or uploaded was built elsewhere: its file paths
+  // are not this machine's, so tools must not follow them (see sourceFiles.ts).
+  const transferred = published !== undefined ||
+    (config.indexDbPath !== ':memory:' && readManifestCache(config.indexDbPath) !== null);
+  setSourceFileReads(!transferred);
 
   // Open shared SQLite index database. `db` and `published` are replaced when
   // an uploaded index is activated; sessions created afterwards see the new ones.
@@ -224,6 +230,7 @@ export async function startServer(): Promise<void> {
     }
     writeManifestCache(config.indexDbPath, cache);
     published = uploadInfo(cache);
+    setSourceFileReads(false);
   }
 
   function describeIndex(): Record<string, unknown> {
@@ -279,6 +286,12 @@ export async function startServer(): Promise<void> {
     // stdio clients own the process lifecycle; only index when explicitly asked.
     if (config.indexOnStart) startBackgroundIndexing();
     return;
+  }
+
+  if (config.enableWriteTools) {
+    logger.warn('Write tools are enabled over HTTP: every API key can write metadata and knowledge base articles', {
+      keys: config.apiKeys.map((entry) => entry.name).join(', '),
+    });
   }
 
   const admin = createAdminRoutes();

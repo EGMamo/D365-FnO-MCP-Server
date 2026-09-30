@@ -60,6 +60,22 @@ describe('X++ scanner', () => {
   });
 });
 
+describe('X++ scanning of hostile input', () => {
+  // Both inputs used to block the event loop for tens of seconds.
+  it('checks a 500 KB method with a finding on every line quickly', () => {
+    const started = Date.now();
+    const findings = checkXppMethods([{ name: 'm', source: '==true\n'.repeat(71_428) }]);
+    expect(findings.at(-1)?.line).toBe(71_428);
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
+  it('extracts methods from XML full of unterminated methods quickly', () => {
+    const started = Date.now();
+    expect(extractMethodSources('<Method><Name>a</Name><Source><![CDATA['.repeat(20_000))).toEqual([]);
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+});
+
 describe('X++ best-practice rules', () => {
   it('flags unbalanced tts, breakpoint and direct SQL', () => {
     const rules = rulesOf('void m()\n{\n    ttsbegin;\n    breakpoint;\n    stmt.executeUpdate(sql);\n}');

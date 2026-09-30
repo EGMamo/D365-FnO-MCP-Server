@@ -1,4 +1,4 @@
-import fs from 'node:fs/promises';
+import { loadObjectXml } from '../indexer/sourceFiles.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { Database } from '../indexer/db.js';
@@ -27,16 +27,6 @@ interface IndexedObject {
 
 function getObject(db: Database, name: string, type: string): IndexedObject | null {
   return dbUtils.getObjectByName(db, name, type) as IndexedObject | null;
-}
-
-/** Stored XML, else the source file. Hosted indexes built without raw XML may have neither. */
-async function loadXml(obj: IndexedObject): Promise<string | null> {
-  if (obj.raw_xml) return obj.raw_xml;
-  try {
-    return await fs.readFile(obj.file_path, 'utf-8');
-  } catch {
-    return null;
-  }
 }
 
 interface TableField {
@@ -114,7 +104,7 @@ export async function checkEntityODataReadiness(db: Database, entityName: string
   const warnings: string[] = [];
   const info: string[] = [];
 
-  const xml = await loadXml(entity);
+  const xml = await loadObjectXml(entity);
   const details = xml ? parseAxDataEntityDetails(xml) : null;
   if (!details) {
     warnings.push('Entity XML is not stored in the index and the source file is unavailable; key, read-only and field-kind checks were skipped.');
@@ -171,7 +161,7 @@ export async function checkEntityODataReadiness(db: Database, entityName: string
       continue;
     }
     tablesByDs.set(ds.name.toLowerCase(), tableFields(db, table));
-    const tableXml = await loadXml(table);
+    const tableXml = await loadObjectXml(table);
     const tableType = tableXml ? parseAxTableKeys(tableXml).tableType : '';
     if (tableType && tableType !== 'Regular') {
       blockers.push(`Data source '${ds.name}' uses ${tableType} table '${table.name}'; entities must be backed by regular tables.`);
@@ -258,7 +248,7 @@ export async function generateDataEntityXml(db: Database, spec: DataEntitySpec):
 
   const table = getObject(db, spec.table, 'Table');
   if (!table) return fail(`Grounding failed: table '${spec.table}' was not found in the index.`);
-  const xml = await loadXml(table);
+  const xml = await loadObjectXml(table);
   if (!xml) {
     return fail(`Grounding failed: the XML of table '${table.name}' is not stored in the index and its source file is unavailable, so its keys cannot be read.`);
   }
@@ -709,8 +699,8 @@ export function registerEntityTools(server: McpServer, db: Database) {
     {
       table: z.string(),
       entityName: z.string(),
-      fields: z.array(z.string()).optional().describe('Table fields to map. Default: all non-container fields, including inherited ones.'),
-      keyFields: z.array(z.string()).optional().describe('Entity key. Default: the table replacement key, alternate key, or first unique index.'),
+      fields: z.array(z.string()).max(1000).optional().describe('Table fields to map. Default: all non-container fields, including inherited ones.'),
+      keyFields: z.array(z.string()).max(50).optional().describe('Entity key. Default: the table replacement key, alternate key, or first unique index.'),
       publicEntityName: z.string().optional(),
       publicCollectionName: z.string().optional(),
       readOnly: z.boolean().default(true),
@@ -733,7 +723,7 @@ export function registerEntityTools(server: McpServer, db: Database) {
           access: z.enum(['view', 'maintain']).default('view'),
           grants: z.array(z.enum(GRANT_ORDER)).optional().describe('Explicit grant levels; overrides access.'),
         })
-      ).min(1),
+      ).min(1).max(500),
     },
     async (args) => generateSecurityPrivilegeXml(db, args)
   );
@@ -743,7 +733,7 @@ export function registerEntityTools(server: McpServer, db: Database) {
     'Generate a privilege (Read on each entity), a duty and a role that give read-only access to a list of data entities, e.g. for an AI agent or reporting service account. Preview only',
     {
       roleName: z.string(),
-      entities: z.array(z.string()).min(1),
+      entities: z.array(z.string()).min(1).max(500),
       label: z.string().optional(),
       description: z.string().optional(),
       privilegeName: z.string().optional().describe('Default: <roleName>View'),
@@ -759,7 +749,7 @@ export function registerEntityTools(server: McpServer, db: Database) {
       entityName: z.string(),
       actionName: z.string(),
       instance: z.boolean().default(false).describe('true: bound to one record (this); false: static, bound to the entity set.'),
-      parameters: z.array(z.object({ name: z.string(), type: z.string().describe('X++ primitive (str, int, int64, real, boolean, date, utcdatetime, guid) or an EDT/enum name') })).optional(),
+      parameters: z.array(z.object({ name: z.string(), type: z.string().describe('X++ primitive (str, int, int64, real, boolean, date, utcdatetime, guid) or an EDT/enum name') })).max(100).optional(),
       returnType: z.string().optional().describe('Default: void'),
       extensionName: z.string().optional().describe('Default: <entityName>_Extension'),
       description: z.string().optional(),

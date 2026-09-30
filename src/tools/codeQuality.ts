@@ -1,4 +1,4 @@
-import fs from 'node:fs/promises';
+import { loadObjectXml } from '../indexer/sourceFiles.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { Database } from '../indexer/db.js';
@@ -20,15 +20,6 @@ interface CodeObject {
   name: string;
   raw_xml: string | null;
   file_path: string;
-}
-
-async function loadXml(obj: CodeObject): Promise<string | null> {
-  if (obj.raw_xml) return obj.raw_xml;
-  try {
-    return await fs.readFile(obj.file_path, 'utf-8');
-  } catch {
-    return null;
-  }
 }
 
 function findCodeObject(db: Database, name: string, type?: string): CodeObject | null {
@@ -75,7 +66,7 @@ export async function checkBestPractices(db: Database, args: BestPracticeArgs): 
   } else if (args.objectName) {
     const obj = findCodeObject(db, args.objectName, args.objectType);
     if (!obj) return fail(`${args.objectType ?? 'Object'} ${args.objectName} not found in the index (types with code: ${CODE_TYPES.join(', ')}).`);
-    const xml = await loadXml(obj);
+    const xml = await loadObjectXml(obj);
     if (!xml) return fail(`Source of ${obj.type} ${obj.name} is unavailable: raw XML was not stored and ${obj.file_path} is not readable.`);
     methods = extractMethodSources(xml);
     target = { type: obj.type, name: obj.name };
@@ -148,9 +139,11 @@ export async function fieldAccessReport(db: Database, args: FieldAccessArgs): Pr
   const maxObjects = args.maxObjects ?? 200;
   const types = args.objectType ? [args.objectType] : [...CODE_TYPES];
   const like = `%${args.field.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
-  let candidates = db.prepare(`SELECT type, name, raw_xml, file_path FROM ax_objects
+  // Names only: a short field name matches most of the index, and loading every
+  // candidate's XML at once would hold gigabytes in memory before truncation.
+  let candidates = db.prepare(`SELECT type, name FROM ax_objects
       WHERE type IN (${types.map(() => '?').join(',')}) AND raw_xml LIKE ? ESCAPE '\\' ORDER BY name`)
-    .all(...types, like) as unknown as CodeObject[];
+    .all(...types, like) as unknown as { type: string; name: string }[];
 
   let narrowed = false;
   const usageTable = db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='ax_usage_refs'`).get();
@@ -170,8 +163,10 @@ export async function fieldAccessReport(db: Database, args: FieldAccessArgs): Pr
   }
 
   const accesses: (FieldAccess & { objectType: string; object: string })[] = [];
+  const rawXml = db.prepare('SELECT raw_xml FROM ax_objects WHERE type = ? AND name = ?');
   for (const obj of candidates) {
-    const methods = extractMethodSources(obj.raw_xml ?? '');
+    const row = rawXml.get(obj.type, obj.name) as { raw_xml: string | null } | undefined;
+    const methods = extractMethodSources(row?.raw_xml ?? '');
     const decl = methods.find((m) => m.name === 'classDeclaration');
     const ext = decl ? extensionTarget(decl.source) : null;
     const thisIsTable = (obj.type === 'Table' && obj.name.toLowerCase() === args.table.toLowerCase()) ||

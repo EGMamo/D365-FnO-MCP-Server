@@ -3,10 +3,12 @@
 Source: https://github.com/microsoft/Dynamics-365-FastTrack-Implementation-Assets (MIT, sample code).
 Status: Phases 1–7 shipped. The awesome-msdyn365fo submission is a manual step for the maintainer.
 
-## Current baseline (what the server already does)
-- Indexes 7 AOT types only: Table, Class, Enum, Form, Query, DataEntity, EDT (+ label files) — `src/indexer/scanner.ts`.
+## Baseline before Phase 1 (historical)
+- Indexed 7 AOT types: Table, Class, Enum, Form, Query, DataEntity, EDT (+ label files).
 - 32 tools: metadata/navigation, labels, XRef usages, grounded generators (CoC, table/class ext, RunBase, SysOperation), guarded table-extension writer, knowledge digest.
-- Missing: security objects (Role/Duty/Privilege), menu items, extensions (`Ax*Extension`), runtime/perf data, release/deprecation awareness, OData/Copilot-facing generators.
+- Missing then: security objects (Role/Duty/Privilege), menu items, extensions (`Ax*Extension`), runtime/perf data, release/deprecation awareness, OData/Copilot-facing generators.
+
+Today the server indexes 15 AOT folders plus label files (`src/indexer/scanner.ts`) and registers 54 tools; see the README's tool list.
 
 ## Design guardrails (keep)
 - Local, grounded, read-only by default; writes only via preview + apply.
