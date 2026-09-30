@@ -215,6 +215,31 @@ describe('index upload', () => {
     expect(fs.existsSync(path.join(root, 'served', 'd365_index.db.incoming'))).toBe(false);
   });
 
+  it('stops decoding a package that grows past the declared database size', async () => {
+    const { packageFile, packed, objects } = await makePackage('gzip');
+    const server = await startServer();
+    const outcome = await new IndexUploadClient(server.baseUrl, UPLOADER_KEY).upload({
+      serverUrl: server.baseUrl, apiKey: UPLOADER_KEY, packageFile, packed: { ...packed, rawBytes: 1024 },
+      objects, chunkSize: 4096, pollIntervalMs: 10,
+    });
+    expect(outcome.state).toBe('failed');
+    expect(outcome.error).toMatch(/decodes to more than the declared 1024 bytes/);
+    expect(server.activated).toHaveLength(0);
+    expect(fs.existsSync(path.join(root, 'served', 'd365_index.db.incoming'))).toBe(false);
+  });
+
+  it('keeps other upload keys away from an upload in progress', async () => {
+    const { packed } = await makePackage('gzip');
+    const server = await startServer();
+    const manager = server.manager!;
+    const session = manager.create({ ...packed, chunkSize: packed.bytes }, 'uploader');
+    const body = fs.createReadStream(path.join(root, 'package-gzip'));
+    await expect(manager.writeChunk(session.id, 'other', 0, body, packed.sha256)).rejects.toMatchObject({ status: 403 });
+    body.destroy();
+    expect(() => manager.complete(session.id, 'other')).toThrow(/belongs to 'uploader'/);
+    expect(() => manager.abort(session.id, 'other')).toThrow(/belongs to 'uploader'/);
+  });
+
   it('rejects an object count that differs from the declaration', async () => {
     const { packageFile, packed, objects } = await makePackage('gzip');
     const server = await startServer();

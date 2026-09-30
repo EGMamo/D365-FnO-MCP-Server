@@ -2,11 +2,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
-import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import express, { type Request, type Response, type Router } from 'express';
 import { z } from 'zod';
-import { createDecompressor, hashFile, HashingTap, INDEX_ENCODINGS, type IndexEncoding } from '../indexer/compression.js';
+import { byteLimit, createDecompressor, hashFile, HashingTap, INDEX_ENCODINGS, type IndexEncoding } from '../indexer/compression.js';
 import { getMeta, META_KEYS } from '../indexer/db.js';
 import { getUsageSnapshotStatus } from '../indexer/xrefUsage.js';
 import { publishedDbFileName, versionName } from '../indexer/publishIndex.js';
@@ -142,18 +141,6 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-/** Rejects a request body that runs past the chunk's declared length. */
-function lengthLimit(limit: number): Transform {
-  let seen = 0;
-  return new Transform({
-    transform(chunk: Buffer, _encoding, callback) {
-      seen += chunk.length;
-      if (seen > limit) callback(new UploadError(400, `Chunk is longer than the expected ${limit} bytes.`));
-      else callback(null, chunk);
-    },
-  });
-}
-
 export class IndexUploadManager {
   private readonly sessions = new Map<string, UploadSession>();
   private readonly now: () => number;
@@ -268,8 +255,22 @@ export class IndexUploadManager {
     return index === session.chunkCount - 1 ? bytes - chunkSize * index : chunkSize;
   }
 
-  async writeChunk(id: string, index: number, body: NodeJS.ReadableStream, sha256: string, declaredLength?: number): Promise<UploadSession> {
+  /** The session, provided `owner` (an API key name) started it; other upload keys may not touch it. */
+  private owned(id: string, owner: string): UploadSession {
     const session = this.get(id);
+    if (session.owner !== owner) throw new UploadError(403, `Upload ${id} belongs to '${session.owner}'.`);
+    return session;
+  }
+
+  async writeChunk(
+    id: string,
+    owner: string,
+    index: number,
+    body: NodeJS.ReadableStream,
+    sha256: string,
+    declaredLength?: number
+  ): Promise<UploadSession> {
+    const session = this.owned(id, owner);
     if (session.state !== 'receiving') throw new UploadError(409, `Upload ${id} is ${session.state}; it no longer accepts chunks.`);
     if (!Number.isInteger(index) || index < 0 || index >= session.chunkCount) {
       throw new UploadError(400, `Chunk index must be 0-${session.chunkCount - 1}.`);
@@ -291,7 +292,7 @@ export class IndexUploadManager {
       const tap = new HashingTap();
       await pipeline(
         body,
-        lengthLimit(expected),
+        byteLimit(expected, () => new UploadError(400, `Chunk is longer than the expected ${expected} bytes.`)),
         tap,
         fs.createWriteStream(session.packageFile, { flags: 'r+', start: index * session.declaration.chunkSize })
       );
@@ -324,8 +325,8 @@ export class IndexUploadManager {
   }
 
   /** Starts verification and activation in the background; poll `get`. */
-  complete(id: string): UploadSession {
-    const session = this.get(id);
+  complete(id: string, owner: string): UploadSession {
+    const session = this.owned(id, owner);
     if (session.state !== 'receiving') {
       if (session.state === 'aborted') throw new UploadError(409, `Upload ${id} was aborted.`);
       return session;
@@ -354,8 +355,7 @@ export class IndexUploadManager {
   }
 
   abort(id: string, owner: string): UploadSession {
-    const session = this.get(id);
-    if (session.owner !== owner) throw new UploadError(403, `Upload ${id} belongs to '${session.owner}'.`);
+    const session = this.owned(id, owner);
     if (session.state === 'receiving') {
       session.state = 'aborted';
       session.updatedAt = this.now();
@@ -387,6 +387,8 @@ export class IndexUploadManager {
         await pipeline(
           fs.createReadStream(session.packageFile, { highWaterMark: 1024 * 1024 }),
           createDecompressor(declaration.encoding),
+          // A package that decodes past the declared size is refused before it fills the disk.
+          byteLimit(declaration.rawBytes, () => new Error(`it decodes to more than the declared ${declaration.rawBytes} bytes`)),
           decoded,
           fs.createWriteStream(incoming)
         );
@@ -650,7 +652,7 @@ export function createIndexAdminRouter(options: IndexAdminRouterOptions): Router
     const declaredLength = lengthHeader === undefined ? undefined : Number(lengthHeader);
     const sha256 = String(req.headers['x-content-sha256'] ?? '').toLowerCase();
     try {
-      const session = await manager.writeChunk(req.params.id, Number(req.params.index), req, sha256, declaredLength);
+      const session = await manager.writeChunk(req.params.id, res.locals.apiKeyName as string, Number(req.params.index), req, sha256, declaredLength);
       res.json({ index: Number(req.params.index), sha256, receivedChunks: session.receivedCount, chunkCount: session.chunkCount });
     } catch (err) {
       // Drain what is left so the connection can be reused for the retry.
@@ -663,7 +665,7 @@ export function createIndexAdminRouter(options: IndexAdminRouterOptions): Router
     const manager = requireUploader(req, res);
     if (!manager) return;
     try {
-      res.status(202).json(manager.describe(manager.complete(req.params.id)));
+      res.status(202).json(manager.describe(manager.complete(req.params.id, res.locals.apiKeyName as string)));
     } catch (err) {
       send(res, err);
     }

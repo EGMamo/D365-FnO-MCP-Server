@@ -5,7 +5,7 @@ import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import type { ReadableStream as WebReadableStream } from 'node:stream/web';
 import { z } from 'zod';
-import { createDecompressor, HashingTap, INDEX_ENCODINGS, type IndexEncoding } from './compression.js';
+import { byteLimit, createDecompressor, HashingTap, INDEX_ENCODINGS, type IndexEncoding } from './compression.js';
 import { logger } from '../utils/logger.js';
 
 /**
@@ -85,12 +85,14 @@ export function redactUrl(url: string | URL): string {
 
 /**
  * Resolves the database URL named by a manifest. A relative URL inherits the
- * manifest's query string so a container-scoped SAS covers both blobs.
+ * manifest's query string so a container-scoped SAS covers both blobs, but
+ * only while it stays on the manifest's origin: a protocol-relative
+ * `//other-host/...` must not carry the SAS token to another host.
  */
 function resolveDbUrl(manifestUrl: URL, dbUrl: string): URL {
   if (/^https?:\/\//i.test(dbUrl)) return new URL(dbUrl);
   const resolved = new URL(dbUrl, manifestUrl);
-  if (!resolved.search && manifestUrl.search) resolved.search = manifestUrl.search;
+  if (!resolved.search && manifestUrl.search && resolved.origin === manifestUrl.origin) resolved.search = manifestUrl.search;
   return resolved;
 }
 
@@ -237,8 +239,12 @@ export async function syncIndexFromManifest(options: SyncOptions): Promise<SyncR
   try {
     await pipeline(
       Readable.fromWeb(response.body as WebReadableStream<Uint8Array>),
+      // Neither side may grow past what the manifest declares, so a wrong or
+      // hostile blob cannot fill the disk before the checksum rejects it.
+      byteLimit(manifest.db.bytes, () => new Error(`more than the ${manifest.db.bytes} bytes the manifest declares`)),
       encoded,
       createDecompressor(manifestEncoding(manifest.db)),
+      byteLimit(manifest.db.rawBytes, () => new Error(`it decodes to more than the ${manifest.db.rawBytes} bytes the manifest declares`)),
       decoded,
       fs.createWriteStream(tmp)
     );
