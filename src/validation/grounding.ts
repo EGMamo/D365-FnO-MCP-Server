@@ -57,7 +57,7 @@ function get(db: Database, name: string, type: string): AxObject | null {
 }
 
 /** Resolve a Class or Table (in that order) by name. Returns null when unknown. */
-export function resolveClassOrTable(db: Database, name: string): AxObject | null {
+function resolveClassOrTable(db: Database, name: string): AxObject | null {
   if (!name) return null;
   return get(db, name, 'Class') ?? get(db, name, 'Table');
 }
