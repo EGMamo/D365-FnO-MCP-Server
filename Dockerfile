@@ -12,7 +12,7 @@
 #   docker build --secret id=npmrc,src=$HOME/.npmrc .
 # The mount is empty and harmless when no secret is given.
 
-FROM node:24-slim AS build
+FROM node:26-slim AS build
 # The base image's npm would otherwise print an upgrade notice on every install.
 ENV NPM_CONFIG_UPDATE_NOTIFIER=false
 WORKDIR /app
@@ -24,7 +24,7 @@ RUN --mount=type=secret,id=npmrc,target=/root/.npmrc \
 COPY src ./src
 RUN npm run build
 
-FROM node:24-slim AS runtime
+FROM node:26-slim AS runtime
 ENV NODE_ENV=production \
     NPM_CONFIG_UPDATE_NOTIFIER=false \
     MCP_TRANSPORT=http \
