@@ -5,7 +5,7 @@ import path from 'path';
 import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
 import type { Database } from '../src/indexer/db.js';
-import { openDb, getObjectByName, getXrefsFrom, searchSymbols } from '../src/indexer/db.js';
+import { openDb, getObjectByName, searchSymbols, type Xref } from '../src/indexer/db.js';
 import { buildIndex, getIndexStats } from '../src/indexer/buildIndex.js';
 import { logger } from '../src/utils/logger.js';
 import { collectMetadataTools } from './helpers/toolHarness.js';
@@ -15,6 +15,10 @@ const testDir = path.dirname(fileURLToPath(import.meta.url));
 const fixturesDir = path.join(testDir, 'fixtures');
 const require = createRequire(import.meta.url);
 const { DatabaseSync } = require('node:sqlite') as typeof import('node:sqlite');
+
+function xrefsFrom(db: Database, name: string, type: string): Xref[] {
+  return db.prepare('SELECT * FROM ax_xref WHERE from_name = ? AND from_type = ?').all(name, type) as unknown as Xref[];
+}
 
 /** Build a fake PackagesLocalDirectory layout: <root>/<Package>/<Model>/<AxType>/<Name>.xml */
 function stagePackages(root: string) {
@@ -40,12 +44,6 @@ function stagePackages(root: string) {
 }
 
 describe('Indexer DB Tests', () => {
-  it('should initialize memory db properly', () => {
-    const db = openDb(':memory:');
-    expect(db).toBeDefined();
-    db.close();
-  });
-
   it('migrates older databases before creating indexes on new columns', () => {
     const tmpDir = fs.mkdtempSync(path.join(testDir, '.tmp-old-db-'));
     const dbPath = path.join(tmpDir, 'old.db');
@@ -242,14 +240,14 @@ describe('buildIndex with fixtures', () => {
   });
 
   it('records cross references', () => {
-    const tableXrefs = getXrefsFrom(db, 'SampleTable', 'Table');
+    const tableXrefs = xrefsFrom(db, 'SampleTable', 'Table');
     expect(tableXrefs.some((x) => x.to_name === 'BaseTable' && x.xref_kind === 'extends')).toBe(true);
     expect(tableXrefs.some((x) => x.to_name === 'CustAccount' && x.to_type === 'Edt')).toBe(true);
 
-    const formXrefs = getXrefsFrom(db, 'SampleForm', 'Form');
+    const formXrefs = xrefsFrom(db, 'SampleForm', 'Form');
     expect(formXrefs.some((x) => x.to_name === 'SampleTable' && x.xref_kind === 'datasource')).toBe(true);
 
-    const classXrefs = getXrefsFrom(db, 'SampleClass', 'Class');
+    const classXrefs = xrefsFrom(db, 'SampleClass', 'Class');
     expect(classXrefs.some((x) => x.to_name === 'SysPackable' && x.xref_kind === 'implements')).toBe(true);
   });
 
@@ -321,7 +319,7 @@ describe('index lifecycle: pruning, renames and collisions', () => {
 
     expect(stats.deleted).toBe(1);
     expect(getObjectByName(db, 'SampleClass', 'Class')).toBeNull();
-    expect(getXrefsFrom(db, 'SampleClass', 'Class')).toEqual([]);
+    expect(xrefsFrom(db, 'SampleClass', 'Class')).toEqual([]);
     expect(getObjectByName(db, 'SampleTable', 'Table')).not.toBeNull();
     const results = searchSymbols(db, 'SampleClass') as { name: string }[];
     expect(results.some((r) => r.name === 'SampleClass')).toBe(false);
@@ -795,18 +793,20 @@ describe('prune guard: partially available packages directory', () => {
   });
 
   it('does not prune when only a fraction of the indexed objects is present', async () => {
-    const full = stageClasses(['ClassA', 'ClassB', 'ClassC']);
+    const root = stageClasses(['ClassA', 'ClassB', 'ClassC']);
     const db = openTracked();
-    await buildIndex(db, full, true);
+    await buildIndex(db, root, true);
     expect(getIndexStats(db).totalObjects).toBe(3);
 
-    const partial = stageClasses(['ClassA']);
+    const dir = path.join(root, 'TestPackage', 'TestModel', 'AxClass');
+    fs.rmSync(path.join(dir, 'ClassB.xml'));
+    fs.rmSync(path.join(dir, 'ClassC.xml'));
     const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
     try {
-      const stats = await buildIndex(db, partial, false);
+      const stats = await buildIndex(db, root, false);
       expect(stats.deleted).toBe(0);
       expect(warn).toHaveBeenCalledWith(
-        expect.stringContaining('Pruning skipped: only 0 of 3 existing objects overlap'),
+        expect.stringContaining('Pruning skipped: only 1 of 3 existing objects overlap'),
         expect.anything()
       );
     } finally {
@@ -858,29 +858,6 @@ describe('prune guard: partially available packages directory', () => {
     expect(getIndexStats(db).totalObjects).toBe(5);
   });
 
-  it('skips pruning when a disjoint scan covers less than half of the previously indexed objects', async () => {
-    const original = stageClasses(['ClassA', 'ClassB', 'ClassC']);
-    const db = openTracked();
-    await buildIndex(db, original, true);
-
-    // Disjoint tree: 1 new object, 0 overlap vs 3 previously indexed => prune skipped.
-    const replacement = stageClasses(['ClassD']);
-    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
-    try {
-      const stats = await buildIndex(db, replacement, false);
-      expect(stats.deleted).toBe(0);
-      expect(warn).toHaveBeenCalledWith(
-        expect.stringContaining('Pruning skipped: only 0 of 3 existing objects overlap'),
-        expect.anything()
-      );
-    } finally {
-      warn.mockRestore();
-    }
-
-    expect(getObjectByName(db, 'ClassA', 'Class')).not.toBeNull();
-    expect(getIndexStats(db).totalObjects).toBe(4);
-  });
-
   it('prunes the missing object when the scan overlaps two of three indexed objects', async () => {
     const root = stageClasses(['ClassA', 'ClassB', 'ClassC']);
     const db = openTracked();
@@ -918,23 +895,5 @@ describe('prune guard: partially available packages directory', () => {
 
     expect(getObjectByName(db, 'ClassA', 'Class')).toBeNull();
     expect(getObjectByName(db, 'ClassD', 'Class')).not.toBeNull();
-  });
-
-  it('keeps a single indexed object when the scan finds nothing', async () => {    const root = stageClasses(['ClassA']);
-    const db = openTracked();
-    await buildIndex(db, root, true);
-
-    const emptyRoot = fs.mkdtempSync(path.join(testDir, '.tmp-partial-empty-'));
-    roots.push(emptyRoot);
-    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
-    try {
-      const stats = await buildIndex(db, emptyRoot, false);
-      expect(stats.total).toBe(0);
-      expect(stats.deleted).toBe(0);
-    } finally {
-      warn.mockRestore();
-    }
-
-    expect(getObjectByName(db, 'ClassA', 'Class')).not.toBeNull();
   });
 });

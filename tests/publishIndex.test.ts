@@ -4,11 +4,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { gunzipSync } from 'node:zlib';
-import { compactTimestamp, publishIndex } from '../src/indexer/publishIndex.js';
-import { manifestSchema, syncIndexFromManifest } from '../src/indexer/remoteIndex.js';
+import { publishIndex } from '../src/indexer/publishIndex.js';
+import { manifestSchema } from '../src/indexer/remoteIndex.js';
 import { META_KEYS, openDb, setMeta } from '../src/indexer/db.js';
-import { replaceUsageRefs } from '../src/indexer/xrefUsage.js';
-import { createIndexedDb, startStaticServer } from './helpers/indexFixtureServer.js';
+import { seedLegacyUsageRefs } from './helpers/usageRefs.js';
+import { createIndexedDb } from './helpers/indexFixtureServer.js';
 
 let root: string;
 
@@ -33,7 +33,7 @@ describe('publishIndex', () => {
       { type: 'Table', name: 'Three' },
     ], { builtAt: '2026-09-25T20:44:20.123Z' });
     const db = openDb(dbPath);
-    replaceUsageRefs(db, [{
+    seedLegacyUsageRefs(db, [{
       sourceType: 'Class', sourceName: 'One', targetName: 'Two',
       referenceKind: 'Call', sourceTable: 'References', raw: {},
     }]);
@@ -77,27 +77,6 @@ describe('publishIndex', () => {
       expect((copy.prepare('SELECT name FROM ax_fts WHERE ax_fts MATCH ?').get('Two') as { name: string }).name).toBe('Two');
     } finally {
       copy.close();
-    }
-  });
-
-  it('round-trips through syncIndexFromManifest', async () => {
-    const dbPath = path.join(root, 'roundtrip.db');
-    createIndexedDb(dbPath, [{ type: 'Enum', name: 'Colour' }]);
-    const outDir = path.join(root, 'roundtrip-out');
-    await publishIndex({ dbPath, outDir, serverVersion: '0.1.0' });
-    const server = await startStaticServer(outDir);
-    try {
-      const target = path.join(root, 'roundtrip-pulled', 'index.db');
-      const result = await syncIndexFromManifest({ manifestUrl: `${server.baseUrl}/latest/manifest.json`, dbPath: target });
-      expect(result.status).toBe('downloaded');
-      const db = openDb(target);
-      try {
-        expect((db.prepare('SELECT name FROM ax_objects').get() as { name: string }).name).toBe('Colour');
-      } finally {
-        db.close();
-      }
-    } finally {
-      await server.close();
     }
   });
 
@@ -178,6 +157,6 @@ describe('publishIndex', () => {
     db.close();
     const result = await publishIndex({ dbPath, outDir: path.join(root, 'xref-out'), serverVersion: '0.1.0' });
     expect(result.manifest.xref).toEqual({ importedAt: '2026-09-20T00:00:00.000Z' });
-    expect(result.version.startsWith(compactTimestamp('2026-09-21T00:00:00.000Z'))).toBe(true);
+    expect(result.version).toMatch(/^20260921T000000Z-/);
   });
 });

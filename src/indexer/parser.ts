@@ -14,7 +14,7 @@ export type XmlNode = Record<string, unknown>;
  * fast-xml-parser collapses a single repeated child into an object and only
  * produces an array when there are 2+ occurrences. This normalizes both cases.
  */
-export function ensureArray<T>(value: T | T[] | undefined | null): T[] {
+function ensureArray<T>(value: T | T[] | undefined | null): T[] {
   if (value === undefined || value === null) return [];
   return Array.isArray(value) ? value : [value];
 }

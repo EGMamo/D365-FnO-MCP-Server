@@ -188,57 +188,6 @@ export function publishUsageSnapshot(
   }
 }
 
-export function replaceUsageRefs(db: Database, refs: UsageRef[]): void {
-  createUsageSchema(db);
-  db.exec('BEGIN');
-  try {
-    db.exec('DELETE FROM ax_usage_refs');
-    const stmt = db.prepare(`
-      INSERT INTO ax_usage_refs
-      (source_type, source_name, source_method, target_type, target_name, target_method,
-       reference_kind, source_line, source_column, occurrence_count, source_table, raw_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    for (const ref of refs) {
-      stmt.run(ref.sourceType, ref.sourceName, ref.sourceMethod ?? null, ref.targetType ?? null, ref.targetName,
-        ref.targetMethod ?? null, ref.referenceKind, ref.sourceLine ?? null, ref.sourceColumn ?? null,
-        ref.occurrenceCount ?? null, ref.sourceTable, JSON.stringify(ref.raw));
-    }
-
-    db.exec('COMMIT');
-  } catch (err) {
-    db.exec('ROLLBACK');
-    throw err;
-  }
-
-}
-
-export function clearUsageRefs(db: Database): void {
-  db.exec('DELETE FROM ax_usage_refs');
-}
-
-export function insertUsageRefs(db: Database, refs: UsageRef[]): void {
-  if (refs.length === 0) return;
-  const stmt = db.prepare(`
-    INSERT INTO ax_usage_refs
-    (source_type, source_name, source_method, target_type, target_name, target_method,
-     reference_kind, source_line, source_column, occurrence_count, source_table, raw_json)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-  db.exec('BEGIN');
-  try {
-    for (const ref of refs) {
-      stmt.run(ref.sourceType, ref.sourceName, ref.sourceMethod ?? null, ref.targetType ?? null, ref.targetName,
-        ref.targetMethod ?? null, ref.referenceKind, ref.sourceLine ?? null, ref.sourceColumn ?? null,
-        ref.occurrenceCount ?? null, ref.sourceTable, JSON.stringify(ref.raw));
-    }
-    db.exec('COMMIT');
-  } catch (err) {
-    db.exec('ROLLBACK');
-    throw err;
-  }
-}
-
 export function findUsageRefs(
   db: Database,
   targetName: string,

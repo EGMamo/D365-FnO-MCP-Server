@@ -87,7 +87,7 @@ export function redactUrl(url: string | URL): string {
  * Resolves the database URL named by a manifest. A relative URL inherits the
  * manifest's query string so a container-scoped SAS covers both blobs.
  */
-export function resolveDbUrl(manifestUrl: URL, dbUrl: string): URL {
+function resolveDbUrl(manifestUrl: URL, dbUrl: string): URL {
   if (/^https?:\/\//i.test(dbUrl)) return new URL(dbUrl);
   const resolved = new URL(dbUrl, manifestUrl);
   if (!resolved.search && manifestUrl.search) resolved.search = manifestUrl.search;

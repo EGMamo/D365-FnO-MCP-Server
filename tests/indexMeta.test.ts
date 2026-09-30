@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { getAllMeta, getMeta, META_KEYS, openDb, type Database } from '../src/indexer/db.js';
+import { getMeta, META_KEYS, openDb, type Database } from '../src/indexer/db.js';
 import { buildIndex, getIndexStats } from '../src/indexer/buildIndex.js';
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
@@ -36,7 +36,9 @@ describe('index build metadata', () => {
   });
 
   it('never stores the full packages path', () => {
-    const meta = getAllMeta(db);
+    const meta = Object.fromEntries(
+      (db.prepare('SELECT key, value FROM ax_meta').all() as { key: string; value: string }[]).map((r) => [r.key, r.value])
+    );
     expect(meta[META_KEYS.packagesDirBasename]).toBe(path.basename(root));
     expect(meta[META_KEYS.packagesDirHash]).toMatch(/^[0-9a-f]{16}$/);
     for (const value of Object.values(meta)) expect(value).not.toContain(root);

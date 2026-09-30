@@ -210,11 +210,6 @@ export function getMeta(db: Database, key: string): string | null {
   return row?.value ?? null;
 }
 
-export function getAllMeta(db: Database): Record<string, string> {
-  const rows = db.prepare(`SELECT key, value FROM ax_meta ORDER BY key`).all() as { key: string; value: string }[];
-  return Object.fromEntries(rows.map((row) => [row.key, row.value]));
-}
-
 export function upsertObject(db: Database, obj: any): number | bigint {
   const stmt = db.prepare(`
     INSERT INTO ax_objects (type, name, package, model, file_path, raw_xml, file_mtime)
@@ -438,11 +433,6 @@ export function countLabelsFromSource(db: Database, sourceFile: string): number 
   }).count;
 }
 
-/** Current number of indexed objects, used to sanity-check a scan before pruning. */
-export function countObjects(db: Database): number {
-  return (db.prepare(`SELECT COUNT(*) as count FROM ax_objects`).get() as { count: number }).count;
-}
-
 /**
  * How many of the given already-indexed object file paths were seen by a scan.
  * `existingPaths` must be a snapshot taken *before* the run inserts new rows,
@@ -520,23 +510,6 @@ export function prune(db: Database, seenObjectFiles: Set<string>, seenLabelFiles
     .run();
 
   return { objects: doomed.length, labels: doomedLabels.length, xrefs: Number(orphaned.changes) };
-}
-
-export function upsertXref(db: Database, xrefs: any[]) {
-  if (!xrefs || xrefs.length === 0) return;
-
-  const insertStmt = db.prepare(`
-    INSERT INTO ax_xref (from_type, from_name, to_type, to_name, xref_kind)
-    VALUES (?, ?, ?, ?, ?)
-  `);
-
-  const insertMany = transaction(db, (items: any[]) => {
-    for (const item of items) {
-      insertStmt.run(item.fromType, item.fromName, item.toType, item.toName, item.xrefKind);
-    }
-  });
-
-  insertMany(xrefs);
 }
 
 export function deleteXrefsFrom(db: Database, fromType: string, fromName: string) {
@@ -990,10 +963,6 @@ export function getXrefsTo(
     params.push(limit);
   }
   return db.prepare(sql).all(...params) as unknown as Xref[];
-}
-
-export function getXrefsFrom(db: Database, name: string, type: string): Xref[] {
-  return db.prepare(`SELECT * FROM ax_xref WHERE from_name = ? AND from_type = ?`).all(name, type) as unknown as Xref[];
 }
 
 export function getAllObjects(db: Database, type?: string, pkg?: string, offset: number = 0, limit: number = 50) {
