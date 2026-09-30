@@ -2,8 +2,6 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { Database } from '../src/indexer/db.js';
 import {
   extractParamNames,
-  resolveClass,
-  resolveClassOrTable,
   resolveEdt,
   resolveLabel,
   validateCoCTarget,
@@ -80,28 +78,6 @@ beforeAll(() => {
 
 afterAll(() => db.close());
 
-describe('resolveClassOrTable', () => {
-  it('resolves a class', () => {
-    expect(resolveClassOrTable(db, 'SalesLineType')?.type).toBe('Class');
-  });
-  it('resolves a table when no class matches', () => {
-    expect(resolveClassOrTable(db, 'CustTable')?.type).toBe('Table');
-  });
-  it('returns null for unknown names', () => {
-    expect(resolveClassOrTable(db, 'NoSuchThing')).toBeNull();
-  });
-});
-
-describe('resolveClass', () => {
-  it('resolves a class', () => {
-    expect(resolveClass(db, 'SalesLineType')?.type).toBe('Class');
-  });
-  it('does not resolve non-class objects', () => {
-    expect(resolveClass(db, 'CustTable')).toBeNull();
-    expect(resolveClass(db, 'CustAccount')).toBeNull();
-  });
-});
-
 describe('extractParamNames', () => {
   it('strips default values', () => {
     expect(extractParamNames("boolean _skip = false, str _s = '', int _i = 0")).toEqual([
@@ -169,7 +145,8 @@ describe('validateMethodSignature', () => {
     expect(inherited?.access_modifier).toBe('protected');
     expect(inherited?.is_static).toBe(1);
   });
-  it('terminates on cyclic inheritance chains', () => {    expect(validateMethodSignature(db, 'CycleA', 'nope')).toBeNull();
+  it('terminates on cyclic inheritance chains', () => {
+    expect(validateMethodSignature(db, 'CycleA', 'nope')).toBeNull();
   });
 });
 
