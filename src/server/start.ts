@@ -288,6 +288,12 @@ export async function startServer(): Promise<void> {
     return;
   }
 
+  if (config.enableWriteTools) {
+    logger.warn('Write tools are enabled over HTTP: every API key can write metadata and knowledge base articles', {
+      keys: config.apiKeys.map((entry) => entry.name).join(', '),
+    });
+  }
+
   const admin = createAdminRoutes();
   const http = startHttpServer(createMcpServer, {
     port: config.port,

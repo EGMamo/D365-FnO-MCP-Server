@@ -269,8 +269,11 @@ describe('CLI', () => {
     expect(again.code).toBe(1);
     expect(again.stderr).toContain('--force');
     expect(fs.readFileSync(path.join(setupDir, '.env'), 'utf-8')).toBe(envFile);
+    fs.chmodSync(path.join(setupDir, '.env'), 0o644);
     expect((await runCli([...args, '--force'], env, setupDir)).code).toBe(0);
     expect(fs.readFileSync(path.join(setupDir, '.env'), 'utf-8')).toContain(`MCP_API_KEY=${'n'.repeat(40)}`);
+    // The replaced file holds a new key, so it must not stay readable by others.
+    if (process.platform !== 'win32') expect(fs.statSync(path.join(setupDir, '.env')).mode & 0o777).toBe(0o600);
 
     fs.rmSync(setupDir, { recursive: true, force: true });
   }, 120_000);

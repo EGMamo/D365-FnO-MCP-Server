@@ -699,8 +699,8 @@ export function registerEntityTools(server: McpServer, db: Database) {
     {
       table: z.string(),
       entityName: z.string(),
-      fields: z.array(z.string()).optional().describe('Table fields to map. Default: all non-container fields, including inherited ones.'),
-      keyFields: z.array(z.string()).optional().describe('Entity key. Default: the table replacement key, alternate key, or first unique index.'),
+      fields: z.array(z.string()).max(1000).optional().describe('Table fields to map. Default: all non-container fields, including inherited ones.'),
+      keyFields: z.array(z.string()).max(50).optional().describe('Entity key. Default: the table replacement key, alternate key, or first unique index.'),
       publicEntityName: z.string().optional(),
       publicCollectionName: z.string().optional(),
       readOnly: z.boolean().default(true),
@@ -723,7 +723,7 @@ export function registerEntityTools(server: McpServer, db: Database) {
           access: z.enum(['view', 'maintain']).default('view'),
           grants: z.array(z.enum(GRANT_ORDER)).optional().describe('Explicit grant levels; overrides access.'),
         })
-      ).min(1),
+      ).min(1).max(500),
     },
     async (args) => generateSecurityPrivilegeXml(db, args)
   );
@@ -733,7 +733,7 @@ export function registerEntityTools(server: McpServer, db: Database) {
     'Generate a privilege (Read on each entity), a duty and a role that give read-only access to a list of data entities, e.g. for an AI agent or reporting service account. Preview only',
     {
       roleName: z.string(),
-      entities: z.array(z.string()).min(1),
+      entities: z.array(z.string()).min(1).max(500),
       label: z.string().optional(),
       description: z.string().optional(),
       privilegeName: z.string().optional().describe('Default: <roleName>View'),
@@ -749,7 +749,7 @@ export function registerEntityTools(server: McpServer, db: Database) {
       entityName: z.string(),
       actionName: z.string(),
       instance: z.boolean().default(false).describe('true: bound to one record (this); false: static, bound to the entity set.'),
-      parameters: z.array(z.object({ name: z.string(), type: z.string().describe('X++ primitive (str, int, int64, real, boolean, date, utcdatetime, guid) or an EDT/enum name') })).optional(),
+      parameters: z.array(z.object({ name: z.string(), type: z.string().describe('X++ primitive (str, int, int64, real, boolean, date, utcdatetime, guid) or an EDT/enum name') })).max(100).optional(),
       returnType: z.string().optional().describe('Default: void'),
       extensionName: z.string().optional().describe('Default: <entityName>_Extension'),
       description: z.string().optional(),

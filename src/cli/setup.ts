@@ -110,6 +110,8 @@ export async function setupCommand(options: SetupOptions): Promise<number> {
   }
 
   fs.writeFileSync(envPath, renderEnv(values), { mode: 0o600 });
+  // `mode` only applies when the file is created; a replaced .env keeps its old mode.
+  fs.chmodSync(envPath, 0o600);
   console.log(`Wrote ${envPath}`);
   console.log('Next: run `d365-fno-mcp-server doctor`, then `d365-fno-mcp-server index`.');
   return 0;
