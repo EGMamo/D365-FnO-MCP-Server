@@ -26,6 +26,9 @@ internal sealed class ExtensionServices : IDisposable
     /// <summary>Long enough for a server that is still downloading its index to answer /health.</summary>
     public HttpClient Http { get; } = new() { Timeout = TimeSpan.FromSeconds(60) };
 
+    /// <summary>One index run at a time: the Index and Upload window and Update Index share the index file.</summary>
+    public SemaphoreSlim IndexJobLock { get; } = new(1, 1);
+
     public async Task WriteOutputAsync(string text, CancellationToken cancellationToken)
     {
         await this.outputLock.WaitAsync(cancellationToken);
@@ -49,6 +52,7 @@ internal sealed class ExtensionServices : IDisposable
         this.output?.Dispose();
         this.Http.Dispose();
         this.outputLock.Dispose();
+        this.IndexJobLock.Dispose();
     }
 
     private async Task DrainLogAsync()

@@ -33,6 +33,8 @@ internal sealed class ExtensionEntrypoint : Microsoft.VisualStudio.Extensibility
             MenuChild.Command<TestConnectionCommand>(),
             MenuChild.Separator,
             MenuChild.Command<IndexAndUploadCommand>(),
+            MenuChild.Command<CheckIndexFreshnessCommand>(),
+            MenuChild.Command<UpdateIndexCommand>(),
         ],
     };
 

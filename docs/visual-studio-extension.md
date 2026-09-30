@@ -11,8 +11,9 @@ things:
    and compression. Each chunk, and then the whole upload, is checked with a SHA-256 checksum
    before the server switches to the new index.
 
-The extension adds an **Extensions > D365 F&O MCP** menu with three commands: **Configure
-Connection...**, **Test Connection** and **Index and Upload...**.
+The extension adds an **Extensions > D365 F&O MCP** menu with five commands: **Configure
+Connection...**, **Test Connection**, **Index and Upload...**, **Check Index Freshness** and
+**Update Index**.
 
 The source is in [`vs-extension/`](../vs-extension/README.md). It is an out-of-process
 VisualStudio.Extensibility extension. Indexing and uploading are done by the
@@ -166,6 +167,41 @@ The server replaces nothing until all three checks pass. Then it closes open MCP
 reconnect on their own), swaps the database in and serves it. A failed check leaves the old index
 in place and reports the expected and actual values.
 
+## Check Index Freshness
+
+**Check Index Freshness** tells you whether the index the server serves still matches the
+`PackagesLocalDirectory` on this machine. It uses the server, key, packages folder and index file
+saved by **Configure Connection** and **Index and Upload**, so run Index and Upload once first. It
+builds and uploads nothing. Progress shows in Visual Studio's background tasks, the answer in a
+prompt, and the list of changed files in the **D365 F&O MCP** Output pane.
+
+It runs `index-status --packages-dir <folder> --db-path <file> --server <url> --json` with the API
+key in `D365_MCP_API_KEY`, which:
+
+1. asks the server which index it serves (`GET /admin/index`: build time, object count, XRef import);
+2. scans the packages folder the same way `index` does;
+3. compares the two:
+   - When the local index is the one the server serves (same build time) or newer, each file is
+     compared with the path and modification time the local index recorded, the rule `index` uses
+     to skip unchanged files. Added, changed and removed files are all counted.
+   - Otherwise (no local index, or someone else uploaded a newer one), files modified after the
+     server's index was built count as changed. Removed files cannot be seen this way.
+
+The index is out of date when any file changed, or when the local index is newer than the served
+one (built but never uploaded). The prompt then offers **Update index**.
+
+Changes in the XRef database are not detected: the prompt shows when the served XRef data was
+imported, and Update Index re-imports it when the XRef option is on.
+
+## Update Index
+
+**Update Index** runs the same steps as Index and Upload with the saved settings, without opening
+the window, and always updates the existing index file in place (**Build a new index** is ignored).
+Only files that changed since the last run are parsed again, so an update after a few edits is much
+faster than the first build. It uses the saved compression, chunking and XRef choices, and the
+upload is verified the same way. Only one index run happens at a time: Update Index and the
+Index and Upload window wait for each other.
+
 ## Server setup
 
 | Variable | Default | Meaning |
@@ -198,7 +234,7 @@ the published one.
 | Settings (URL, folders, options) | `%LOCALAPPDATA%\D365FnoMcp\settings.json` |
 | API key, SQL password | Windows Credential Manager, `D365FnoMcp:*` generic credentials |
 | Index built by the extension | `%LOCALAPPDATA%\D365FnoMcp\index\d365_index.db` (configurable) |
-| Log | The Index and Upload window, and the **D365 F&O MCP** Output pane |
+| Log | The Index and Upload window, and the **D365 F&O MCP** Output pane (also Check Index Freshness and Update Index) |
 
 The CLI runs `node <package>/dist/src/index.js` directly: it finds the package behind npm's
 `d365-fno-mcp-server.cmd` shim on `PATH`. To use a checkout instead, set `"Cli"` in

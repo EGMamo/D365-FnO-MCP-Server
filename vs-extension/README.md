@@ -5,9 +5,9 @@ use it: [docs/visual-studio-extension.md](../docs/visual-studio-extension.md).
 
 | Project | Target | Contents |
 | --- | --- | --- |
-| `src/D365FnoMcp.Core` | `net8.0` | Settings, `.mcp.json` merging, the connection test, locating and running the CLI, the index/upload job and its JSON progress parsing. No Visual Studio references. |
-| `src/D365FnoMcp.Extension` | `net8.0-windows8.0` | The out-of-process [VisualStudio.Extensibility](https://learn.microsoft.com/visualstudio/extensibility/visualstudio.extensibility/) extension: the menu, three commands, the Index and Upload tool window (Remote UI), and Credential Manager storage. |
-| `tests/D365FnoMcp.Core.Tests` | `net8.0` | xUnit tests for Core. `EndToEndTests` starts the repository's built server (`dist/`) and runs the real CLI through index and upload with gzip, Brotli and no compression. They are skipped when `dist/` or Node.js is missing. |
+| `src/D365FnoMcp.Core` | `net8.0` | Settings, `.mcp.json` merging, the connection test, locating and running the CLI, the index/upload job and its JSON progress parsing, and the index freshness check. No Visual Studio references. |
+| `src/D365FnoMcp.Extension` | `net8.0-windows8.0` | The out-of-process [VisualStudio.Extensibility](https://learn.microsoft.com/visualstudio/extensibility/visualstudio.extensibility/) extension: the menu, five commands, the Index and Upload tool window (Remote UI), and Credential Manager storage. |
+| `tests/D365FnoMcp.Core.Tests` | `net8.0` | xUnit tests for Core. `EndToEndTests` starts the repository's built server (`dist/`) and runs the real CLI through index and upload with gzip, Brotli and no compression, then checks freshness before and after an incremental update. They are skipped when `dist/` or Node.js is missing. |
 
 ## Build
 

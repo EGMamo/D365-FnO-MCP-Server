@@ -372,6 +372,12 @@ internal sealed class IndexUploadViewModel : NotifyPropertyChangedObject, IIndex
             return;
         }
 
+        if (!await this.services.IndexJobLock.WaitAsync(0, cancellationToken))
+        {
+            await shell.ShowPromptAsync("An index run is already in progress (Update Index).", PromptOptions.AlertConfirm, cancellationToken);
+            return;
+        }
+
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         this.running = cancellation;
         this.IsRunning = true;
@@ -398,6 +404,7 @@ internal sealed class IndexUploadViewModel : NotifyPropertyChangedObject, IIndex
         }
         finally
         {
+            this.services.IndexJobLock.Release();
             this.running = null;
             this.IsRunning = false;
             this.StartCommand.CanExecute = true;

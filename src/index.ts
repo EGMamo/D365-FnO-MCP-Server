@@ -104,6 +104,18 @@ export async function run(argv: string[]): Promise<CliResult> {
         }),
       };
     }
+    case 'index-status': {
+      const { indexStatusCommand } = await import('./cli/index-status-command.js');
+      return {
+        code: await indexStatusCommand({
+          packagesDir: flagString(flags, 'packages-dir'),
+          dbPath: flagString(flags, 'db-path'),
+          server: flagString(flags, 'server'),
+          json: flagBool(flags, 'json'),
+          list: flagString(flags, 'list'),
+        }),
+      };
+    }
     case 'digest': {
       const { digestCommand } = await import('./cli/digest.js');
       return {
