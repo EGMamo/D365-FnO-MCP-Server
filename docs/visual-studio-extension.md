@@ -134,11 +134,14 @@ The window has three sections and a log.
 
 1. `index --packages-dir <folder> --db-path <file>`
 2. `index-xref --db-path <file>`, with the connection string passed in `D365_XREF_CONNECTION_STRING`
-3. `upload-index --server <url> --compression … --chunk-size … --progress json`, with the API key
-   passed in `D365_MCP_API_KEY`
+3. `upload-index --server <url> --compression … --chunk-size … --progress json --stop-on-stdin-close`,
+   with the API key passed in `D365_MCP_API_KEY`
 
 Secrets are passed to the CLI only through environment variables, never as command-line arguments.
-**Cancel** stops the running step.
+**Cancel** stops the running step. The upload step is asked to stop rather than killed: it
+cancels the upload on the server (so the next run is not refused while the old one is still
+"receiving") and deletes its staging copy, and is killed only if it has not stopped after 30
+seconds. The index step is stopped at once; the next run finishes what it left.
 
 ### How the upload is verified
 
@@ -160,10 +163,12 @@ Secrets are passed to the CLI only through environment variables, never as comma
    - **transfer**: the SHA-256 and size of the assembled file equal the declared package;
    - **content**: the decompressed database's SHA-256 and size equal the declared database;
    - **database**: it opens as a D365 index with build metadata and the declared object count.
+   - **schema**: it was built by this server's schema version or later, so older indexes that lack
+     data this version serves (such as label ids) are refused.
 6. **Checksum.** The client compares the SHA-256 the server computed with its own. The log shows
    both, and the window shows `SHA-256 verified: …`.
 
-The server replaces nothing until all three checks pass. Then it closes open MCP sessions (clients
+The server replaces nothing until all four checks pass. Then it closes open MCP sessions (clients
 reconnect on their own), swaps the database in and serves it. A failed check leaves the old index
 in place and reports the expected and actual values.
 
@@ -173,7 +178,7 @@ in place and reports the expected and actual values.
 `PackagesLocalDirectory` on this machine. It uses the server, key, packages folder and index file
 saved by **Configure Connection** and **Index and Upload**, so run Index and Upload once first. It
 builds and uploads nothing. Progress shows in Visual Studio's background tasks, the answer in a
-prompt, and the list of changed files in the **D365 F&O MCP** Output pane.
+prompt, and the first 20 changed files in the **D365 F&O MCP** Output pane.
 
 It runs `index-status --packages-dir <folder> --db-path <file> --server <url> --json` with the API
 key in `D365_MCP_API_KEY`, which:
@@ -187,8 +192,10 @@ key in `D365_MCP_API_KEY`, which:
    - Otherwise (no local index, or someone else uploaded a newer one), files modified after the
      server's index was built count as changed. Removed files cannot be seen this way.
 
-The index is out of date when any file changed, or when the local index is newer than the served
-one (built but never uploaded). The prompt then offers **Update index**.
+The index is out of date when any file changed, when the local index is newer than the served
+one (built but never uploaded), when the local index has a different XRef import than the served
+one (imported after the last upload), or when the local index was built by an older version whose
+schema lacks data this version stores. The prompt then offers **Update index**.
 
 Changes in the XRef database are not detected: the prompt shows when the served XRef data was
 imported, and Update Index re-imports it when the XRef option is on.
@@ -199,8 +206,8 @@ imported, and Update Index re-imports it when the XRef option is on.
 the window, and always updates the existing index file in place (**Build a new index** is ignored).
 Only files that changed since the last run are parsed again, so an update after a few edits is much
 faster than the first build. It uses the saved compression, chunking and XRef choices, and the
-upload is verified the same way. Only one index run happens at a time: Update Index and the
-Index and Upload window wait for each other.
+upload is verified the same way. Only one index run happens at a time: Update Index, the Index
+and Upload window and Check Index Freshness each refuse to start while another one runs.
 
 ## Server setup
 
@@ -239,7 +246,8 @@ the published one.
 The CLI runs `node <package>/dist/src/index.js` directly: it finds the package behind npm's
 `d365-fno-mcp-server.cmd` shim on `PATH`. To use a checkout instead, set `"Cli"` in
 `settings.json` to the repository folder or to its `dist/src/index.js`. Set `"Node"` to use a
-specific `node.exe`.
+specific `node.exe`. The XRef import with Windows sign-in uses `ODBC Driver 17 for SQL Server`; on
+a machine with only Driver 18, set `"XrefOdbcDriver": "ODBC Driver 18 for SQL Server"`.
 
 ## Troubleshooting
 

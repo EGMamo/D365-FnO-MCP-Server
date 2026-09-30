@@ -31,6 +31,16 @@ internal sealed class TestConnectionCommand : Command
             return;
         }
 
+        try
+        {
+            ServerUrl.Normalize(settings.ServerUrl);
+        }
+        catch (FormatException ex)
+        {
+            await shell.ShowPromptAsync($"The saved server URL is not valid ({ex.Message}). Use Configure Connection to fix it.", PromptOptions.AlertConfirm, cancellationToken);
+            return;
+        }
+
         string apiKey = this.services.Secrets.Read(SecretNames.ApiKey(settings.ServerUrl)) ?? string.Empty;
         ConnectionReport report = await new ConnectionTester(this.services.Http).TestAsync(settings.ServerUrl, apiKey, cancellationToken);
         await this.services.WriteOutputAsync($"Connection test for {settings.ServerUrl}:{Environment.NewLine}{report.Summary()}", cancellationToken);

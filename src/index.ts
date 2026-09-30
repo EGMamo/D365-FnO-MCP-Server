@@ -139,6 +139,7 @@ export async function run(argv: string[]): Promise<CliResult> {
           integrityCheck: flagBool(flags, 'integrity-check'),
           workDir: flagString(flags, 'work-dir'),
           progress: flagString(flags, 'progress'),
+          stopOnStdinClose: flagBool(flags, 'stop-on-stdin-close'),
         }),
       };
     }

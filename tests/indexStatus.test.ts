@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { buildIndex } from '../src/indexer/buildIndex.js';
-import { getMeta, META_KEYS, openDb } from '../src/indexer/db.js';
+import { getMeta, META_KEYS, openDb, setMeta } from '../src/indexer/db.js';
 import { checkIndexStatus, servedIndexFromInfo, type ServedIndex } from '../src/indexer/indexStatus.js';
 import { indexStatusCommand } from '../src/cli/index-status-command.js';
 
@@ -39,9 +39,9 @@ beforeEach(async () => {
   place('ModelA', 'AxTable', 'AxTableSample.xml', 'SampleTable');
   place('ModelA', 'AxClass', 'AxClassSample.xml', 'SampleClass');
   place('ModelB', 'AxEnum', 'AxEnumSample.xml', 'SampleEnum');
-  const labelDir = path.join(packagesDir, 'TestPackage', 'ModelB', 'AxLabelFile');
+  const labelDir = path.join(packagesDir, 'TestPackage', 'ModelB', 'AxLabelFile', 'LabelResources', 'en-US');
   fs.mkdirSync(labelDir, { recursive: true });
-  fs.writeFileSync(path.join(labelDir, 'SampleLabels_en-US.label.txt'), 'SYS1=Account\n');
+  fs.writeFileSync(path.join(labelDir, 'SampleLabels.en-US.label.txt'), '@SYS1=Account\n');
   dbPath = path.join(root, 'index.db');
   const db = openDb(dbPath);
   try {
@@ -57,6 +57,40 @@ afterEach(() => {
 });
 
 describe('checkIndexStatus', () => {
+  it('reports a file whose modification time went back as changed', async () => {
+    const file = path.join(packagesDir, 'TestPackage', 'ModelA', 'AxClass', 'SampleClass.xml');
+    const earlier = new Date(Date.now() - 3600 * 1000);
+    fs.utimesSync(file, earlier, earlier);
+    const status = await checkIndexStatus({ packagesDir, dbPath, server: served() });
+    expect(status.changed).toBe(1);
+  });
+
+  it('reports an XRef import the server does not have', async () => {
+    const status = await checkIndexStatus({ packagesDir, dbPath, server: served({ xrefImportedAt: '2026-01-01T00:00:00.000Z' }) });
+    expect(status.upToDate).toBe(false);
+    expect(status.reasons).toEqual([expect.stringContaining('different XRef usage import')]);
+  });
+
+  it('reports a local index built by an older schema as out of date', async () => {
+    const db = openDb(dbPath);
+    try {
+      setMeta(db, META_KEYS.schemaVersion, '2');
+    } finally {
+      db.close();
+    }
+    const status = await checkIndexStatus({ packagesDir, dbPath, server: served() });
+    expect(status.upToDate).toBe(false);
+    expect(status.local?.schemaVersion).toBe(2);
+    expect(status.reasons).toEqual([expect.stringContaining('built by an older version (schema 2')]);
+  });
+
+  it('attributes a removed label file to its model', async () => {
+    fs.rmSync(path.join(packagesDir, 'TestPackage', 'ModelB', 'AxLabelFile', 'LabelResources', 'en-US', 'SampleLabels.en-US.label.txt'));
+    const status = await checkIndexStatus({ packagesDir, dbPath, server: served() });
+    expect(status.removed).toBe(1);
+    expect(status.models).toEqual([{ model: 'ModelB', files: 1 }]);
+  });
+
   it('reports an unchanged folder as up to date against the local index', async () => {
     const status = await checkIndexStatus({ packagesDir, dbPath, server: served() });
     expect(status.basis).toBe('local-index');
@@ -71,7 +105,7 @@ describe('checkIndexStatus', () => {
     touchLater(path.join(packagesDir, 'TestPackage', 'ModelA', 'AxClass', 'SampleClass.xml'));
     place('ModelA', 'AxEdt', 'AxEdtSample.xml', 'SampleEdt');
     fs.rmSync(path.join(packagesDir, 'TestPackage', 'ModelB', 'AxEnum', 'SampleEnum.xml'));
-    touchLater(path.join(packagesDir, 'TestPackage', 'ModelB', 'AxLabelFile', 'SampleLabels_en-US.label.txt'));
+    touchLater(path.join(packagesDir, 'TestPackage', 'ModelB', 'AxLabelFile', 'LabelResources', 'en-US', 'SampleLabels.en-US.label.txt'));
 
     const status = await checkIndexStatus({ packagesDir, dbPath, server: served() });
     expect(status.upToDate).toBe(false);
@@ -83,7 +117,7 @@ describe('checkIndexStatus', () => {
     expect(status.files.map((file) => `${file.kind} ${path.basename(file.path)}`).sort()).toEqual([
       'added SampleEdt.xml',
       'changed SampleClass.xml',
-      'changed SampleLabels_en-US.label.txt',
+      'changed SampleLabels.en-US.label.txt',
       'removed SampleEnum.xml',
     ]);
     expect(status.reasons[0]).toContain('4 file(s) in 2 model(s)');
@@ -112,7 +146,7 @@ describe('checkIndexStatus', () => {
       fs.utimesSync(path.join(packagesDir, 'TestPackage', 'ModelA', file), hourAgo, hourAgo);
     }
     fs.utimesSync(path.join(packagesDir, 'TestPackage', 'ModelB', 'AxEnum', 'SampleEnum.xml'), hourAgo, hourAgo);
-    fs.utimesSync(path.join(packagesDir, 'TestPackage', 'ModelB', 'AxLabelFile', 'SampleLabels_en-US.label.txt'), hourAgo, hourAgo);
+    fs.utimesSync(path.join(packagesDir, 'TestPackage', 'ModelB', 'AxLabelFile', 'LabelResources', 'en-US', 'SampleLabels.en-US.label.txt'), hourAgo, hourAgo);
     touchLater(path.join(packagesDir, 'TestPackage', 'ModelA', 'AxClass', 'SampleClass.xml'), 0);
 
     const status = await checkIndexStatus({ packagesDir, dbPath: path.join(root, 'missing.db'), server: served({ builtAt: serverBuilt }) });

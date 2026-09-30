@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import type { AddressInfo } from 'node:net';
-import { META_KEYS, openDb, rebuildFts, setMeta, upsertObject } from '../../src/indexer/db.js';
+import { INDEX_SCHEMA_VERSION, META_KEYS, openDb, rebuildFts, setMeta, upsertObject } from '../../src/indexer/db.js';
 
 export interface StaticServer {
   baseUrl: string;
@@ -55,7 +55,7 @@ export interface FixtureObject {
 export function createIndexedDb(
   dbPath: string,
   objects: FixtureObject[],
-  meta: { builtAt?: string; storeRawXml?: '0' | '1'; serverVersion?: string } = {}
+  meta: { builtAt?: string; storeRawXml?: '0' | '1'; serverVersion?: string; schemaVersion?: string } = {}
 ): void {
   const db = openDb(dbPath);
   try {
@@ -74,6 +74,7 @@ export function createIndexedDb(
     setMeta(db, META_KEYS.builtAt, meta.builtAt ?? '2026-09-25T20:00:00.000Z');
     setMeta(db, META_KEYS.serverVersion, meta.serverVersion ?? '0.1.0');
     setMeta(db, META_KEYS.storeRawXml, meta.storeRawXml ?? '1');
+    setMeta(db, META_KEYS.schemaVersion, meta.schemaVersion ?? String(INDEX_SCHEMA_VERSION));
   } finally {
     db.close();
   }

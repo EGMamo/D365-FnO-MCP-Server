@@ -129,6 +129,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Label files are found where Visual Studio keeps them
+  (`AxLabelFile/LabelResources/<language>/<LabelFile>.<language>.label.txt`); before, a real
+  `PackagesLocalDirectory` indexed no labels. The language comes from the file name, and labels are
+  stored under the id code references (`MyLabels:Greeting` for `@MyLabels:Greeting`, `SYS1` for a
+  legacy `@SYS1`). The index schema version is now `3`; the next `index` run re-reads every label
+  file once, and `index-status` reports an index built by an older schema as out of date.
+- `resolve_label` prefers the `en-US` text when a label exists in several languages, and language
+  filters match case-insensitively.
+- An `index` run that stops before its search rebuild (a file deleted mid-scan, Ctrl-C) no longer
+  leaves new objects out of `search_symbols` for good: the next run rebuilds the FTS tables. A file
+  deleted during the scan is skipped instead of stopping the run.
+- Files restored with an older modification time are re-indexed; `index` and `index-status` treat
+  any different time as a change.
+- A label two files declare no longer disappears when the file that owned the row stops declaring
+  it.
+- `index-status` reports an XRef import that was not uploaded, and an index built by an older schema.
+- The server refuses an uploaded index built by an older schema (new `schema` check), and a hosted
+  server warns when it downloads one.
+- `upload-index --stop-on-stdin-close`: the Visual Studio extension's **Cancel** now aborts the
+  server upload and deletes the staging copy instead of killing the CLI, which left the server
+  refusing uploads for two hours.
+- Visual Studio extension: CLI INFO logs are no longer shown as errors (and DEBUG lines are off);
+  Check Index Freshness does not run while an index run holds the index; the CLI runs in a neutral
+  folder so a project `.env` cannot fill in settings; moving the API key out of `.mcp.json` no
+  longer leaves it in `.mcp.json.bak`; Test Connection handles an invalid saved URL and a timeout
+  while closing its test session.
+- `scripts/publish-index.ps1` never prunes the version `latest/manifest.json` points at, and only
+  treats version-named folders as versions.
+- `get_bp_findings` treats `%` and `_` in the moniker filter as literal text.
 - `search_symbols` matches name prefixes (`Cust` finds `CustTable`), ranks exact names first and
   falls back to a substring match on the name.
 - Object lookups by name are case-insensitive, as X++ names are; an exact spelling still wins.

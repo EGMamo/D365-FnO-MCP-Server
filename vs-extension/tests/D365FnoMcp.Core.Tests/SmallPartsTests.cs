@@ -207,12 +207,14 @@ public class IndexJobTests
             {
                 "upload-index", "--server", "https://app.example.net", "--db-path", Settings().IndexDbPath,
                 "--compression", "brotli", "--level", "smallest", "--parallel", "3", "--progress", "json",
-                "--chunk-size", "16", "--relative-paths",
+                "--stop-on-stdin-close", "--chunk-size", "16", "--relative-paths",
             },
             steps[2].Arguments);
         Assert.Equal("the-api-key", steps[2].Environment["D365_MCP_API_KEY"]);
         Assert.Equal(Path.GetTempPath(), steps[2].Environment["D365_PACKAGES_DIR"]);
         Assert.True(steps[2].JsonProgress);
+        Assert.True(steps[2].StopsOnStdinClose);
+        Assert.False(steps[0].StopsOnStdinClose);
         Assert.DoesNotContain(steps.SelectMany(s => s.Arguments), a => a.Contains("the-api-key") || a.Contains("the-password"));
     }
 

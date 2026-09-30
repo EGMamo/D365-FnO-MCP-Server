@@ -104,7 +104,16 @@ public static class McpJsonFile
                 return;
             }
 
-            File.Copy(path, path + ".bak", overwrite: true);
+            // Moving the key out of the file must not leave it behind in the backup.
+            string? literalKey = target == McpJsonTarget.UserKeyInFile ? null : LiteralKey(existing, serverName);
+            if (literalKey is null)
+            {
+                File.Copy(path, path + ".bak", overwrite: true);
+            }
+            else if (existing.Contains(literalKey, StringComparison.Ordinal))
+            {
+                File.WriteAllText(path + ".bak", existing.Replace(literalKey, "<removed>", StringComparison.Ordinal));
+            }
         }
         else
         {
@@ -114,6 +123,20 @@ public static class McpJsonFile
         string temp = path + ".tmp";
         File.WriteAllText(temp, merged);
         File.Move(temp, path, overwrite: true);
+    }
+
+    /// <summary>The API key our entry holds in plain text, or null when it has none (or prompts for it).</summary>
+    private static string? LiteralKey(string existingJson, string serverName)
+    {
+        try
+        {
+            string? value = (string?)JsonNode.Parse(existingJson, documentOptions: ReadOptions)?["servers"]?[serverName]?["headers"]?["X-API-Key"];
+            return string.IsNullOrEmpty(value) || value.StartsWith("${input:", StringComparison.Ordinal) ? null : value;
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
+        {
+            return null;
+        }
     }
 
     public static string UserFilePath() =>

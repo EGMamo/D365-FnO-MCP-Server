@@ -5,7 +5,7 @@ import path from 'path';
 import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
 import type { Database } from '../src/indexer/db.js';
-import { openDb, getObjectByName, searchSymbols, type Xref } from '../src/indexer/db.js';
+import { openDb, getObjectByName, searchSymbols, resolveLabelByLanguage, setMeta, getMeta, META_KEYS, type Xref } from '../src/indexer/db.js';
 import { buildIndex, getIndexStats } from '../src/indexer/buildIndex.js';
 import { logger } from '../src/utils/logger.js';
 import { collectMetadataTools } from './helpers/toolHarness.js';
@@ -38,9 +38,9 @@ function stagePackages(root: string) {
     fs.copyFileSync(path.join(fixturesDir, fixture), path.join(dir, `${name}.xml`));
   }
 
-  const labelDir = path.join(root, 'TestPackage', 'TestModel', 'AxLabelFile');
+  const labelDir = path.join(root, 'TestPackage', 'TestModel', 'AxLabelFile', 'LabelResources', 'en-US');
   fs.mkdirSync(labelDir, { recursive: true });
-  fs.writeFileSync(path.join(labelDir, 'SampleLabels_en-US.label.txt'), 'SYS1=Account\nSYS2=Amount\n');
+  fs.writeFileSync(path.join(labelDir, 'SampleLabels.en-US.label.txt'), '@SYS1=Account\n@SYS2=Amount\n');
 }
 
 describe('Indexer DB Tests', () => {
@@ -435,7 +435,9 @@ describe('index lifecycle: pruning, renames and collisions', () => {
       'TestPackage',
       'TestModel',
       'AxLabelFile',
-      'SampleLabels_en-US.label.txt'
+      'LabelResources',
+      'en-US',
+      'SampleLabels.en-US.label.txt'
     );
     const sourced = db
       .prepare(`SELECT COUNT(*) as count FROM ax_labels WHERE source_file <> ''`)
@@ -454,9 +456,11 @@ describe('index lifecycle: pruning, renames and collisions', () => {
       'TestPackage',
       'TestModel',
       'AxLabelFile',
-      'SampleLabels_en-US.label.txt'
+      'LabelResources',
+      'en-US',
+      'SampleLabels.en-US.label.txt'
     );
-    fs.writeFileSync(labelPath, 'SYS1=Account renamed\n');
+    fs.writeFileSync(labelPath, '@SYS1=Account renamed\n');
 
     await buildIndex(db, root, false);
 
@@ -473,7 +477,9 @@ describe('index lifecycle: pruning, renames and collisions', () => {
       'TestPackage',
       'TestModel',
       'AxLabelFile',
-      'SampleLabels_en-US.label.txt'
+      'LabelResources',
+      'en-US',
+      'SampleLabels.en-US.label.txt'
     );
     db.prepare(`UPDATE ax_labels SET value = ? WHERE label_id = ?`).run('Manual value', 'SYS1');
 
@@ -487,12 +493,12 @@ describe('index lifecycle: pruning, renames and collisions', () => {
 
   it('re-applies a duplicate label from a surviving source when the winning source is deleted', async () => {
     const duplicateRoot = fs.mkdtempSync(path.join(testDir, '.tmp-label-dupe-'));
-    const labelDir = path.join(duplicateRoot, 'TestPackage', 'TestModel', 'AxLabelFile');
+    const labelDir = path.join(duplicateRoot, 'TestPackage', 'TestModel', 'AxLabelFile', 'LabelResources', 'en-US');
     fs.mkdirSync(labelDir, { recursive: true });
-    const first = path.join(labelDir, 'A_en-US.label.txt');
-    const second = path.join(labelDir, 'B_en-US.label.txt');
-    fs.writeFileSync(first, 'SYS1=First\n');
-    fs.writeFileSync(second, 'SYS1=Second\n');
+    const first = path.join(labelDir, 'A.en-US.label.txt');
+    const second = path.join(labelDir, 'B.en-US.label.txt');
+    fs.writeFileSync(first, '@SYS1=First\n');
+    fs.writeFileSync(second, '@SYS1=Second\n');
     const duplicateDb = openDb(':memory:');
 
     try {
@@ -519,12 +525,12 @@ describe('index lifecycle: pruning, renames and collisions', () => {
 
   it('retries label recovery on the next run when re-applying the survivor fails', async () => {
     const duplicateRoot = fs.mkdtempSync(path.join(testDir, '.tmp-label-retry-'));
-    const labelDir = path.join(duplicateRoot, 'TestPackage', 'TestModel', 'AxLabelFile');
+    const labelDir = path.join(duplicateRoot, 'TestPackage', 'TestModel', 'AxLabelFile', 'LabelResources', 'en-US');
     fs.mkdirSync(labelDir, { recursive: true });
-    const first = path.join(labelDir, 'A_en-US.label.txt');
-    const second = path.join(labelDir, 'B_en-US.label.txt');
-    fs.writeFileSync(first, 'SYS1=First\n');
-    fs.writeFileSync(second, 'SYS1=Second\n');
+    const first = path.join(labelDir, 'A.en-US.label.txt');
+    const second = path.join(labelDir, 'B.en-US.label.txt');
+    fs.writeFileSync(first, '@SYS1=First\n');
+    fs.writeFileSync(second, '@SYS1=Second\n');
     const retryDb = openDb(':memory:');
     const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
     const realReadFile = fsp.readFile;
@@ -579,11 +585,11 @@ describe('index lifecycle: pruning, renames and collisions', () => {
 
   it('prunes label source tracking for removed empty label files', async () => {
     const emptyRoot = fs.mkdtempSync(path.join(testDir, '.tmp-empty-label-'));
-    const labelDir = path.join(emptyRoot, 'TestPackage', 'TestModel', 'AxLabelFile');
+    const labelDir = path.join(emptyRoot, 'TestPackage', 'TestModel', 'AxLabelFile', 'LabelResources', 'en-US');
     const classDir = path.join(emptyRoot, 'TestPackage', 'TestModel', 'AxClass');
     fs.mkdirSync(labelDir, { recursive: true });
     fs.mkdirSync(classDir, { recursive: true });
-    const labelPath = path.join(labelDir, 'Empty_en-US.label.txt');
+    const labelPath = path.join(labelDir, 'Empty.en-US.label.txt');
     fs.writeFileSync(labelPath, '# no parseable labels\n');
     fs.copyFileSync(path.join(fixturesDir, 'AxClassSample.xml'), path.join(classDir, 'SampleClass.xml'));
     const emptyDb = openDb(':memory:');
@@ -908,5 +914,111 @@ describe('prune guard: partially available packages directory', () => {
 
     expect(getObjectByName(db, 'ClassA', 'Class')).toBeNull();
     expect(getObjectByName(db, 'ClassD', 'Class')).not.toBeNull();
+  });
+});
+
+describe('Label files in the Visual Studio layout', () => {
+  let labelRoot: string;
+  let labelDb: Database;
+
+  beforeEach(() => {
+    labelRoot = fs.mkdtempSync(path.join(testDir, '.tmp-label-layout-'));
+    const resources = path.join(labelRoot, 'TestPackage', 'TestModel', 'AxLabelFile', 'LabelResources');
+    fs.mkdirSync(path.join(resources, 'en-US'), { recursive: true });
+    fs.mkdirSync(path.join(resources, 'de'), { recursive: true });
+    fs.writeFileSync(path.join(resources, 'en-US', 'MyLabels.en-US.label.txt'), '﻿Greeting=Hello\r\n ;Shown on the start page\r\n');
+    fs.writeFileSync(path.join(resources, 'de', 'MyLabels.de.label.txt'), 'Greeting=Hallo\n');
+    fs.writeFileSync(path.join(resources, 'en-US', 'SYS.en-US.label.txt'), '@SYS1=Account\n');
+    labelDb = openDb(':memory:');
+  });
+
+  afterEach(() => {
+    labelDb.close();
+    fs.rmSync(labelRoot, { recursive: true, force: true });
+  });
+
+  it('stores labels under the ids code references, per language', async () => {
+    await buildIndex(labelDb, labelRoot, true);
+
+    expect(resolveLabelByLanguage(labelDb, '@MyLabels:Greeting', 'en-US')?.value).toBe('Hello');
+    expect(resolveLabelByLanguage(labelDb, '@MyLabels:Greeting', 'de')?.value).toBe('Hallo');
+    expect(resolveLabelByLanguage(labelDb, '@SYS1', 'en-us')?.value).toBe('Account');
+    expect(getIndexStats(labelDb).totalLabels).toBe(3);
+  });
+
+  it('re-reads every label file when the index was built before label ids were namespaced', async () => {
+    await buildIndex(labelDb, labelRoot, true);
+    labelDb.prepare(`UPDATE ax_labels SET label_id = 'Greeting' WHERE label_id = 'MyLabels:Greeting'`).run();
+    labelDb.prepare(`INSERT INTO ax_labels (label_id, language, value, source_file) VALUES ('Old', 'en-US', 'x', '')`).run();
+    setMeta(labelDb, META_KEYS.schemaVersion, '2');
+
+    await buildIndex(labelDb, labelRoot, false);
+
+    const ids = (labelDb.prepare(`SELECT label_id FROM ax_labels ORDER BY label_id, language`).all() as { label_id: string }[])
+      .map((r) => r.label_id);
+    expect(ids).toEqual(['MyLabels:Greeting', 'MyLabels:Greeting', 'SYS1']);
+    expect(getMeta(labelDb, META_KEYS.schemaVersion)).toBe('3');
+  });
+  it('keeps a label another file declares when the owning file stops declaring it', async () => {
+    const resources = path.join(labelRoot, 'TestPackage', 'TestModel', 'AxLabelFile', 'LabelResources', 'en-US');
+    const first = path.join(resources, 'A.en-US.label.txt');
+    const second = path.join(resources, 'B.en-US.label.txt');
+    fs.writeFileSync(first, '@L1=From A\n@L2=Only A\n');
+    fs.writeFileSync(second, '@L1=From B\n');
+    await buildIndex(labelDb, labelRoot, true);
+    const owner = (labelDb.prepare(`SELECT source_file FROM ax_labels WHERE label_id = 'L1'`).get() as { source_file: string }).source_file;
+    const other = owner === first ? second : first;
+    const later = new Date(Date.now() + 60_000);
+    fs.writeFileSync(owner, owner === first ? '@L2=Only A\n' : '\n');
+    fs.utimesSync(owner, later, later);
+
+    await buildIndex(labelDb, labelRoot, false);
+
+    const row = labelDb.prepare(`SELECT source_file FROM ax_labels WHERE label_id = 'L1'`).get() as { source_file: string } | undefined;
+    expect(row?.source_file).toBe(other);
+  });
+});
+
+describe('Incremental runs', () => {
+  let incRoot: string;
+  let incDb: Database;
+
+  beforeEach(() => {
+    incRoot = fs.mkdtempSync(path.join(testDir, '.tmp-incremental-'));
+    const classDir = path.join(incRoot, 'TestPackage', 'TestModel', 'AxClass');
+    fs.mkdirSync(classDir, { recursive: true });
+    fs.copyFileSync(path.join(fixturesDir, 'AxClassSample.xml'), path.join(classDir, 'SampleClass.xml'));
+    incDb = openDb(':memory:');
+  });
+
+  afterEach(() => {
+    incDb.close();
+    fs.rmSync(incRoot, { recursive: true, force: true });
+  });
+
+  it('rebuilds search after a run that stopped before its FTS rebuild', async () => {
+    await buildIndex(incDb, incRoot, true);
+    const ftsHits = () => incDb.prepare(`SELECT COUNT(*) AS n FROM ax_fts WHERE ax_fts MATCH '"SampleClass"'`).get();
+    // What a crashed run leaves: committed rows the FTS table does not know, and the pending flag.
+    incDb.exec(`INSERT INTO ax_fts(ax_fts) VALUES('delete-all')`);
+    setMeta(incDb, META_KEYS.ftsPending, '1');
+    expect(ftsHits()).toEqual({ n: 0 });
+
+    const stats = await buildIndex(incDb, incRoot, false);
+
+    expect(stats.skipped).toBe(1);
+    expect(ftsHits()).toEqual({ n: 1 });
+    expect(getMeta(incDb, META_KEYS.ftsPending)).toBe('0');
+  });
+
+  it('re-reads a file restored with an older modification time', async () => {
+    const file = path.join(incRoot, 'TestPackage', 'TestModel', 'AxClass', 'SampleClass.xml');
+    await buildIndex(incDb, incRoot, true);
+    const earlier = new Date(Date.now() - 3600 * 1000);
+    fs.utimesSync(file, earlier, earlier);
+
+    const stats = await buildIndex(incDb, incRoot, false);
+
+    expect(stats.updated).toBe(1);
   });
 });

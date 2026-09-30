@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import { getIndexStats } from './buildIndex.js';
-import { openDb } from './db.js';
+import { getMeta, INDEX_SCHEMA_VERSION, META_KEYS, openDb } from './db.js';
 import { scanPackagesDir } from './scanner.js';
 
 /**
@@ -10,8 +10,8 @@ import { scanPackagesDir } from './scanner.js';
  *   local-index  The local index is what the server serves (same build time)
  *                or newer. Every scanned file is compared with the path and
  *                modification time the index recorded, the same rule the
- *                incremental indexer uses, so added, changed and removed
- *                files are all found.
+ *                incremental indexer uses (any different time, newer or
+ *                older), so added, changed and removed files are all found.
  *   timestamp    There is no usable local index (none, or older than the
  *                server's, e.g. someone else uploaded). Files modified after
  *                the server index was built count as changed; removals cannot
@@ -32,6 +32,8 @@ export interface LocalIndex {
   builtAt: string | null;
   objects: number;
   xrefImportedAt: string | null;
+  /** `schema_version` the index was built with; null for indexes that predate it. */
+  schemaVersion: number | null;
 }
 
 export interface ChangedFile {
@@ -85,9 +87,14 @@ export function servedIndexFromInfo(info: Record<string, unknown>): ServedIndex 
   };
 }
 
-/** The model folder of a scanned file: <packages>/<package>/<model>/<AxType>/<file>. */
+/**
+ * The model folder of a scanned file: <packages>/<package>/<model>/<AxType>/<file>,
+ * or <model>/AxLabelFile/LabelResources/<language>/<file> for label files.
+ */
 function modelOf(filePath: string): string {
   const parts = filePath.split(/[\\/]/);
+  const labelDir = parts.lastIndexOf('AxLabelFile');
+  if (labelDir > 0) return parts[labelDir - 1];
   return parts.length >= 3 ? parts[parts.length - 3] : '';
 }
 
@@ -126,6 +133,7 @@ function readLocalIndex(dbPath: string): RecordedFiles | null {
         builtAt: stats.builtAt,
         objects: stats.totalObjects,
         xrefImportedAt: stats.usageSnapshot.status === 'imported' ? stats.usageSnapshot.importedAt : null,
+        schemaVersion: Number(getMeta(db, META_KEYS.schemaVersion)) || null,
       },
       mtimes,
       keys,
@@ -180,7 +188,7 @@ export async function checkIndexStatus(options: IndexStatusOptions): Promise<Ind
       if (file.type === 'Label' || !recorded!.keys.has(`${file.type}|${file.name}`)) {
         note({ path: file.filePath, kind: 'added', model: file.model });
       }
-    } else if (file.mtime > mtime) {
+    } else if (file.mtime !== mtime) {
       note({ path: file.filePath, kind: 'changed', model: file.model });
     }
   }
@@ -196,6 +204,21 @@ export async function checkIndexStatus(options: IndexStatusOptions): Promise<Ind
   if (fileChanges > 0) {
     const since = basis === 'local-index' ? 'since the local index was built' : 'since the server index was built';
     reasons.push(`${fileChanges} file(s) in ${perModel.size} model(s) changed ${since}.`);
+  }
+  const localSchema = recorded?.local.schemaVersion ?? 0;
+  if (basis === 'local-index' && localSchema < INDEX_SCHEMA_VERSION) {
+    reasons.push(
+      `The local index was built by an older version (schema ${localSchema || 'unknown'}, current ${INDEX_SCHEMA_VERSION}); index it again to pick up the data that version adds.`
+    );
+  }
+  if (
+    basis === 'local-index' &&
+    server !== null &&
+    serverTime !== null &&
+    localTime === serverTime &&
+    recorded!.local.xrefImportedAt !== server.xrefImportedAt
+  ) {
+    reasons.push('The local index has a different XRef usage import than the one the server serves; upload it again.');
   }
   if (localNewerThanServer) reasons.push('The local index is newer than the one the server serves and has not been uploaded.');
   if (scannedFiles === 0) reasons.push(`No metadata files were found under ${options.packagesDir}; is it the right folder?`);

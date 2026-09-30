@@ -1,5 +1,5 @@
 import { XMLParser } from 'fast-xml-parser';
-import type { Database } from './db.js';
+import { likeContains, type Database } from './db.js';
 
 /**
  * Imported compiler best-practice diagnostics (xppbp.exe `-xmlLog` output, as produced by
@@ -187,7 +187,7 @@ export function queryBpFindings(db: Database, q: BpQuery) {
   const params: (string | number)[] = [];
   if (q.element) { where += ' AND element_name = ? COLLATE NOCASE'; params.push(q.element); }
   if (q.elementType) { where += ' AND element_type = ? COLLATE NOCASE'; params.push(q.elementType); }
-  if (q.moniker) { where += ' AND moniker LIKE ? COLLATE NOCASE'; params.push(`%${q.moniker}%`); }
+  if (q.moniker) { where += " AND moniker LIKE ? ESCAPE '\\'"; params.push(likeContains(q.moniker)); }
   if (q.severity) { where += ' AND severity = ? COLLATE NOCASE'; params.push(q.severity); }
   if (q.model) { where += ' AND model = ? COLLATE NOCASE'; params.push(q.model); }
   const total = (db.prepare(`SELECT COUNT(*) AS n FROM ax_bp_findings WHERE ${where}`).get(...params) as { n: number }).n;

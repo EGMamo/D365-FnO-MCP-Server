@@ -149,7 +149,7 @@ describe('security model tools', () => {
       MenuItemDisplay: 1,
       MenuItemAction: 1,
     });
-    expect(getMeta(db, META_KEYS.schemaVersion)).toBe('2');
+    expect(getMeta(db, META_KEYS.schemaVersion)).toBe('3');
   });
 
   it('lists and searches the new object types through the metadata tools', async () => {

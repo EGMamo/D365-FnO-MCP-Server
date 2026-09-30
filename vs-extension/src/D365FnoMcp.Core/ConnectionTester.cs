@@ -188,9 +188,9 @@ public sealed class ConnectionTester
                 {
                     using HttpResponseMessage _ = await this.http.SendAsync(close, CancellationToken.None);
                 }
-                catch (HttpRequestException)
+                catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
                 {
-                    // The server closes idle sessions itself.
+                    // The server closes idle sessions itself; a timeout here must not replace the report.
                 }
             }
         }

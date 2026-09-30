@@ -52,7 +52,7 @@ public sealed class IndexUploadRunner
                     ProgressEvent? progress = step.JsonProgress ? ProgressEvent.TryParse(line) : null;
                     if (progress is null)
                     {
-                        observer.Log(line, isError);
+                        observer.Log(line, isError && CliRunner.IsProblemLine(line));
                         return;
                     }
 
@@ -86,8 +86,7 @@ public sealed class IndexUploadRunner
                             break;
                     }
                 },
-                cancellationToken,
-                Path.GetDirectoryName(settings.IndexDbPath));
+                cancellationToken);
 
             if (exitCode != 0)
             {

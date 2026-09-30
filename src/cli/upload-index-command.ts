@@ -36,6 +36,8 @@ export interface UploadIndexCommandOptions {
   integrityCheck?: boolean;
   workDir?: string;
   progress?: string;
+  /** Cancel cleanly when stdin closes: how the Visual Studio extension stops a run. */
+  stopOnStdinClose?: boolean;
 }
 
 export type ProgressEvent =
@@ -144,6 +146,12 @@ export async function uploadIndexCommand(
   const cancel = () => abort.abort(new Error('Upload cancelled.'));
   process.once('SIGINT', cancel);
   process.once('SIGTERM', cancel);
+  // Windows has no SIGINT for a child process; a closed stdin is the portable stop request,
+  // and it lets the finally below abort the server upload and delete the staging folder.
+  if (options.stopOnStdinClose) {
+    process.stdin.once('end', cancel);
+    process.stdin.resume();
+  }
 
   const staging = fs.mkdtempSync(path.join(options.workDir ? path.resolve(options.workDir) : os.tmpdir(), 'd365-index-upload-'));
   try {
@@ -168,6 +176,7 @@ export async function uploadIndexCommand(
     let packageFile: string;
     let packed: CompressedFile;
     if (encoding === 'identity') {
+      abort.signal.throwIfAborted();
       report({ event: 'stage', stage: 'compress', message: 'No compression: hashing the database' });
       const hashed = await hashFile(snapshot.file);
       packageFile = snapshot.file;
@@ -175,8 +184,9 @@ export async function uploadIndexCommand(
     } else {
       report({ event: 'stage', stage: 'compress', message: `Compressing ${formatBytes(rawBytes)} with ${encoding === 'br' ? 'brotli' : encoding} (${level})` });
       packageFile = path.join(staging, `package.${encoding}`);
+      abort.signal.throwIfAborted();
       packed = await compressFile(snapshot.file, packageFile, encoding, level, (done) =>
-        report({ event: 'progress', stage: 'compress', done, total: rawBytes })
+        report({ event: 'progress', stage: 'compress', done, total: rawBytes }), abort.signal
       );
       fs.rmSync(snapshot.file, { force: true });
       const ratio = packed.rawBytes === 0 ? 0 : (1 - packed.bytes / packed.rawBytes) * 100;
@@ -263,5 +273,9 @@ export async function uploadIndexCommand(
     fs.rmSync(staging, { recursive: true, force: true });
     process.removeListener('SIGINT', cancel);
     process.removeListener('SIGTERM', cancel);
+    if (options.stopOnStdinClose) {
+      process.stdin.removeListener('end', cancel);
+      process.stdin.pause();
+    }
   }
 }

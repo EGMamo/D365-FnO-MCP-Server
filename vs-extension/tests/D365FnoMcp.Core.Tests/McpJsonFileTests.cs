@@ -77,4 +77,24 @@ public class McpJsonFileTests
             Directory.Delete(dir, recursive: true);
         }
     }
+
+    [Fact]
+    public void BackupDropsTheKeyWhenItMovesOutOfTheFile()
+    {
+        string dir = Directory.CreateTempSubdirectory().FullName;
+        try
+        {
+            string path = Path.Combine(dir, ".mcp.json");
+            McpJsonFile.Write(path, "d365-fno", "https://a.example.net", McpJsonTarget.UserKeyInFile, "secret-key-123");
+            McpJsonFile.Write(path, "d365-fno", "https://a.example.net", McpJsonTarget.UserPromptForKey);
+
+            Assert.DoesNotContain("secret-key-123", File.ReadAllText(path + ".bak"));
+            Assert.DoesNotContain("secret-key-123", File.ReadAllText(path));
+            Assert.Contains("https://a.example.net/mcp", File.ReadAllText(path + ".bak"));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
 }

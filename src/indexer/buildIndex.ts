@@ -1,5 +1,5 @@
 import type { Database } from './db.js';
-import { scanPackagesDir } from './scanner.js';
+import { parseLabelFileName, scanPackagesDir } from './scanner.js';
 import * as dbUtils from './db.js';
 import * as parser from './parser.js';
 import { getUsageSnapshotStatus } from './xrefUsage.js';
@@ -33,16 +33,19 @@ export function shouldStoreRawXml(env: NodeJS.ProcessEnv = process.env): boolean
   return !['0', 'false', 'no', 'off'].includes(value.trim().toLowerCase());
 }
 
-/** Derives the label language the same way the scanner does, from `<name>_<language>.label.txt`. */
-function labelLanguageFromPath(filePath: string): string {
-  const fileName = filePath.split(/[\\/]/).pop() ?? '';
-  return fileName.replace('.label.txt', '').split('_')[1] || 'en-US';
+/** Labels of one `.label.txt` file, with the language and ids its file name implies. */
+function readLabelFile(filePath: string, content: string): dbUtils.LabelInput[] {
+  const { labelFileId, language } = parseLabelFileName(filePath);
+  return parser.parseLabels(content, labelFileId).map((l) => ({ ...l, language }));
 }
 
 /**
- * Re-applies label files that currently contribute fewer labels than they parsed,
- * which happens when a duplicate-declaring source that owned the shared rows was
- * pruned. Returns the number of sources re-applied.
+ * Two label files may declare the same (label_id, language), and only one of
+ * them owns the row. When the owner is deleted or stops declaring a label, the
+ * row goes although another file still declares it. This re-reads every source
+ * that contributes fewer labels than it parsed and adds the labels that no
+ * source provides now, leaving rows another source owns alone. Returns the
+ * number of sources that added labels.
  */
 async function recoverUnderContributingLabelSources(
   writer: ReturnType<typeof dbUtils.createIndexWriter>,
@@ -56,18 +59,18 @@ async function recoverUnderContributingLabelSources(
 
     try {
       const content = await fs.readFile(filePath, 'utf-8');
-      const labels = parser.parseLabels(content);
-      const language = labelLanguageFromPath(filePath);
-      writer.runInTransaction(() => {
-        writer.upsertLabels(labels.map((l) => ({ ...l, language })), filePath);
+      const labels = readLabelFile(filePath, content);
+      const added = writer.runInTransaction(() => {
+        const count = writer.fillMissingLabels(labels, filePath);
         writer.updateLabelSourceMtime(filePath, source.file_mtime, labels.length);
+        return count;
       });
-      recovered++;
+      if (added > 0) recovered++;
     } catch (err) {
       // Clear the tracked mtime so the next run cannot skip this file. Without
       // this, a transient read/parse failure here would leave the source
       // permanently under-contributing: the mtime skip in the main loop would
-      // keep passing it over and recovery only runs after a label prune.
+      // keep passing it over.
       try {
         writer.updateLabelSourceMtime(filePath, 0, source.label_count);
       } catch {
@@ -103,14 +106,29 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
   // (type|name) -> file path of the object that won the key during this run.
   const seenKeys = new Map<string, string>();
   const storeRawXml = shouldStoreRawXml();
-  let objectFtsDirty = force;
-  let labelFtsDirty = force;
+  // A run that stopped before its FTS rebuild left rows the search tables do not know about.
+  const ftsPending = dbUtils.getMeta(db, dbUtils.META_KEYS.ftsPending) === '1';
+  let objectFtsDirty = force || ftsPending;
+  let labelFtsDirty = force || ftsPending;
+  dbUtils.setMeta(db, dbUtils.META_KEYS.ftsPending, '1');
+  let labelsChanged = false;
 
   // Captured before the scan so the prune magnitude guard compares against the
   // objects indexed by *previous* runs only. Counting after the loop would
   // include rows added by this run, inflating the denominator.
   const preScanObjectPaths = dbUtils.listObjectPaths(db);
   const preScanObjectCount = preScanObjectPaths.length;
+
+  // Older indexes keyed labels differently; drop them so every label file is read again.
+  const builtSchema = Number(dbUtils.getMeta(db, dbUtils.META_KEYS.schemaVersion) ?? 0);
+  if (builtSchema < dbUtils.LABEL_IDS_SCHEMA_VERSION) {
+    const hadLabels = db.prepare(`SELECT 1 FROM ax_labels LIMIT 1`).get() !== undefined;
+    db.exec('DELETE FROM ax_labels; DELETE FROM ax_label_sources;');
+    if (hadLabels) {
+      labelFtsDirty = true;
+      logger.info('Re-reading all label files: the index was built by an older version', { schemaVersion: builtSchema });
+    }
+  }
 
   for await (const file of scanPackagesDir(packagesDir)) {
     stats.total++;
@@ -146,32 +164,31 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
 
       if (file.type === 'Label') {
         // Mirrors the object mtime skip. Cases where another source currently
-        // owns some of this file's labels are repaired by the post-prune
-        // recovery pass instead of by re-reading the file on every run.
+        // owns some of this file's labels are repaired by the recovery pass
+        // after the scan instead of by re-reading the file on every run.
         const existingLabelSource = writer.getLabelSource(file.filePath);
-        if (!force && existingLabelSource && existingLabelSource.file_mtime >= file.mtime) {
+        if (!force && existingLabelSource && existingLabelSource.file_mtime === file.mtime) {
           stats.skipped++;
           continue;
         }
 
         const content = await fs.readFile(file.filePath, 'utf-8');
-        const labels = parser.parseLabels(content);
+        const labels = readLabelFile(file.filePath, content);
         writer.runInTransaction(() => {
-          writer.upsertLabels(
-            labels.map(l => ({ ...l, language: file.name.split('_')[1] || 'en-US' })),
-            file.filePath
-          );
+          writer.upsertLabels(labels, file.filePath);
           writer.updateLabelSourceMtime(file.filePath, file.mtime, labels.length);
         });
         stats.updated++;
+        labelsChanged = true;
         labelFtsDirty = true;
         continue;
       }
 
       // A path change (rename/move) must always be re-indexed, even when the
-      // mtime suggests the content is unchanged.
+      // mtime suggests the content is unchanged. Any mtime change counts, not
+      // only a newer one: restoring an older copy keeps that copy's time.
       const samePath = existing?.file_path === file.filePath;
-      if (!force && existing && samePath && existing.file_mtime >= file.mtime) {
+      if (!force && existing && samePath && existing.file_mtime === file.mtime) {
         stats.skipped++;
         continue;
       }
@@ -411,18 +428,16 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
     if (pruned.objects > 0 || pruned.labels > 0 || pruned.xrefs > 0) {
       logger.info('Pruned stale index entries', { ...pruned });
     }
+    if (pruned.labels > 0) labelsChanged = true;
+  }
 
-    // Two label files may declare the same (label_id, language). The UNIQUE
-    // constraint means only one of them owns the row, so deleting the winner's
-    // file drops labels that a surviving file also defines. Re-apply any still
-    // present source that now contributes fewer labels than it parsed.
-    if (pruned.labels > 0) {
-      const recovered = await recoverUnderContributingLabelSources(writer, seenLabelFiles);
-      if (recovered > 0) {
-        stats.updated += recovered;
-        labelFtsDirty = true;
-        logger.info('Re-applied label sources after prune', { sources: recovered });
-      }
+  // Deleting or re-reading a label file can drop a row another file still declares.
+  if (labelsChanged) {
+    const recovered = await recoverUnderContributingLabelSources(writer, seenLabelFiles);
+    if (recovered > 0) {
+      stats.updated += recovered;
+      labelFtsDirty = true;
+      logger.info('Re-applied duplicate labels from other label files', { sources: recovered });
     }
   }
 
@@ -433,6 +448,7 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
   } else {
     logger.info('Skipping FTS rebuild; no indexed content changed');
   }
+  dbUtils.setMeta(db, dbUtils.META_KEYS.ftsPending, '0');
 
   stats.durationMs = Date.now() - startTime;
   recordBuildMeta(db, packagesDir, storeRawXml, stats.durationMs);
@@ -469,7 +485,7 @@ function recordBuildMeta(db: Database, packagesDir: string, storeRawXml: boolean
     dbUtils.setMeta(db, dbUtils.META_KEYS.packagesDirHash, hash);
     dbUtils.setMeta(db, dbUtils.META_KEYS.storeRawXml, storeRawXml ? '1' : '0');
     dbUtils.setMeta(db, dbUtils.META_KEYS.indexDurationMs, String(durationMs));
-    dbUtils.setMeta(db, dbUtils.META_KEYS.schemaVersion, '2');
+    dbUtils.setMeta(db, dbUtils.META_KEYS.schemaVersion, String(dbUtils.INDEX_SCHEMA_VERSION));
     db.exec('COMMIT');
   } catch (err) {
     db.exec('ROLLBACK');

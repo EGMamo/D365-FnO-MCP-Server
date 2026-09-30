@@ -41,12 +41,20 @@ internal sealed class IndexFreshness
             return;
         }
 
-        IndexStatusOutcome outcome;
-        using (ProgressReporter progress = await this.Shell.StartProgressReportingAsync(
-            "Checking the D365 F&O MCP index",
-            new ProgressReporterOptions(isWorkCancellable: true),
-            cancellationToken))
+        // The check opens the index database; an index run may be rewriting or deleting it.
+        if (!await this.services.IndexJobLock.WaitAsync(0, cancellationToken))
         {
+            await this.Shell.ShowPromptAsync("An index run is in progress; check again when it finishes.", PromptOptions.AlertConfirm, cancellationToken);
+            return;
+        }
+
+        IndexStatusOutcome outcome;
+        try
+        {
+            using ProgressReporter progress = await this.Shell.StartProgressReportingAsync(
+                "Checking the D365 F&O MCP index",
+                new ProgressReporterOptions(isWorkCancellable: true),
+                cancellationToken);
             progress.Report(new ProgressStatus(null, $"Scanning {settings.PackagesDirectory}"));
             using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, progress.CancellationToken);
             this.services.Log($"Checking the index served by {settings.ServerUrl} against {settings.PackagesDirectory}");
@@ -62,6 +70,10 @@ internal sealed class IndexFreshness
             {
                 outcome = new IndexStatusOutcome(null, ex.Message);
             }
+        }
+        finally
+        {
+            this.services.IndexJobLock.Release();
         }
 
         if (outcome.Report is null)

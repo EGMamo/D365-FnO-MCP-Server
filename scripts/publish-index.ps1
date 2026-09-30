@@ -129,9 +129,16 @@ if ($Keep -gt 0) {
   $names = az storage blob list --auth-mode login --only-show-errors --account-name $StorageAccount `
     --container-name $Container --query '[].name' -o tsv
   if ($LASTEXITCODE -ne 0) { throw 'az storage blob list failed' }
-  # Version folders sort chronologically by name (YYYYMMDDTHHMMSSZ-<sha8>).
-  $versions = $names | ForEach-Object { ($_ -split '/')[0] } | Where-Object { $_ -ne 'latest' } | Sort-Object -Unique -Descending
-  foreach ($old in ($versions | Select-Object -Skip $Keep)) {
+  # The version latest/manifest.json points at now; a server-side upload may have replaced ours.
+  $liveManifest = Join-Path $OutDir 'live-manifest.json'
+  az storage blob download --auth-mode login --only-show-errors --account-name $StorageAccount `
+    --container-name $Container --name 'latest/manifest.json' --file $liveManifest --overwrite true | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw 'az storage blob download of latest/manifest.json failed' }
+  $liveVersion = (Get-Content $liveManifest -Raw | ConvertFrom-Json).version
+  # Version folders sort chronologically by name (YYYYMMDDTHHMMSSZ-<sha8>); other folders are not ours.
+  $versions = $names | ForEach-Object { ($_ -split '/')[0] } |
+    Where-Object { $_ -cmatch '^\d{8}T\d{6}Z-[0-9a-f]{8}$' } | Sort-Object -Unique -Descending
+  foreach ($old in ($versions | Select-Object -Skip $Keep | Where-Object { $_ -ne $liveVersion })) {
     Step "Deleting $old"
     Invoke-Az @(
       'storage', 'blob', 'delete-batch', '--auth-mode', 'login', '--only-show-errors',
