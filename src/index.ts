@@ -188,7 +188,7 @@ export async function run(argv: string[]): Promise<CliResult> {
 
 async function main() {
   const { config } = await import('dotenv');
-  config();
+  config({ quiet: true });
 
   const result = await run(process.argv.slice(2));
   // `serve` keeps the event loop alive on its own; exiting here would kill it.

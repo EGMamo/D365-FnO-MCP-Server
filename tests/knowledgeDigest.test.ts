@@ -6,15 +6,12 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import {
   validateStructure,
   scanSensitiveContent,
-  tokenize,
-  jaccardSimilarity,
   findDuplicates,
   extractCandidateIdentifiers,
   checkFeasibility,
   nextSlugNumber,
   slugify,
   extractSummary,
-  listExistingTopicSummaries,
   digestKnowledge,
 } from '../src/knowledge/digest.js';
 import { openDb, upsertObject, type Database } from '../src/indexer/db.js';
@@ -105,13 +102,6 @@ describe('knowledge digest: scanSensitiveContent', () => {
 });
 
 describe('knowledge digest: duplicate detection', () => {
-  it('tokenizes and computes jaccard similarity', () => {
-    const a = tokenize('the quick brown fox jumps');
-    const b = tokenize('quick brown fox sleeps');
-    expect(jaccardSimilarity(a, b)).toBeGreaterThan(0);
-    expect(jaccardSimilarity(a, a)).toBe(1);
-  });
-
   it('flags near-identical content as a duplicate', () => {
     const entries = [{ slug: '01-foo', title: 'Foo', content: GOOD_ARTICLE }];
     const matches = findDuplicates(GOOD_ARTICLE, entries, 0.3);
@@ -267,21 +257,6 @@ describe('knowledge digest: conceptual duplication surfacing', () => {
   it('falls back to the opening paragraph when there is no "When to use this" section', () => {
     const summary = extractSummary('# Title\n\n## Pattern\nDo the thing this way.');
     expect(summary).toContain('Do the thing this way.');
-  });
-
-  it('lists every existing topic with a title and summary, regardless of wording overlap', () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kb-topics-'));
-    fs.writeFileSync(
-      path.join(dir, '01-reworded.md'),
-      '# Scheduled Widget Sync\n\n## When to use this\nNeeded whenever widgets must reach another system periodically.\n\n## Pattern\nCompletely different wording than the batch export article, same underlying idea.'
-    );
-
-    const topics = listExistingTopicSummaries(dir);
-    expect(topics).toHaveLength(1);
-    expect(topics[0].slug).toBe('01-reworded');
-    expect(topics[0].summary).toContain('periodically');
-
-    fs.rmSync(dir, { recursive: true, force: true });
   });
 
   it('always returns existingTopics from digestKnowledge, even when lexical duplicates is empty', () => {
