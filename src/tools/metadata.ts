@@ -52,12 +52,27 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
   );
   server.tool(
     'search_symbols',
-    'Full-text search across all AOT objects',
+    'Search indexed AOT metadata for an object name or term. Full-text prefix matching searches names, object types, and packages, prioritizes exact name matches, and falls back to substring name matching when full-text finds nothing. Use a type filter to narrow results; inspect matches with the matching get_* tool or get_element_xml.',
     {
-      query: z.string(),
-      type: z.enum(INDEXED_OBJECT_TYPES).optional(),
-      limit: z.number().int().min(1).max(100).default(20)
+      query: z
+        .string()
+        .trim()
+        .min(1, 'Enter a name or search term.')
+        .max(200, 'Search terms must be 200 characters or fewer.')
+        .describe('A non-empty object name or search term, e.g. CustTable or SalesLine.'),
+      type: z
+        .enum(INDEXED_OBJECT_TYPES)
+        .optional()
+        .describe('Optional AOT object type filter, e.g. Table or Class.'),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(100)
+        .default(20)
+        .describe('Maximum matching objects to return (1-100; default 20).'),
     },
+    { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     async ({ query, type, limit }) => {
       const results = dbUtils.searchSymbols(db, query, type, limit);
       return { content: [{ type: 'text', text: JSON.stringify(results, null, 2) }] };

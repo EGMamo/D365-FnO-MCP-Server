@@ -38,8 +38,13 @@ export function collectGeneratorTools(db: Database): Map<string, Handler> {
 export function collectMetadataTools(db: Database, options: MetadataToolOptions = {}): Map<string, Handler> {
   const handlers = new Map<string, Handler>();
   const fakeServer = {
-    tool: (name: string, _desc: string, _schema: unknown, handler: Handler) => {
-      handlers.set(name, handler);
+    tool: (...args: unknown[]) => {
+      const name = args[0];
+      const handler = args.at(-1);
+      if (typeof name !== 'string' || typeof handler !== 'function') {
+        throw new Error('Invalid tool registration.');
+      }
+      handlers.set(name, handler as Handler);
     },
   } as unknown as McpServer;
 

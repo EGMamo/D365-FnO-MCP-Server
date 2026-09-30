@@ -250,7 +250,7 @@ describe('index upload', () => {
     const body = fs.createReadStream(path.join(root, 'package-gzip'));
     await expect(manager.writeChunk(session.id, 'other', 0, body, packed.sha256)).rejects.toMatchObject({ status: 403 });
     // The stream opens its file asynchronously; let it close before afterEach deletes the folder.
-    await new Promise((resolve) => body.destroy().once('close', resolve));
+    await new Promise<void>((resolve) => body.destroy().once('close', resolve));
     expect(() => manager.complete(session.id, 'other')).toThrow(/belongs to 'uploader'/);
     expect(() => manager.abort(session.id, 'other')).toThrow(/belongs to 'uploader'/);
   });

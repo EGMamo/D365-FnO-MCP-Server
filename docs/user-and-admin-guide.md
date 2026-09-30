@@ -54,6 +54,13 @@ project writes are supported; check the
 | Generate X++ or XML previews | `create_coc_extension`, `create_table_extension`, `create_data_entity`, `create_security_privilege`, `generate_xpp_class` |
 | Read development guidance | `d365kb://{slug}` resources, or the `d365_pattern_assistant` prompt |
 
+`search_symbols` accepts a non-empty name or term, an optional AOT type filter,
+and a result limit (default 20, maximum 100). Prefix full-text matching searches
+names, object types, and packages, prioritizes exact name matches, and falls
+back to substring name matches when full-text search finds nothing. Use
+`find_references` for structural relationships and
+`find_usages` for compiler-derived call sites; these are different data sets.
+
 For a field question, start with `get_table_schema`, then inspect its
 references or usages. For a Chain of Command extension, check
 `get_method_signature` before `create_coc_extension`. For entity and security

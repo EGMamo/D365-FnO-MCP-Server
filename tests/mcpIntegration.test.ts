@@ -128,14 +128,34 @@ async function search(client: Client, query: string): Promise<unknown[]> {
 describe.each(['stdio', 'http'] as const)('compiled MCP server over %s', (transport) => {
   it('initializes, exposes resources/prompts, calls actual tools, and disables writes/indexing', async () => {
     const client = await connect(transport, false);
-    const tools = (await client.listTools()).tools.map((tool) => tool.name);
+    const listedTools = (await client.listTools()).tools;
+    const tools = listedTools.map((tool) => tool.name);
     expect(tools).toContain('get_visual_studio_workspace');
     expect(tools).not.toContain('write_table_extension');
     expect(tools).not.toContain('digest_knowledge');
+    const symbolSearch = listedTools.find((tool) => tool.name === 'search_symbols');
+    expect(symbolSearch).toMatchObject({
+      description: expect.stringContaining('substring name matching'),
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+      },
+      inputSchema: {
+        properties: {
+          query: { description: expect.stringContaining('non-empty') },
+          type: { description: expect.stringContaining('object type filter') },
+          limit: { description: expect.stringContaining('Maximum matching objects') },
+        },
+      },
+    });
     expect((await client.listResources()).resources.length).toBeGreaterThan(0);
     expect((await client.listPrompts()).prompts.length).toBeGreaterThan(0);
     expect(await search(client, 'AlreadyIndexed')).toHaveLength(1);
     expect(await search(client, 'SampleClass')).toHaveLength(0);
+    await expect(client.callTool({
+      name: 'search_symbols', arguments: { query: '   ' },
+    })).resolves.toMatchObject({ isError: true });
     await expect(client.callTool({
       name: 'write_table_extension', arguments: {},
     })).resolves.toMatchObject({ isError: true });
