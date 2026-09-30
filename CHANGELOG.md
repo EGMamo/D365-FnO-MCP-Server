@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `MCP_LOG_LEVEL` filters the structured stderr log (`DEBUG` by default, or `INFO`, `WARN`, `ERROR`, `FATAL`, `SILENT`).
 - Code quality tools, adapted from GitHub community projects (all MIT):
   - `check_xpp_best_practices`: heuristic X++ checks modelled on AppChecker's rule catalog.
   - `find_field_access`: read vs write uses of a table field, after TRUDUtils.
@@ -100,6 +101,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Upgraded glob to 13, fast-xml-parser to 5, ESLint to 10 and Vitest to 5, and moved the CI and deploy workflows to action versions that run on Node 24. `npm ci` no longer reports deprecated packages or audit findings.
 - `D365_PACKAGES_DIR` is required only for indexing; `MCP_API_KEY` is no longer required for stdio.
 - `getIndexStats().lastIndexed` now reports the recorded build time instead of the call time.
 - `mssql` moved to `optionalDependencies`; the container image and `--omit=optional` installs leave

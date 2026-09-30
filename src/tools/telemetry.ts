@@ -463,12 +463,12 @@ export async function analyzeBatchClass(db: Database, className: string): Promis
   const implementsSet = new Set<string>();
   const inheritedMethods = new Set<string>();
   let chainLeavesIndex = false;
-  let current: any = obj;
+  let current: dbUtils.ObjectDetails | null = obj;
   const seen = new Set<string>([obj.name.toLowerCase()]);
   while (current) {
     for (const x of dbUtils.getXrefsFrom(db, current.name, 'Class', 'implements')) implementsSet.add(x.to_name);
     if (current !== obj && !FRAMEWORK_BASES.has(current.name.toLowerCase())) {
-      for (const m of current.methods) inheritedMethods.add(String(m.name).toLowerCase());
+      for (const m of current.methods) inheritedMethods.add(m.name.toLowerCase());
     }
     const parent = dbUtils.getXrefsFrom(db, current.name, 'Class', 'extends')[0]?.to_name;
     if (!parent || seen.has(parent.toLowerCase())) break;
@@ -499,7 +499,7 @@ export async function analyzeBatchClass(db: Database, className: string): Promis
   else if (lowerChain.some((c) => RUNBASE.has(c))) framework = 'RunBase';
   else if (/\[\s*DataContract(Attribute)?\b/i.test(declaration)) framework = 'SysOperationDataContract';
 
-  const own = new Set<string>(obj.methods.map((m: any) => String(m.name).toLowerCase()));
+  const own = new Set<string>(obj.methods.map((m) => m.name.toLowerCase()));
   const overrides: Record<string, boolean> = {};
   for (const name of OVERRIDES) overrides[name] = own.has(name.toLowerCase());
 

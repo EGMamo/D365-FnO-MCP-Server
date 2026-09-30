@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module';
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
 import fs from 'fs';
+import type { AxParam } from './parser.js';
 import { createUsageSchema } from './xrefUsage.js';
 import { createTraceSchema } from './traces.js';
 import { createReleasePlanSchema } from './releasePlans.js';
@@ -226,7 +227,41 @@ export function getMeta(db: Database, key: string): string | null {
   return row?.value ?? null;
 }
 
-export function upsertObject(db: Database, obj: any): number | bigint {
+export interface ObjectInput {
+  type: string;
+  name: string;
+  package: string;
+  model?: string;
+  file_path: string;
+  raw_xml: string | null;
+  file_mtime: number;
+}
+
+export interface MethodInput {
+  name: string;
+  accessModifier?: string;
+  returnType?: string;
+  params?: AxParam[];
+  isStatic?: boolean;
+  isAbstract?: boolean;
+}
+
+export interface LabelInput {
+  labelId: string;
+  value: string;
+  language?: string;
+  sourceFile?: string;
+}
+
+export interface XrefInput {
+  fromType: string;
+  fromName: string;
+  toType: string;
+  toName: string;
+  xrefKind: string;
+}
+
+export function upsertObject(db: Database, obj: ObjectInput): number | bigint {
   const stmt = db.prepare(`
     INSERT INTO ax_objects (type, name, package, model, file_path, raw_xml, file_mtime)
     VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -376,7 +411,7 @@ export function upsertProperties(db: Database, objectId: number | bigint, props:
   insertMany(entries);
 }
 
-export function upsertMethods(db: Database, objectId: number | bigint, methods: any[]) {
+export function upsertMethods(db: Database, objectId: number | bigint, methods: MethodInput[]) {
   const deleteStmt = db.prepare(`DELETE FROM ax_methods WHERE object_id = ?`);
   deleteStmt.run(objectId);
 
@@ -387,7 +422,7 @@ export function upsertMethods(db: Database, objectId: number | bigint, methods: 
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `);
 
-  const insertMany = transaction(db, (items: any[]) => {
+  const insertMany = transaction(db, (items: MethodInput[]) => {
     for (const item of items) {
       insertStmt.run(objectId, item.name, item.accessModifier || 'public', item.returnType || '', JSON.stringify(item.params || []), item.isStatic ? 1 : 0, item.isAbstract ? 1 : 0);
     }
@@ -396,7 +431,7 @@ export function upsertMethods(db: Database, objectId: number | bigint, methods: 
   insertMany(methods);
 }
 
-export function upsertLabels(db: Database, labels: any[], sourceFile: string = '') {
+export function upsertLabels(db: Database, labels: LabelInput[], sourceFile: string = '') {
   if (sourceFile) {
     // Drop labels previously sourced from this file so removed entries don't linger.
     db.prepare(`DELETE FROM ax_labels WHERE source_file = ?`).run(sourceFile);
@@ -411,7 +446,7 @@ export function upsertLabels(db: Database, labels: any[], sourceFile: string = '
       source_file = excluded.source_file
   `);
 
-  const insertMany = transaction(db, (items: any[]) => {
+  const insertMany = transaction(db, (items: LabelInput[]) => {
     for (const item of items) {
       insertStmt.run(item.labelId, item.language || 'en-US', item.value, item.sourceFile || sourceFile);
     }
@@ -653,7 +688,7 @@ export function createIndexWriter(db: Database) {
     INSERT INTO ax_methods (object_id, name, access_modifier, return_type, params, is_static, is_abstract)
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `);
-  const insertMethods = (objectId: number | bigint, methods: any[]) => {
+  const insertMethods = (objectId: number | bigint, methods: MethodInput[]) => {
     deleteMethods.run(objectId);
     for (const item of methods) {
       insertMethod.run(
@@ -676,7 +711,7 @@ export function createIndexWriter(db: Database) {
       value = excluded.value,
       source_file = excluded.source_file
   `);
-  const insertLabels = (labels: any[], sourceFile: string) => {
+  const insertLabels = (labels: LabelInput[], sourceFile: string) => {
     if (sourceFile) deleteLabelsBySource.run(sourceFile);
     for (const item of labels) {
       insertLabel.run(item.labelId, item.language || 'en-US', item.value, item.sourceFile || sourceFile);
@@ -696,7 +731,7 @@ export function createIndexWriter(db: Database) {
     INSERT INTO ax_xref (from_type, from_name, to_type, to_name, xref_kind)
     VALUES (?, ?, ?, ?, ?)
   `);
-  const insertXrefs = (xrefs: any[]) => {
+  const insertXrefs = (xrefs: XrefInput[]) => {
     for (const item of xrefs) {
       insertXref.run(item.fromType, item.fromName, item.toType, item.toName, item.xrefKind);
     }
@@ -712,7 +747,7 @@ export function createIndexWriter(db: Database) {
     getLabelSource(sourceFile: string): ExistingLabelSourceRow | undefined {
       return selectLabelSource.get(sourceFile) as ExistingLabelSourceRow | undefined;
     },
-    upsertObject(obj: any): number | bigint {
+    upsertObject(obj: ObjectInput): number | bigint {
       const result = upsertObjectStmt.get(
         obj.type,
         obj.name,
@@ -742,13 +777,13 @@ export function createIndexWriter(db: Database) {
     upsertProperties(objectId: number | bigint, props: Record<string, unknown>): void {
       insertProperties(objectId, props);
     },
-    upsertMethods(objectId: number | bigint, methods: any[]): void {
+    upsertMethods(objectId: number | bigint, methods: MethodInput[]): void {
       insertMethods(objectId, methods || []);
     },
     upsertSecurityGrants(objectId: number | bigint, grants: SecurityGrantInput[]): void {
       insertSecurityGrants(objectId, grants || []);
     },
-    upsertLabels(labels: any[], sourceFile: string): void {
+    upsertLabels(labels: LabelInput[], sourceFile: string): void {
       if (!labels || labels.length === 0) {
         if (sourceFile) deleteLabelsBySource.run(sourceFile);
         return;
@@ -764,7 +799,7 @@ export function createIndexWriter(db: Database) {
     deleteXrefsFrom(fromType: string, fromName: string): void {
       deleteXrefsByFrom.run(fromType, fromName);
     },
-    upsertXrefs(xrefs: any[]): void {
+    upsertXrefs(xrefs: XrefInput[]): void {
       if (xrefs && xrefs.length > 0) insertXrefs(xrefs);
     },
   };
@@ -973,21 +1008,71 @@ export function searchSymbols(db: Database, query: string, type?: string, limit:
   return db.prepare(likeSql).all(...likeParams);
 }
 
-export function getObjectByName(db: Database, name: string, type: string) {
+export interface ObjectRow {
+  id: number;
+  type: string;
+  name: string;
+  package: string;
+  model: string;
+  file_path: string;
+  raw_xml: string | null;
+  file_mtime: number;
+}
+
+export interface FieldRow {
+  id: number;
+  object_id: number;
+  name: string;
+  type: string | null;
+  edt: string | null;
+  label_id: string | null;
+  mandatory: number;
+  allow_edit: number;
+  data_source: string;
+  data_field: string;
+}
+
+export interface MethodRow {
+  id: number;
+  object_id: number;
+  name: string;
+  access_modifier: string;
+  return_type: string | null;
+  params: AxParam[];
+  is_static: number;
+  is_abstract: number;
+}
+
+export interface ObjectDetails extends ObjectRow {
+  fields: FieldRow[];
+  methods: MethodRow[];
+  enumValues: { name: string; value: string | null; label_id: string | null }[];
+  dataSources: { name: string; table_name: string | null }[];
+  controls: { name: string; type: string | null; parent_name: string | null }[];
+  properties: Record<string, string>;
+}
+
+export function getObjectByName(db: Database, name: string, type: string): ObjectDetails | null {
   // X++ names are case-insensitive: an exact match wins, otherwise any casing.
   const obj = (db.prepare(`SELECT * FROM ax_objects WHERE name = ? AND type = ?`).get(name, type) ??
-    db.prepare(`SELECT * FROM ax_objects WHERE name = ? COLLATE NOCASE AND type = ? ORDER BY name LIMIT 1`).get(name, type)) as any;
+    db.prepare(`SELECT * FROM ax_objects WHERE name = ? COLLATE NOCASE AND type = ? ORDER BY name LIMIT 1`).get(name, type)) as
+    ObjectRow | undefined;
   if (!obj) return null;
 
-  const fields = db.prepare(`SELECT * FROM ax_fields WHERE object_id = ?`).all(obj.id);
-  const methods = db.prepare(`SELECT * FROM ax_methods WHERE object_id = ?`).all(obj.id);
-  const enumValues = db.prepare(`SELECT name, value, label_id FROM ax_enum_values WHERE object_id = ?`).all(obj.id);
+  const fields = db.prepare(`SELECT * FROM ax_fields WHERE object_id = ?`).all(obj.id) as unknown as FieldRow[];
+  const methods = db.prepare(`SELECT * FROM ax_methods WHERE object_id = ?`).all(obj.id) as unknown as (Omit<
+    MethodRow,
+    'params'
+  > & { params: string | null })[];
+  const enumValues = db
+    .prepare(`SELECT name, value, label_id FROM ax_enum_values WHERE object_id = ?`)
+    .all(obj.id) as unknown as ObjectDetails['enumValues'];
   const dataSources = db
     .prepare(`SELECT name, table_name FROM ax_datasources WHERE object_id = ?`)
-    .all(obj.id);
+    .all(obj.id) as unknown as ObjectDetails['dataSources'];
   const controls = db
     .prepare(`SELECT name, type, parent_name FROM ax_form_controls WHERE object_id = ?`)
-    .all(obj.id);
+    .all(obj.id) as unknown as ObjectDetails['controls'];
   const propRows = db.prepare(`SELECT key, value FROM ax_properties WHERE object_id = ?`).all(obj.id) as {
     key: string;
     value: string;
@@ -998,7 +1083,7 @@ export function getObjectByName(db: Database, name: string, type: string) {
   return {
     ...obj,
     fields,
-    methods: methods.map((m: any) => ({ ...m, params: JSON.parse(m.params || '[]') })),
+    methods: methods.map((m) => ({ ...m, params: JSON.parse(m.params || '[]') as AxParam[] })),
     enumValues,
     dataSources,
     controls,
@@ -1067,7 +1152,7 @@ export function getXrefsTo(
 
 export function getAllObjects(db: Database, type?: string, pkg?: string, offset: number = 0, limit: number = 50) {
   let sql = `SELECT id, type, name, package, model, file_path, file_mtime FROM ax_objects WHERE 1=1`;
-  const params: any[] = [];
+  const params: SQLInputValue[] = [];
 
   if (type) {
     sql += ` AND type = ?`;

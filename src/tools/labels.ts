@@ -10,7 +10,7 @@ export function registerLabelsTools(server: McpServer, db: Database) {
     { labelId: z.string() },
     async ({ labelId }) => {
       const cleanId = labelId.startsWith('@') ? labelId.substring(1) : labelId;
-      const label = db.prepare(`SELECT value FROM ax_labels WHERE label_id = ? LIMIT 1`).get(cleanId) as any;
+      const label = db.prepare(`SELECT value FROM ax_labels WHERE label_id = ? LIMIT 1`).get(cleanId) as { value: string } | undefined;
       
       if (!label) {
         return { content: [{ type: 'text', text: "Label not found" }] };
