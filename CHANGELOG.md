@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Code quality tools, adapted from GitHub community projects (all MIT):
+  - `check_xpp_best_practices`: heuristic X++ checks modelled on AppChecker's rule catalog.
+  - `find_field_access`: read vs write uses of a table field, after TRUDUtils.
+  - `index-bp` command and `get_bp_findings` tool: import and query `xppbp.exe` XML logs, as produced by d365fo.tools.
+- `convert_security_customizations`: turns a Security configuration export into AOT security XML, after D365FOSecurityConverter.
+- Table methods stored under `<SourceCode><Methods>` are now indexed. Run `index --force` to pick them up in an existing index.
+- `llms-install.md` and `glama.json` so MCP directories and AI agents can install the server.
+- The `xpp-developer`, `performance-reviewer` and `security-reviewer` agents use the new tools.
+
 - Security model indexing: `AxSecurityRole`, `AxSecurityDuty`, `AxSecurityPrivilege` (plus
   role/duty extensions) and `AxMenuItemDisplay/Action/Output` are indexed. Privilege entry-point
   and data-entity grants go to a new `ax_security_grants` table. Role/duty/privilege/menu-item

@@ -121,6 +121,10 @@ Commands:
       --source <label>     Import label; re-importing a label replaces it
       --trace <name>       Only this TraceName
       --max-rows <n>       Per-session cap for methods and statements (default 1000)
+  index-bp <files...>      Import compiler best-practice logs (xppbp.exe -xmlLog output)
+      --model <name>       Model name when the log does not include one
+      --allow-empty        Succeed when the logs contain no findings
+      --db-path <path>     SQLite index path (default ./d365_index.db)
   index-release-plans      Import Microsoft release plans (the only command that calls the internet)
       --from-json <file>   Import a saved feed instead of downloading
       --url <url>          Feed URL (default releaseplans.microsoft.com)
@@ -386,6 +390,12 @@ Batch and telemetry:
 
 Release plans (after `index-release-plans`; see below):
 `search_release_plans` (keywords, product, wave and status as of today, or full details by plan ID), `check_feature_impact` (maps a feature or AOT name fragments to indexed objects, and to the objects in your packages that match or reference them)
+
+Code quality (heuristic checks modelled on AppChecker and TRUDUtils; not a replacement for the compiler):
+`check_xpp_best_practices` (tts balance, breakpoints, direct SQL, row-by-row DML in loops, nested `while select`, unused `forupdate`, CoC without `next`, empty `catch`, missing docs; on an indexed object or pasted source), `find_field_access` (read vs write uses of a table field across indexed code; needs raw XML), `get_bp_findings` (compiler best-practice results after `index-bp`)
+
+Security customizations:
+`convert_security_customizations` (turns a Security configuration export into AOT role, duty and privilege XML files, with an optional prefix or renames and checks against the index; returns files and writes nothing)
 
 X++ generators (grounded against the index):
 `create_coc_extension`, `create_table_extension`, `create_class_extension`, `generate_xpp_class`, `create_runbase_batch`, `create_sys_operation`

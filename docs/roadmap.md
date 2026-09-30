@@ -1,7 +1,7 @@
 # D365-FnO-MCP-Server — Expansion Plan (sourced from Microsoft FastTrack Implementation Assets)
 
 Source: https://github.com/microsoft/Dynamics-365-FastTrack-Implementation-Assets (MIT, sample code).
-Status: proposed — nothing below is implemented yet.
+Status: Phases 1–7 shipped. The awesome-msdyn365fo submission is a manual step for the maintainer.
 
 ## Current baseline (what the server already does)
 - Indexes 7 AOT types only: Table, Class, Enum, Form, Query, DataEntity, EDT (+ label files) — `src/indexer/scanner.ts`.
@@ -65,7 +65,21 @@ Shipped: `generate_kql_query` (15 scenarios across Application Insights and Log 
 
 Shipped as local agents instead of Copilot Studio: four agents (`xpp-developer`, `performance-reviewer`, `security-reviewer`, `release-planner`) in [`agents/`](../agents) as GitHub Copilot custom agents and Claude Code subagents, generated from one source by `npm run build:agents`, each pairing this server (`d365-fno`) with Microsoft Learn MCP; setup in [local-agents.md](local-agents.md). Plus [responsible-ai-faq.md](responsible-ai-faq.md). `.gemini/rules.md` was brought up to date with the current tools.
 
-Suggested order: 1 → 2 → 3 → 5 → 4 → 6 (1 and 2 need only local metadata; 3 reuses the XRef import pattern).
+## Phase 7 — Code quality & community tooling (sourced from GitHub community projects) — ✅ done
+Sources: [microsoft/Dynamics365FO-AppChecker](https://github.com/microsoft/Dynamics365FO-AppChecker) (MIT), [d365collaborative/d365fo.tools](https://github.com/d365collaborative/d365fo.tools) (MIT), [TrudAX/TRUDUtilsD365](https://github.com/TrudAX/TRUDUtilsD365) (MIT), [ameyer505/D365FOSecurityConverter](https://github.com/ameyer505/D365FOSecurityConverter) (MIT), [microsoft/mcp](https://github.com/microsoft/mcp) (MIT), [mafzaal/d365fo-client](https://github.com/mafzaal/d365fo-client) (MIT, comparison only).
+1. `check_xpp_best_practices` — static X++ checks on indexed objects or pasted source, modelled on AppChecker's official `rules/X++` catalog: unbalanced tts, breakpoints, direct SQL, insert/update/delete in loops, nested `while select`, `select forUpdate` without a write, `delete()` in a loop instead of `delete_from`, CoC methods without `next`, empty `catch`, boolean literal comparisons, TODO comments, missing documentation. Uses a small comment/string-aware X++ scanner (no X++ tree-sitter/LSP exists to reuse).
+2. `find_field_access` — read vs write classification of a table field across indexed code, using TRUDUtils' "Show cross-reference" heuristic (`buffer.Field = …`, `+=`, `setField(fieldNum(…))`, `update_recordset … setting`), narrowed by the XRef snapshot when imported.
+3. `index-bp` + `get_bp_findings` — import `xppbp.exe -xmlLog` output (as produced by d365fo.tools `Invoke-D365BestPractice` / `New-D365CAReport`) into the index with provenance, then query findings by object, rule or severity.
+4. `convert_security_customizations` — split a Security configuration UI export (`SecurityDatabaseCustomizations.xml`) into AOT `AxSecurityRole/Duty/Privilege` files with optional prefix/rename, dependency closure, and validation against the indexed security model (D365FOSecurityConverter logic, read-only: returns files, writes nothing).
+5. Discoverability: `llms-install.md` and `glama.json` (microsoft/mcp conventions); submit to [awesome-msdyn365fo](https://github.com/anderson-joyle/awesome-msdyn365fo) (manual step for the maintainer).
+6. Wire the new tools into the local agents (`xpp-developer`, `performance-reviewer`, `security-reviewer`) and docs.
+
+Deferred / not planned:
+- Live OData/DMF tools like d365fo-client — conflicts with the "no live D365 calls from the core server" guardrail; pair this server with d365fo-client instead if live data is needed.
+- A full X++ grammar / language server (tree-sitter) — large effort; revisit if the scanner's heuristics are not enough.
+- CAR `.xlsx` import — `index-bp` reads the same diagnostics from the xppbp XML log without an Excel dependency.
+
+Shipped as `src/xpp/` (scanner, rules, field access), `src/indexer/bpFindings.ts`, `src/security/converter.ts` and `src/tools/codeQuality.ts`, plus the `index-bp` command, `llms-install.md` and `glama.json`. The three agents were updated. Still manual: submitting the server to awesome-msdyn365fo.
 
 ---
 

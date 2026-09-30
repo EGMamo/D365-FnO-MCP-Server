@@ -155,7 +155,7 @@ export function parseAxTable(xml: string, _name?: string, _pkg?: string) {
     }
   }
 
-  const methods: AxMethod[] = nodes(node(root['Methods'])['Method']).map((m) => {
+  const methods: AxMethod[] = nodes(node(node(root['SourceCode'])['Methods'] ?? root['Methods'])['Method']).map((m) => {
     const source = collectSource(m['Source']);
     const fromSource = source ? parseXppMethods(source)[0] : undefined;
     return {

@@ -16,6 +16,9 @@ import {
   rolesContainingDuty,
   rolesContainingPrivilegeDirectly,
 } from '../security/model.js';
+import {
+  convertSecurityExport, SECURITY_CONVERTER_ATTRIBUTION, SECURITY_KIND_TO_AOT,
+} from '../security/converter.js';
 
 const SECURITY_TYPE_TO_AOT = { Role: 'SecurityRole', Duty: 'SecurityDuty', Privilege: 'SecurityPrivilege' } as const;
 
@@ -217,6 +220,58 @@ export function registerSecurityTools(server: McpServer, db: Database) {
         duties: split(a.duties, b.duties),
         privileges: split([...a.privileges.keys()], [...b.privileges.keys()]),
         missingFromIndex: [...new Set([...a.missing, ...b.missing])].sort(),
+      });
+    }
+  );
+
+  server.tool(
+    'convert_security_customizations',
+    'Convert a Security configuration export (XML with AxSecurityRole/AxSecurityDuty/AxSecurityPrivilege elements, from System administration > Security configuration) ' +
+      'into one AOT XML file per element (AxSecurityRole/<Name>.xml, ...), optionally prefixing/renaming elements and updating references to them. ' +
+      'Flags references that are neither in the export nor in the index. Returns file contents only; nothing is written. Approach from D365FOSecurityConverter (MIT).',
+    {
+      xml: z.string().min(1).max(2_000_000).describe('Contents of the exported security configuration XML file.'),
+      prefix: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/).optional().describe('Prefix for every exported element name, e.g. Contoso.'),
+      renames: z.record(z.string()).optional().describe('Explicit old name -> new name map (wins over prefix).'),
+      include: z.array(z.string()).max(200).optional().describe('Only these element names.'),
+      includeDependencies: z.boolean().default(true).describe('With include: also convert exported elements they reference.'),
+      maxFiles: z.number().int().min(1).max(200).default(50),
+    },
+    async ({ xml, prefix, renames, include, includeDependencies, maxFiles }) => {
+      let result;
+      try {
+        result = convertSecurityExport(xml, {
+          prefix, renames, include, includeDependencies,
+          existsInIndex: (ref) =>
+            Boolean(getObjectByName(db, ref.name, SECURITY_KIND_TO_AOT[ref.kind])),
+        });
+      } catch (err) {
+        return error(err instanceof Error ? err.message : String(err));
+      }
+      if (result.files.length === 0 && !include?.length) {
+        return error('No AxSecurityRole, AxSecurityDuty or AxSecurityPrivilege elements with a <Name> were found in the XML.');
+      }
+      const clashes = result.files
+        .filter((f) => f.name !== f.originalName && getObjectByName(db, f.name, SECURITY_KIND_TO_AOT[f.kind]))
+        .map((f) => `${f.kind} ${f.name}`);
+      const files = capped(result.files, maxFiles);
+      return json({
+        summary: {
+          roles: result.files.filter((f) => f.kind === 'Role').length,
+          duties: result.files.filter((f) => f.kind === 'Duty').length,
+          privileges: result.files.filter((f) => f.kind === 'Privilege').length,
+        },
+        renamed: result.renamed,
+        unresolvedReferences: result.unresolvedReferences,
+        nameClashesWithIndex: clashes,
+        duplicatesInExport: result.duplicates,
+        skipped: result.skipped,
+        files: { total: files.total, truncated: files.truncated, items: files.items.map(({ path, content }) => ({ path, content })) },
+        nextSteps: [
+          'Copy the files into Metadata/<Model>/AxSecurityRole|AxSecurityDuty|AxSecurityPrivilege of your model and add them to the Visual Studio project, then build.',
+          'Unrenamed elements keep their names; clashes with existing AOT elements must be renamed before import.',
+        ],
+        attribution: SECURITY_CONVERTER_ATTRIBUTION,
       });
     }
   );

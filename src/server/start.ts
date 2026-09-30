@@ -19,6 +19,7 @@ import { registerEntityTools } from '../tools/entities.js';
 import { registerTraceTools } from '../tools/traces.js';
 import { registerReleasePlanTools } from '../tools/releasePlans.js';
 import { registerTelemetryTools } from '../tools/telemetry.js';
+import { registerCodeQualityTools } from '../tools/codeQuality.js';
 import { registerGeneratorTools } from '../tools/generators.js';
 import { registerWriterTools } from '../tools/writers.js';
 import { registerKnowledgeResources, registerKnowledgeDigestTool } from '../tools/knowledge.js';
@@ -137,6 +138,7 @@ export async function startServer(): Promise<void> {
     registerEntityTools(server, db);
     registerTraceTools(server, db);
     registerTelemetryTools(server, db);
+    registerCodeQualityTools(server, db);
     registerReleasePlanTools(server, db);
     registerGeneratorTools(server, db);
     registerWriterTools(server, db, {

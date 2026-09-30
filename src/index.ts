@@ -14,7 +14,7 @@ export interface CliResult {
 }
 
 export async function run(argv: string[]): Promise<CliResult> {
-  const { command, flags } = parseArgs(argv);
+  const { command, flags, positionals } = parseArgs(argv);
 
   if (flags.help === true || flags.h === true || command === 'help') {
     console.log(HELP_TEXT);
@@ -79,6 +79,17 @@ export async function run(argv: string[]): Promise<CliResult> {
           allowEmpty: flags['allow-empty'] === true || flags['allow-empty'] === 'true',
           allowSourceLocks: flags['allow-source-locks'] === true || flags['allow-source-locks'] === 'true',
           storeRaw: flags['store-raw'] === true || flags['store-raw'] === 'true',
+        }),
+      };
+    }
+    case 'index-bp': {
+      const { indexBpCommand } = await import('./cli/index-bp-command.js');
+      return {
+        code: await indexBpCommand({
+          files: positionals,
+          model: flagString(flags, 'model'),
+          dbPath: flagString(flags, 'db-path'),
+          allowEmpty: flagBool(flags, 'allow-empty'),
         }),
       };
     }

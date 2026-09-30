@@ -5,9 +5,9 @@ tools and the Microsoft Learn MCP server:
 
 | Agent | Use it for | Can edit files |
 | --- | --- | --- |
-| `xpp-developer` | Questions about the code base; drafting CoC, table/class extensions, SysOperation jobs, data entities | Yes, after you agree |
+| `xpp-developer` | Questions about the code base; drafting CoC, table/class extensions, SysOperation jobs, data entities; best-practice and field-access checks | Yes, after you agree |
 | `performance-reviewer` | Analyzing Trace Parser captures imported with `index-trace` | No |
-| `security-reviewer` | Roles, duties, privileges, access paths, segregation of duties, least-privilege drafts | No |
+| `security-reviewer` | Roles, duties, privileges, access paths, segregation of duties, least-privilege drafts, converting Security configuration exports to AOT | No |
 | `release-planner` | Release-wave features imported with `index-release-plans` and the customizations to retest | No |
 
 The same agents come in two formats, generated from [`agents/source/`](../agents/source):

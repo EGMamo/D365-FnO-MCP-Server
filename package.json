@@ -69,6 +69,7 @@
     "d365-fno-assistant-knowledge/resources/*.md",
     ".env.example",
     "README.md",
+    "llms-install.md",
     "LICENSE"
   ]
 }

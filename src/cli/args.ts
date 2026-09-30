@@ -78,6 +78,10 @@ Commands:
       --trace <name>         Only this TraceName (default: every trace in the database)
       --max-rows <n>         Per-session cap for methods and SQL statements (default 1000)
       --db-path <path>       SQLite index path (default D365_INDEX_DB_PATH or ./d365_index.db)
+  index-bp <file...>         Import compiler best-practice logs (Dynamics.AX.<Model>.xppbp.xml) for get_bp_findings
+      --model <name>         Model name (default: taken from the file name)
+      --allow-empty          Replace the previous import even if the logs contain no diagnostics
+      --db-path <path>       SQLite index path (default D365_INDEX_DB_PATH or ./d365_index.db)
   index-release-plans        Store Microsoft release plans for the release plan tools (network; opt-in)
       --from-json <file>     Import a saved releaseplans.microsoft.com feed instead of downloading
       --url <url>            Feed URL (default https://releaseplans.microsoft.com/en-US/allreleaseplans/)
