@@ -261,6 +261,16 @@ describe('CLI', () => {
     expect(envFile).toContain('D365_INDEX_DB_PATH=./data/index.db');
     expect(fs.existsSync(path.join(setupDir, 'data'))).toBe(true);
 
+    // A second run leaves the existing file alone unless --force is given.
+    const args = ['setup', '--non-interactive', '--packages-dir', packagesDir, '--api-key', 'n'.repeat(40)];
+    const env = { DOTENV_CONFIG_PATH: path.join(setupDir, '.env.absent') };
+    const again = await runCli(args, env, setupDir);
+    expect(again.code).toBe(1);
+    expect(again.stderr).toContain('--force');
+    expect(fs.readFileSync(path.join(setupDir, '.env'), 'utf-8')).toBe(envFile);
+    expect((await runCli([...args, '--force'], env, setupDir)).code).toBe(0);
+    expect(fs.readFileSync(path.join(setupDir, '.env'), 'utf-8')).toContain(`MCP_API_KEY=${'n'.repeat(40)}`);
+
     fs.rmSync(setupDir, { recursive: true, force: true });
   }, 120_000);
 

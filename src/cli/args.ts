@@ -134,6 +134,7 @@ Commands:
       --api-key <key>       MCP API key (>= 32 chars; generated when omitted)
       --db-path <path>      SQLite index path (default ./d365_index.db)
       --transport <mode>    http or stdio (default http)
+      --force               Replace an existing .env
 
 Options:
   -h, --help                Show help

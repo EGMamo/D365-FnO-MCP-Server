@@ -11,6 +11,8 @@ export interface SetupOptions {
   dbPath?: string;
   transport?: string;
   cwd?: string;
+  /** Replace an existing `.env`; without it setup refuses to overwrite one. */
+  force?: boolean;
 }
 
 function generateApiKey(): string {
@@ -62,6 +64,12 @@ export async function setupCommand(options: SetupOptions): Promise<number> {
   const defaultDbPath = options.dbPath ?? './d365_index.db';
   const defaultTransport = options.transport ?? 'http';
 
+  const envPath = path.resolve(cwd, '.env');
+  if (fs.existsSync(envPath) && !options.force) {
+    console.error(`${envPath} already exists; pass --force to replace it.`);
+    return 1;
+  }
+
   let values: { packagesDir: string; apiKey: string; dbPath: string; transport: string };
 
   if (options.nonInteractive) {
@@ -101,7 +109,6 @@ export async function setupCommand(options: SetupOptions): Promise<number> {
     console.log(`Created index DB directory ${dbDir}`);
   }
 
-  const envPath = path.resolve(cwd, '.env');
   fs.writeFileSync(envPath, renderEnv(values), { mode: 0o600 });
   console.log(`Wrote ${envPath}`);
   console.log('Next: run `d365-fno-mcp-server doctor`, then `d365-fno-mcp-server index`.');
