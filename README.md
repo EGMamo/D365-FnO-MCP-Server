@@ -137,6 +137,12 @@ Commands:
       --retries <n>         Retries per chunk (default 4)
       --relative-paths      Rewrite indexed file paths relative to D365_PACKAGES_DIR in the uploaded copy
       --progress json       One JSON event per line on stdout
+  index-status              Report whether the served index is current for the local packages folder
+      --packages-dir <dir>  PackagesLocalDirectory to check (default D365_PACKAGES_DIR)
+      --db-path <path>      Local SQLite index (default D365_INDEX_DB_PATH or ./d365_index.db)
+      --server <url>        Compare with the index this server serves (API key in D365_MCP_API_KEY)
+      --list <n>            Changed files to list (default 20)
+      --json                Print one JSON object on stdout
   digest --file <path>      Validate a draft knowledge base article and add it if it passes
       --slug <slug>          Filename slug override (kebab-case, no number prefix)
       --dry-run              Validate only, do not write the file

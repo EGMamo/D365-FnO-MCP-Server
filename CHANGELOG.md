@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `index-status` command: compares the local packages folder with the local index and with the
+  index a server serves (`--server`), and reports added, changed and removed files per model and
+  whether a newer local index still needs uploading. `--json` for tools.
+- Visual Studio extension: *Check Index Freshness* runs `index-status` with the saved settings and
+  offers *Update Index*, which re-runs index, XRef import and upload incrementally without opening
+  the Index and Upload window.
 - Index uploads: `POST/PUT/GET/DELETE /admin/index/uploads` accept a packaged index whole or in
   chunks (per-chunk SHA-256, resend on mismatch), verify the assembled package, the decompressed
   database and its object count, then swap it in without a restart (open sessions reconnect).

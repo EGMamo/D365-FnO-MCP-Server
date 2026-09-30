@@ -100,6 +100,12 @@ Commands:
       --integrity-check     Run PRAGMA integrity_check on the copy instead of quick_check
       --work-dir <dir>      Where to stage the package (default: the system temp folder)
       --progress json       One JSON event per line on stdout (used by the Visual Studio extension)
+  index-status              Report whether the served index is current for the local packages folder
+      --packages-dir <dir>  PackagesLocalDirectory to check (default D365_PACKAGES_DIR)
+      --db-path <path>      Local SQLite index (default D365_INDEX_DB_PATH or ./d365_index.db)
+      --server <url>        Compare with the index this server serves (API key in D365_MCP_API_KEY)
+      --list <n>            Changed files to list (default 20)
+      --json                Print one JSON object on stdout (used by the Visual Studio extension)
   digest --file <path>      Validate a draft knowledge base article and add it if it passes
       --slug <slug>          Filename slug override (kebab-case, no number prefix)
       --dry-run              Validate only, do not write the file

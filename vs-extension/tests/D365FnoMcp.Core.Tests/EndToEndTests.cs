@@ -121,6 +121,38 @@ public class EndToEndTests
             Assert.True(report.Succeeded, report.Summary());
             Assert.True(report.CanUpload);
             Assert.Contains("(upload)", report.Summary());
+
+            if (compression != UploadCompression.Gzip)
+            {
+                return;
+            }
+
+            // Freshness: current right after the upload, stale after an edit, current again after an incremental update.
+            Assert.Empty(IndexStatusCheck.Validate(settings, Directory.Exists));
+            var log = new List<string>();
+            IndexStatusOutcome fresh = await IndexStatusCheck.RunAsync(launch, settings, UploaderKey, (line, _) => log.Add(line), CancellationToken.None);
+            Assert.True(fresh.Report is not null, $"{fresh.Error}{Environment.NewLine}{string.Join(Environment.NewLine, log)}");
+            Assert.True(fresh.Report!.UpToDate, fresh.Report.Summary(DateTimeOffset.UtcNow));
+            Assert.Equal("local-index", fresh.Report.Basis);
+
+            string enumDir = Path.Combine(packages, "Package", "Model", "AxEnum");
+            Directory.CreateDirectory(enumDir);
+            File.Copy(Path.Combine(repo, "tests", "fixtures", "AxEnumSample.xml"), Path.Combine(enumDir, "SampleEnum.xml"));
+            IndexStatusOutcome stale = await IndexStatusCheck.RunAsync(launch, settings, UploaderKey, (line, _) => log.Add(line), CancellationToken.None);
+            Assert.NotNull(stale.Report);
+            Assert.False(stale.Report!.UpToDate);
+            Assert.Equal(1, stale.Report.Added);
+            Assert.Equal(new ModelChanges("Model", 1), Assert.Single(stale.Report.Models));
+
+            settings.NewIndex = false;
+            IndexUploadResult update = await new IndexUploadRunner(launch).RunAsync(settings, new JobSecrets(UploaderKey, null), new Observer(), CancellationToken.None);
+            Assert.True(update.Succeeded, update.Message);
+            IndexStatusOutcome updated = await IndexStatusCheck.RunAsync(launch, settings, UploaderKey, (line, _) => log.Add(line), CancellationToken.None);
+            Assert.True(updated.Report?.UpToDate, updated.Report?.Summary(DateTimeOffset.UtcNow) ?? updated.Error);
+
+            IndexStatusOutcome wrongKey = await IndexStatusCheck.RunAsync(launch, settings, "not-a-valid-key-0000000000000000000000", (line, _) => log.Add(line), CancellationToken.None);
+            Assert.Null(wrongKey.Report);
+            Assert.Contains("Could not read the served index", wrongKey.Error);
         }
         finally
         {
