@@ -1,0 +1,5 @@
+# Generated agent files are compared byte-for-byte with the rendered output, and
+# vitest cannot load build-agents.mjs if its shebang line ends in CR. Keep both LF
+# on every platform, including Windows checkouts with core.autocrlf=true.
+agents/** text eol=lf
+scripts/*.mjs text eol=lf
