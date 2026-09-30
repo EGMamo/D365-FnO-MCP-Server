@@ -40,7 +40,7 @@ const previewSchema = {
     labelId: z.string().optional(),
     mandatory: z.boolean().optional(),
     allowEdit: z.boolean().optional(),
-  })),
+  })).max(1000),
   properties: z.object({
     labelId: z.string().optional(),
     saveDataPerCompany: z.boolean().optional(),

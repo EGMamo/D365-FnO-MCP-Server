@@ -30,6 +30,12 @@ describe('parseApiKeys', () => {
     expect(parsed.errors[0]).not.toContain('tooshort');
   });
 
+  it('rejects the placeholder key older .env.example files shipped', () => {
+    const parsed = parseApiKeys(undefined, 'change-me-to-a-strong-random-secret-min-32-chars');
+    expect(parsed.keys).toEqual([]);
+    expect(parsed.errors[0]).toMatch(/placeholder/);
+  });
+
   it('rejects duplicate names and duplicate keys', () => {
     const names = parseApiKeys(`a=${key('a')},a=${key('b')}`, undefined);
     expect(names.errors[0]).toMatch(/duplicate name 'a'/);

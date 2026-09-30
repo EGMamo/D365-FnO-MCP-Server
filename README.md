@@ -14,7 +14,7 @@ A Model Context Protocol (MCP) server that gives AI coding assistants first-clas
 - **X++ generators with grounding** — Chain of Command extensions, table/class extensions, plain classes, RunBase batch jobs, and SysOperation classes. Generators validate their inputs against the index and fail closed rather than emit code for objects that do not exist.
 - **Dual MCP transport** — Streamable HTTP (API-key protected) for remote/shared use, and stdio for local clients such as Claude Desktop, Claude Code, or VS Code.
 - **SQLite index** — a local, incrementally updated index of `PackagesLocalDirectory`, so lookups are fast and offline.
-- **CLI** — `setup`, `doctor`, `index`, and `serve` commands for a scripted, one-command onboarding.
+- **CLI** — `setup`, `doctor`, `index` and `serve` for onboarding, plus import commands for compiler cross-references, Trace Parser data, best-practice logs and release plans, and `publish-index`, `pull-index`, `upload-index` and `index-status` for sharing an index (see the [CLI reference](#cli-reference)).
 - **Hosted mode** — run the server read-only on Azure App Service. It downloads a published index at start-up (`D365_INDEX_URL`), so developers connect over HTTPS with a personal API key and install nothing locally. See [docs/hosted-deployment.md](docs/hosted-deployment.md).
 - **Index uploads** — `upload-index` sends a freshly built index to a running server, compressed (gzip, Brotli or none) and in parallel chunks, each carrying its own SHA-256. The server checks the whole package and the decompressed database before it switches over (`D365_INDEX_UPLOAD_KEYS`).
 - **Visual Studio extension** — sets up the MCP connection for Copilot in Visual Studio 2022/2026 (`.mcp.json` plus a connection test), and indexes `PackagesLocalDirectory` and the XRef database and uploads the result from inside the IDE. See [docs/visual-studio-extension.md](docs/visual-studio-extension.md).
@@ -45,7 +45,7 @@ The package is not published to npm yet, so `npx d365-fno-mcp-server` is not ava
 ## Quick start
 
 ```bash
-d365-fno-mcp-server setup     # interactively creates a .env file (generates an API key)
+d365-fno-mcp-server setup     # interactively creates a .env file (generates an API key; --force replaces an existing one)
 d365-fno-mcp-server doctor    # validates config, packages dir, and DB access
 d365-fno-mcp-server index     # builds the SQLite index (first run takes a while)
 d365-fno-mcp-server serve     # starts the MCP server
@@ -100,6 +100,18 @@ Configuration comes from environment variables (a `.env` file in the working dir
 | `SESSION_IDLE_TIMEOUT_MS` | `1800000` | Idle sessions are closed after this period (swept every 60s). |
 | `MCP_LOG_LEVEL` | `DEBUG` | Lowest level written to the structured stderr log: `DEBUG`, `INFO`, `WARN`, `ERROR`, `FATAL` or `SILENT`. |
 
+CLI commands also read these; the server ignores them:
+
+| Variable | Used by | Description |
+| --- | --- | --- |
+| `D365_XREF_CONNECTION_STRING` | `index-xref` | SQL Server connection string for `DynamicsXrefDB` (read-only login). |
+| `D365_TRACE_CONNECTION_STRING` | `index-trace` | SQL Server connection string for the Trace Parser `AxTrace` database. |
+| `D365_MCP_SERVER_URL` | `upload-index`, `index-status` | Base URL of the server to upload to or compare with. |
+| `D365_MCP_API_KEY` | `upload-index`, `index-status` | API key sent to that server. |
+
+Prefer these variables to `--connection-string` on the command line, where other users of the
+machine can see it in the process list.
+
 See `.env.example` for a starting point.
 
 ## CLI reference
@@ -110,28 +122,31 @@ d365-fno-mcp-server <command> [options]
 Commands:
   serve                     Start the MCP server (default command)
   index [--force]           Run a foreground indexing pass
-      --packages-dir <dir>  PackagesLocalDirectory (default D365_PACKAGES_DIR)
+      --packages-dir <dir>  PackagesLocalDirectory to index (default D365_PACKAGES_DIR)
       --db-path <path>      SQLite index path (default D365_INDEX_DB_PATH or ./d365_index.db)
-  index-xref               Import a consistent compiler-usage snapshot from SQL Server
-      --db-path <path>      SQLite index path (default ./d365_index.db)
-      --allow-empty        Intentionally replace usage data with an empty snapshot
-      --allow-source-locks Allow serializable source reads if snapshot isolation is off
-      --store-raw          Retain original SQL rows (off by default)
-  index-trace              Import Trace Parser (AxTrace) aggregates for the trace tools
-      --from-json <file>   Import from a JSON file instead of SQL Server
-      --source <label>     Import label; re-importing a label replaces it
-      --trace <name>       Only this TraceName
-      --max-rows <n>       Per-session cap for methods and statements (default 1000)
-  index-bp <files...>      Import compiler best-practice logs (xppbp.exe -xmlLog output)
-      --model <name>       Model name when the log does not include one
-      --allow-empty        Succeed when the logs contain no findings
-      --db-path <path>     SQLite index path (default ./d365_index.db)
-  index-release-plans      Import Microsoft release plans (the only command that calls the internet)
-      --from-json <file>   Import a saved feed instead of downloading
-      --url <url>          Feed URL (default releaseplans.microsoft.com)
-      --products <a,b>     Product names to keep (default: F&O products)
-      --all-products       Keep every product
-      --db-path <path>     SQLite index path (default ./d365_index.db)
+  index-xref                 Import compiler cross-reference snapshot from SQL Server
+      --connection-string    SQL Server connection string (prefer D365_XREF_CONNECTION_STRING)
+      --db-path <path>       SQLite index path (default D365_INDEX_DB_PATH or ./d365_index.db)
+      --allow-empty          Explicitly permit replacing the snapshot with no references
+      --allow-source-locks   Allow serializable source reads if snapshot isolation is disabled
+      --store-raw            Retain raw SQL rows (larger database; off by default)
+  index-trace                Import Trace Parser (AxTrace) aggregates for the trace tools
+      --connection-string    Trace database connection string (prefer D365_TRACE_CONNECTION_STRING)
+      --from-json <file>     Import aggregates from a JSON file instead of SQL Server
+      --source <label>       Label for this import; re-importing a label replaces it (default: database or file name)
+      --trace <name>         Only this TraceName (default: every trace in the database)
+      --max-rows <n>         Per-session cap for methods and SQL statements (default 1000)
+      --db-path <path>       SQLite index path (default D365_INDEX_DB_PATH or ./d365_index.db)
+  index-bp <file...>         Import compiler best-practice logs (Dynamics.AX.<Model>.xppbp.xml) for get_bp_findings
+      --model <name>         Model name (default: taken from the file name)
+      --allow-empty          Replace the previous import even if the logs contain no diagnostics
+      --db-path <path>       SQLite index path (default D365_INDEX_DB_PATH or ./d365_index.db)
+  index-release-plans        Store Microsoft release plans for the release plan tools (network; opt-in)
+      --from-json <file>     Import a saved releaseplans.microsoft.com feed instead of downloading
+      --url <url>            Feed URL (default https://releaseplans.microsoft.com/en-US/allreleaseplans/)
+      --products <a,b>       Product names to keep (default: Finance, SCM, Commerce, Project Operations, HR, cross-app)
+      --all-products         Keep every product in the feed
+      --db-path <path>       SQLite index path (default D365_INDEX_DB_PATH or ./d365_index.db)
   doctor [--hosted]         Validate environment and report issues (exit 1 on failure)
                             --hosted checks a published-index deployment (implied by D365_INDEX_URL)
   pull-index                Download the published index instead of building one
@@ -148,22 +163,25 @@ Commands:
       --compression <c>     gzip (default), brotli or none
       --level <l>           fastest, balanced (default) or smallest
   upload-index              Package the local index and upload it to a running server (API key in D365_MCP_API_KEY)
-      --server <url>        Server base URL (default D365_MCP_SERVER_URL)
+      --server <url>        Server base URL (default D365_MCP_SERVER_URL), e.g. https://<app>.azurewebsites.net
       --db-path <path>      Source SQLite index (default D365_INDEX_DB_PATH or ./d365_index.db)
       --compression <c>     gzip (default), brotli or none
       --level <l>           fastest, balanced (default) or smallest
-      --chunk-size <MiB>    Chunk size (default 32); each chunk carries its own SHA-256
+      --chunk-size <MiB>    Chunk size in MiB (default 32); each chunk carries its own SHA-256
       --no-chunks           Send the whole package in a single request
       --parallel <n>        Chunks in flight at once (default 4)
       --retries <n>         Retries per chunk (default 4)
       --relative-paths      Rewrite indexed file paths relative to D365_PACKAGES_DIR in the uploaded copy
-      --progress json       One JSON event per line on stdout
+      --allow-no-raw-xml    Upload even if raw XML was not stored
+      --integrity-check     Run PRAGMA integrity_check on the copy instead of quick_check
+      --work-dir <dir>      Where to stage the package (default: the system temp folder)
+      --progress json       One JSON event per line on stdout (used by the Visual Studio extension)
   index-status              Report whether the served index is current for the local packages folder
       --packages-dir <dir>  PackagesLocalDirectory to check (default D365_PACKAGES_DIR)
       --db-path <path>      Local SQLite index (default D365_INDEX_DB_PATH or ./d365_index.db)
       --server <url>        Compare with the index this server serves (API key in D365_MCP_API_KEY)
       --list <n>            Changed files to list (default 20)
-      --json                Print one JSON object on stdout
+      --json                Print one JSON object on stdout (used by the Visual Studio extension)
   digest --file <path>      Validate a draft knowledge base article and add it if it passes
       --slug <slug>          Filename slug override (kebab-case, no number prefix)
       --dry-run              Validate only, do not write the file
@@ -175,13 +193,14 @@ Commands:
       --api-key <key>       MCP API key (>= 32 chars; generated when omitted)
       --db-path <path>      SQLite index path (default ./d365_index.db)
       --transport <mode>    http or stdio (default http)
+      --force               Replace an existing .env
 
 Options:
   -h, --help                Show help
   -v, --version             Show version
-```
 
-Flags accept `--flag`, `--flag=value`, and `--flag value` forms.
+Flags accept --flag, --flag=value, and --flag value forms.
+```
 
 ### Adding to the knowledge base with `digest`
 
@@ -331,6 +350,13 @@ Streamable HTTP endpoint at `http://localhost:3000/mcp`. Every request must pres
 
 Health check (no auth): `GET http://localhost:3000/health` → `{ "status": "ok", "version": "0.1.0" }`.
 
+| Route | Auth | Purpose |
+| --- | --- | --- |
+| `GET /health` | none | Liveness and server version. |
+| `POST`, `GET`, `DELETE /mcp` | API key | MCP Streamable HTTP endpoint. |
+| `GET /admin/index` | API key | The index being served and whether the caller's key may upload. |
+| `/admin/index/uploads[/<id>[/chunks/<n>\|/complete]]` | key in `D365_INDEX_UPLOAD_KEYS` | Chunked index upload used by `upload-index` and the Visual Studio extension. |
+
 ### stdio (`MCP_TRANSPORT=stdio`)
 
 For local MCP clients such as Claude Desktop, Claude Code, or VS Code. Logs are written to stderr so stdout stays reserved for JSON-RPC framing.
@@ -429,10 +455,12 @@ D365_XREF_CONNECTION_STRING="Server=devvm;Database=DynamicsXrefDB;User Id=<read-
 d365-fno-mcp-server index-xref --db-path ./d365_index.db
 ```
 
-The default `mssql` driver does not provide Windows trusted/LocalDB authentication simply by adding
-`Integrated Security=true`. Use an authentication/endpoint configuration supported by the installed
-driver; Windows-native authentication requires a separately validated integration. Keep TLS
-certificate verification enabled on remote connections.
+To sign in as the current Windows user (a local SQL Server or LocalDB on a development VM), use
+`Trusted_Connection=yes` (or `Integrated Security=SSPI`) and install the optional native driver
+where the CLI is installed: `npm install msnodesqlv8` (add `-g` for a global install), plus ODBC
+Driver 17 or 18 for SQL Server. The connection string is then passed to ODBC, with
+`Driver={ODBC Driver 17 for SQL Server}` added when it names none. `index-trace` works the same way.
+Keep TLS certificate verification enabled on remote connections.
 
 The importer probes `dbo` columns and unique keys before reading. Modern `References`/`Names`
 tables are joined in SQL and read in bounded pages; `SysXRef*References` variants are accepted only
@@ -525,7 +553,7 @@ Query shapes and field names are adapted from Microsoft's Dynamics-365-FastTrack
 `index-release-plans` downloads the public feed behind
 [releaseplans.microsoft.com](https://releaseplans.microsoft.com) and stores the Finance, Supply
 Chain Management, Commerce, Project Operations, Human Resources and F&O cross-app features in the
-local index. It is the only command that calls the internet, and it runs only when you start it.
+local index. It is the only command that calls the public internet, and it runs only when you start it.
 The MCP tools read the local copy.
 
 ```text
@@ -542,8 +570,9 @@ features) and import it with `--from-json`. Release plans are public, so `publis
 your objects that match or extend, use or reference the matching objects. Use it to decide what to
 regression test, not as a Microsoft impact analysis.
 
-Microsoft plans to stop publishing release plans after September 2026 in favour of the Microsoft
-AI at Work roadmap. The paging and product scope follow the FastTrack Release Planner Helper
+Microsoft announced it would stop publishing release plans after September 2026 in favour of the
+Microsoft AI at Work roadmap. If the feed is gone, the command fails and the last imported copy stays
+in the index; `--from-json` still works with a saved feed. The paging and product scope follow the FastTrack Release Planner Helper
 (MIT License, Copyright (c) Microsoft Corporation).
 
 ## Local agents (GitHub Copilot and Claude Code)
@@ -594,7 +623,24 @@ database. Set `D365_RUN_SQL_INTEGRATION=1` and `D365_XREF_CONNECTION_STRING`, th
 - **Trust proxy** — `TRUST_PROXY_HOPS` defaults to `0`, meaning `X-Forwarded-For` is ignored and the socket address is used. Only raise it when the server genuinely sits behind that many trusted proxies; otherwise clients can spoof their IP and evade rate limiting.
 - **Session limits** — `MAX_CONCURRENT_SESSIONS` and `SESSION_IDLE_TIMEOUT_MS` bound memory use and clean up abandoned sessions.
 - **Exposure** — the server grants read access to your source metadata and should not be exposed to untrusted networks. It binds every interface unless `MCP_HOST` says otherwise; set `MCP_HOST=127.0.0.1` for a local server, and front a shared one with TLS (App Service terminates HTTPS in hosted mode).
+- **Write tools over HTTP** — with `D365_ENABLE_WRITE_TOOLS=1` every API key can use the write tools, including `digest_knowledge`, which adds knowledge base articles that all clients read. Enable them only on a local or single-user server.
 - **Data and AI use** — see the [Responsible AI and security FAQ](docs/responsible-ai-faq.md) for what the server reads, stores and sends, and how to review AI output that uses it.
+- **Reporting a vulnerability** — see [SECURITY.md](SECURITY.md).
+
+## Troubleshooting
+
+| Symptom | Cause and fix |
+| --- | --- |
+| HTTP `401 Unauthorized` | The key is missing or wrong. Send it as `X-API-Key: <key>` or `Authorization: Bearer <key>`, exactly as listed in `MCP_API_KEYS`. |
+| Startup fails with `key for '<name>' is N characters` | Keys need at least 32 characters. Generate one with `openssl rand -hex 32`. |
+| Startup fails with `documentation placeholder` | The key is still the sample value from an old `.env.example`. Generate a real one. |
+| HTTP `403 Session belongs to a different API key` | A client reused another key's `mcp-session-id`. Reconnect so the client starts a new session. |
+| HTTP `404 Session not found` | The session expired (`SESSION_IDLE_TIMEOUT_MS`) or the server restarted or activated an uploaded index. Reconnect. |
+| `get_index_stats` reports 0 objects in a stdio client | The client started the server in another working directory. Make `D365_INDEX_DB_PATH` absolute and run `index` against that path. |
+| `index` logs `Pruning skipped` and deleted objects stay in the index | The scan overlapped less than half of the objects already indexed, usually a wrong or partly mounted `D365_PACKAGES_DIR`. Fix the path; set `D365_BYPASS_PRUNE_GUARD=1` only for an intended large deletion. |
+| `index-xref` says the `mssql` or `msnodesqlv8` driver is missing | Install it where the CLI is installed: `npm install mssql`, and for Windows sign-in also `npm install msnodesqlv8` plus ODBC Driver 17 or 18. |
+| `get_element_xml` cannot read the source file | The index was built with `D365_INDEX_STORE_RAW_XML=0` and the file has moved, or the index is served from a published copy. Rebuild with raw XML stored. |
+| Anything else | Run `d365-fno-mcp-server doctor` (add `--hosted` for a published-index server); it checks configuration, paths and index access. |
 
 ## License
 

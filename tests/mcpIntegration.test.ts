@@ -244,6 +244,14 @@ describe('compiled MCP server in hosted mode', () => {
     expect(staleness.version).toBe(manifest.version);
     expect(staleness.builtAt).toBe(manifest.builtAt);
     expect(staleness.manifestUrl).toBe(`${server.baseUrl}/latest/manifest.json`);
+
+    // The published index names a file that exists on this machine, but paths from
+    // an index built elsewhere are never followed.
+    const indexedFile = path.join(root, 'packages', 'Package', 'Model', 'AxClass', 'AlreadyIndexed.xml');
+    fs.writeFileSync(indexedFile, '<AxClass><Name>SecretOnHost</Name></AxClass>');
+    const xml = textOf(await client.callTool({ name: 'get_element_xml', arguments: { name: 'AlreadyIndexed', type: 'Class' } }));
+    expect(xml).not.toContain('SecretOnHost');
+    expect(xml).toContain('not available on this server');
   }, 30_000);
 
   it('runs over stdio without any API key', async () => {

@@ -873,8 +873,8 @@ export function searchLabelsFts(
   limit: number = 20
 ): LabelHit[] {
   const likeSearch = (): LabelHit[] => {
-    let sql = `SELECT label_id, language, value FROM ax_labels WHERE value LIKE ?`;
-    const params: SQLInputValue[] = [`%${query}%`];
+    let sql = `SELECT label_id, language, value FROM ax_labels WHERE value LIKE ? ESCAPE '\\'`;
+    const params: SQLInputValue[] = [likeContains(query)];
     if (language) {
       sql += ` AND language = ?`;
       params.push(language);
@@ -955,9 +955,19 @@ export async function getIndexStaleness(
   return stale;
 }
 
+/** `%value%` for a LIKE pattern with `\\` as the escape character. */
+export function likeContains(value: string): string {
+  return `%${value.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+}
+
+/**
+ * Objects whose name, type or package starts with `query` (a prefix phrase, so
+ * `Cust` finds `CustTable`), exact names first. When that finds nothing, falls
+ * back to a substring match on the name (`Table` finds `CustTable`).
+ */
 export function searchSymbols(db: Database, query: string, type?: string, limit: number = 20) {
-  // Sanitize query for FTS5: wrap in quotes to treat as phrase, escape internal quotes
-  const ftsQuery = `"${query.replace(/"/g, '""')}"`;
+  // Sanitize query for FTS5: a quoted phrase with internal quotes doubled, as a prefix.
+  const ftsQuery = `"${query.replace(/"/g, '""')}"*`;
 
   // Use a subquery joining FTS results back to ax_objects for reliable type filtering.
   // Direct WHERE on FTS virtual table columns is unreliable with content= tables.
@@ -974,10 +984,28 @@ export function searchSymbols(db: Database, query: string, type?: string, limit:
     params.push(type);
   }
 
-  sql += ` ORDER BY rank LIMIT ?`;
-  params.push(limit);
+  sql += ` ORDER BY o.name = ? COLLATE NOCASE DESC, rank LIMIT ?`;
+  params.push(query, limit);
 
-  return db.prepare(sql).all(...params);
+  let rows: unknown[] = [];
+  if (/[\p{L}\p{N}]/u.test(query)) {
+    try {
+      rows = db.prepare(sql).all(...params);
+    } catch {
+      // FTS5 syntax the phrase quoting does not cover; the LIKE search below still runs.
+    }
+  }
+  if (rows.length > 0) return rows;
+
+  let likeSql = `SELECT name, type, package, id FROM ax_objects WHERE name LIKE ? ESCAPE '\\'`;
+  const likeParams: SQLInputValue[] = [likeContains(query)];
+  if (type) {
+    likeSql += ` AND type = ?`;
+    likeParams.push(type);
+  }
+  likeSql += ` ORDER BY length(name), name LIMIT ?`;
+  likeParams.push(limit);
+  return db.prepare(likeSql).all(...likeParams);
 }
 
 export interface ObjectRow {
@@ -1025,7 +1053,10 @@ export interface ObjectDetails extends ObjectRow {
 }
 
 export function getObjectByName(db: Database, name: string, type: string): ObjectDetails | null {
-  const obj = db.prepare(`SELECT * FROM ax_objects WHERE name = ? AND type = ?`).get(name, type) as ObjectRow | undefined;
+  // X++ names are case-insensitive: an exact match wins, otherwise any casing.
+  const obj = (db.prepare(`SELECT * FROM ax_objects WHERE name = ? AND type = ?`).get(name, type) ??
+    db.prepare(`SELECT * FROM ax_objects WHERE name = ? COLLATE NOCASE AND type = ? ORDER BY name LIMIT 1`).get(name, type)) as
+    ObjectRow | undefined;
   if (!obj) return null;
 
   const fields = db.prepare(`SELECT * FROM ax_fields WHERE object_id = ?`).all(obj.id) as unknown as FieldRow[];

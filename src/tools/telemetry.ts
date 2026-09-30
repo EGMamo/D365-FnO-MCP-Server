@@ -1,4 +1,4 @@
-import fs from 'node:fs/promises';
+import { loadObjectXml } from '../indexer/sourceFiles.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { Database } from '../indexer/db.js';
@@ -455,15 +455,6 @@ function returnsLiteral(body: string | undefined): boolean | null {
   return null;
 }
 
-async function loadClassXml(obj: { raw_xml: string | null; file_path: string }): Promise<string | null> {
-  if (obj.raw_xml) return obj.raw_xml;
-  try {
-    return await fs.readFile(obj.file_path, 'utf-8');
-  } catch {
-    return null;
-  }
-}
-
 export async function analyzeBatchClass(db: Database, className: string): Promise<BatchClassAnalysis | null> {
   const obj = dbUtils.getObjectByName(db, className, 'Class');
   if (!obj) return null;
@@ -490,7 +481,7 @@ export async function analyzeBatchClass(db: Database, className: string): Promis
   const implementsList = [...implementsSet];
   const implementsLower = new Set(implementsList.map((i) => i.toLowerCase()));
 
-  const xml = await loadClassXml(obj);
+  const xml = await loadObjectXml(obj);
   let sources: AxClassSources | null = null;
   if (xml) {
     try {

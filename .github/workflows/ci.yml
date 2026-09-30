@@ -5,6 +5,10 @@ on:
     branches: ['**']
   pull_request:
 
+# The jobs only read the repository; keep the token from writing anything.
+permissions:
+  contents: read
+
 jobs:
   build:
     strategy:

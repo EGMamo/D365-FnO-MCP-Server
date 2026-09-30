@@ -62,7 +62,7 @@ public sealed class CliLocator
         }
 
         throw new FileNotFoundException(
-            $"The CLI '{value}' was not found on PATH. Install it with `npm install -g d365-fno-mcp-server` " +
-            "(or `npm install -g .` in a checkout), or set the CLI path to its dist/src/index.js.");
+            $"The CLI '{value}' was not found on PATH. Install it with `npm install -g .` in a checkout of the " +
+            "server (after `npm install` and `npm run build`), or set the CLI path to its dist/src/index.js.");
     }
 }

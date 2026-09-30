@@ -256,6 +256,19 @@ describe('buildIndex with fixtures', () => {
     expect(results.some((r) => r.name === 'SampleTable' && r.type === 'Table')).toBe(true);
   });
 
+  it('finds objects by name prefix and by substring, exact names first', () => {
+    const names = (query: string, type?: string) => (searchSymbols(db, query, type) as { name: string }[]).map((r) => r.name);
+    expect(names('Sample', 'Table')).toEqual(['SampleTable']);
+    expect(names('SampleClass')[0]).toBe('SampleClass');
+    expect(names('Entity', 'DataEntity')).toEqual(['SampleEntity']);
+    expect(names('%')).toEqual([]);
+  });
+
+  it('looks names up case-insensitively, preferring the exact spelling', () => {
+    expect(getObjectByName(db, 'sampletable', 'Table')?.name).toBe('SampleTable');
+    expect(getObjectByName(db, 'SampleTable', 'Class')).toBeNull();
+  });
+
   it('skips unchanged files on a second incremental run', async () => {
     const stats = await buildIndex(db, root, false);
     expect(stats.skipped).toBe(stats.total);

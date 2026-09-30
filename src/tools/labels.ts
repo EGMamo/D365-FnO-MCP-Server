@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { Database } from '../indexer/db.js';
 import { z } from 'zod';
-import { resolveLabelByLanguage, searchLabelsFts } from '../indexer/db.js';
+import { likeContains, resolveLabelByLanguage, searchLabelsFts } from '../indexer/db.js';
 
 export function registerLabelsTools(server: McpServer, db: Database) {
   server.tool(
@@ -25,7 +25,8 @@ export function registerLabelsTools(server: McpServer, db: Database) {
     'Search for labels by value',
     { query: z.string(), limit: z.number().int().min(1).max(500).default(20) },
     async ({ query, limit }) => {
-      const labels = db.prepare(`SELECT label_id, value FROM ax_labels WHERE value LIKE ? LIMIT ?`).all(`%${query}%`, limit);
+      const labels = db.prepare(`SELECT label_id, value FROM ax_labels WHERE value LIKE ? ESCAPE '\\' LIMIT ?`)
+        .all(likeContains(query), limit);
       return { content: [{ type: 'text', text: JSON.stringify(labels, null, 2) }] };
     }
   );

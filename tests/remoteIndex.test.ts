@@ -179,6 +179,41 @@ describe('syncIndexFromManifest', () => {
     }
   });
 
+  it('stops a download that decodes past the size the manifest declares', async () => {
+    const dbPath = path.join(root, 'bomb', 'index.db');
+    const original = fs.readFileSync(latestManifestPath, 'utf8');
+    const manifest = JSON.parse(original) as { db: { rawBytes: number } };
+    manifest.db.rawBytes = 1024;
+    fs.writeFileSync(latestManifestPath, JSON.stringify(manifest));
+    try {
+      const err = await expectError(syncIndexFromManifest({ manifestUrl, dbPath }), 'download');
+      expect(err.message).toMatch(/decodes to more than the 1024 bytes/);
+      expect(fs.existsSync(`${dbPath}.download`)).toBe(false);
+    } finally {
+      fs.writeFileSync(latestManifestPath, original);
+    }
+  });
+
+  it('does not forward the manifest SAS to a database on another host', async () => {
+    const dbPath = path.join(root, 'elsewhere', 'index.db');
+    const original = fs.readFileSync(latestManifestPath, 'utf8');
+    const manifest = JSON.parse(original) as { db: { url: string } };
+    manifest.db.url = `//other.invalid/${version}/d365_index.db.gz`;
+    fs.writeFileSync(latestManifestPath, JSON.stringify(manifest));
+    const requested: string[] = [];
+    const fetchImpl: typeof fetch = async (input, init) => {
+      requested.push(String(input));
+      if (String(input).includes('other.invalid')) return new Response('not here', { status: 404 });
+      return fetch(input, init);
+    };
+    try {
+      await expectError(syncIndexFromManifest({ manifestUrl, dbPath, fetchImpl }), 'download');
+      expect(requested.at(-1)).toBe(`http://other.invalid/${version}/d365_index.db.gz`);
+    } finally {
+      fs.writeFileSync(latestManifestPath, original);
+    }
+  });
+
   it('fails cleanly when the payload is not a gzip stream', async () => {
     const dbPath = path.join(root, 'garbage', 'index.db');
     const gzPath = path.join(publishDir, version, 'd365_index.db.gz');
@@ -198,6 +233,28 @@ describe('syncIndexFromManifest', () => {
       fs.writeFileSync(gzPath, originalGz);
       fs.writeFileSync(latestManifestPath, originalManifest);
     }
+  });
+
+  it('lets a slow download finish as long as data keeps arriving', async () => {
+    const dbPath = path.join(root, 'slow', 'index.db');
+    const packageBytes = fs.readFileSync(path.join(publishDir, version, 'd365_index.db.gz'));
+    const fetchImpl: typeof fetch = async (input, init) => {
+      if (String(input).includes('manifest.json')) return fetch(input, init);
+      const pieces = 8;
+      const size = Math.ceil(packageBytes.length / pieces);
+      let sent = 0;
+      return new Response(new ReadableStream<Uint8Array>({
+        async pull(controller) {
+          // Each piece arrives well inside the stall timeout, the whole body well after it.
+          await new Promise((resolve) => setTimeout(resolve, 40));
+          controller.enqueue(packageBytes.subarray(sent * size, (sent + 1) * size));
+          if (++sent === pieces) controller.close();
+        },
+      }), { status: 200 });
+    };
+    const result = await syncIndexFromManifest({ manifestUrl, dbPath, downloadTimeoutMs: 150, fetchImpl });
+    expect(result.status).toBe('downloaded');
+    expect(countObjects(dbPath)).toBe(2);
   });
 
   it('times out a stalled database download', async () => {

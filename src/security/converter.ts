@@ -26,9 +26,46 @@ export interface SecurityElement {
   references: SecurityReference[];
 }
 
-const ELEMENT_RE = /<AxSecurity(Role|Duty|Privilege)(\s[^>]*)?>[\s\S]*?<\/AxSecurity\1>/g;
-const REFERENCE_RE = /<AxSecurity(Role|Duty|Privilege)Reference(?:\s[^>]*)?>([\s\S]*?)<\/AxSecurity\1Reference>/g;
+const ELEMENT_OPEN_RE = /<AxSecurity(Role|Duty|Privilege)(?:\s[^<>]*)?>/g;
+const REFERENCE_OPEN_RE = /<AxSecurity(Role|Duty|Privilege)Reference(?:\s[^<>]*)?>/g;
 const NAME_RE = /<Name>\s*([^<]*?)\s*<\/Name>/;
+
+interface PairedMatch {
+  kind: SecurityKind;
+  start: number;
+  end: number;
+  /** Text between the opening and closing tags. */
+  inner: string;
+}
+
+/**
+ * Each opening tag up to the first matching closing tag, like a lazy
+ * `<X>[\s\S]*?</X>` regex, but in linear time: a lazy regex rescans to the
+ * end of the input for every unclosed tag, which turns a 2 MB export of
+ * unclosed tags into minutes of blocked event loop.
+ */
+function pairedMatches(text: string, openRe: RegExp, closeTag: (kind: string) => string): PairedMatch[] {
+  const out: PairedMatch[] = [];
+  const unclosed = new Set<string>();
+  const re = new RegExp(openRe.source, 'g');
+  for (let m = re.exec(text); m; m = re.exec(text)) {
+    const kind = m[1];
+    if (unclosed.has(kind)) continue;
+    const close = closeTag(kind);
+    const closeAt = text.indexOf(close, re.lastIndex);
+    if (closeAt < 0) {
+      // No closing tag of this kind remains, so later openings of it cannot close either.
+      unclosed.add(kind);
+      continue;
+    }
+    out.push({ kind: kind as SecurityKind, start: m.index, end: closeAt + close.length, inner: text.slice(re.lastIndex, closeAt) });
+    re.lastIndex = closeAt + close.length;
+  }
+  return out;
+}
+
+const elementMatches = (xml: string) => pairedMatches(xml, ELEMENT_OPEN_RE, (kind) => `</AxSecurity${kind}>`);
+const referenceMatches = (xml: string) => pairedMatches(xml, REFERENCE_OPEN_RE, (kind) => `</AxSecurity${kind}Reference>`);
 
 /** Offset range of the element's own <Name> (direct child of the root), or null. */
 function ownNameRange(xml: string): { start: number; end: number; name: string } | null {
@@ -52,15 +89,15 @@ function ownNameRange(xml: string): { start: number; end: number; name: string }
 /** Security elements in document order; nested reference elements are not elements. */
 export function parseSecurityExport(xml: string): SecurityElement[] {
   const out: SecurityElement[] = [];
-  for (const m of xml.matchAll(ELEMENT_RE)) {
-    const kind = m[1] as SecurityKind;
-    const elementXml = m[0];
+  for (const m of elementMatches(xml)) {
+    const kind = m.kind;
+    const elementXml = xml.slice(m.start, m.end);
     const own = ownNameRange(elementXml);
     if (!own?.name) continue;
     const references: SecurityReference[] = [];
-    for (const r of elementXml.matchAll(REFERENCE_RE)) {
-      const name = NAME_RE.exec(r[2])?.[1];
-      if (name) references.push({ kind: r[1] as SecurityKind, name });
+    for (const r of referenceMatches(elementXml)) {
+      const name = NAME_RE.exec(r.inner)?.[1];
+      if (name) references.push({ kind: r.kind, name });
     }
     out.push({ kind, name: own.name, xml: elementXml, references });
   }
@@ -149,15 +186,21 @@ export function convertSecurityExport(xml: string, opts: ConvertOptions = {}): C
     if (name !== e.name) renamed.push({ kind: e.kind, from: e.name, to: name });
     const own = ownNameRange(e.xml)!;
     let body = `${e.xml.slice(0, own.start)}${escapeXml(name)}${e.xml.slice(own.end)}`;
-    body = body.replace(REFERENCE_RE, (whole, kind: SecurityKind, inner: string) => {
+    let rewritten = '';
+    let copied = 0;
+    for (const { kind, start, end, inner } of referenceMatches(body)) {
+      const whole = body.slice(start, end);
       const refName = NAME_RE.exec(inner)?.[1];
-      if (!refName) return whole;
+      if (!refName) continue;
       const mapped = newName.get(key(kind, refName));
       if (!mapped && !byKey.has(key(kind, refName)) && opts.existsInIndex && !opts.existsInIndex({ kind, name: refName })) {
         unresolved.push({ from: `${e.kind} ${e.name}`, kind, name: refName });
       }
-      return mapped && mapped !== refName ? whole.replace(NAME_RE, `<Name>${escapeXml(mapped)}</Name>`) : whole;
-    });
+      if (!mapped || mapped === refName) continue;
+      rewritten += body.slice(copied, start) + whole.replace(NAME_RE, `<Name>${escapeXml(mapped)}</Name>`);
+      copied = end;
+    }
+    body = rewritten + body.slice(copied);
     if (/\bi:\w+=/.test(body) && !/xmlns:i=/.test(body.slice(0, body.indexOf('>')))) {
       body = body.replace(/^<AxSecurity(Role|Duty|Privilege)/, (m) => `${m} xmlns:i="http://www.w3.org/2001/XMLSchema-instance"`);
     }

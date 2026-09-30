@@ -17,6 +17,8 @@ export const MIN_API_KEY_LENGTH = 32;
 export const LEGACY_API_KEY_NAME = 'default';
 
 const NAME_PATTERN = /^[A-Za-z0-9._@-]{1,64}$/;
+/** Sample values from docs and older `.env.example` files, which are long enough to pass the length check. */
+const PLACEHOLDER_KEY = /change-?me/i;
 
 export interface ParsedApiKeys {
   keys: ApiKeyEntry[];
@@ -42,6 +44,10 @@ export function parseApiKeys(multi: string | undefined, legacy: string | undefin
     }
     if (key.length < MIN_API_KEY_LENGTH) {
       errors.push(`${label}: key for '${name}' is ${key.length} characters; at least ${MIN_API_KEY_LENGTH} are required.`);
+      return;
+    }
+    if (PLACEHOLDER_KEY.test(key)) {
+      errors.push(`${label}: key for '${name}' is a documentation placeholder; generate one with \`openssl rand -hex 32\`.`);
       return;
     }
     if (seenNames.has(name)) {

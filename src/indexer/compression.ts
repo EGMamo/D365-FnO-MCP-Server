@@ -93,6 +93,22 @@ export interface CompressedFile {
   rawBytes: number;
 }
 
+/**
+ * Pass-through stream that fails once more than `limit` bytes flow through it.
+ * Guards decoders against compression bombs: a declared or published size is
+ * known up front, so nothing past it needs to reach the disk.
+ */
+export function byteLimit(limit: number, onExceeded: () => Error): Transform {
+  let seen = 0;
+  return new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      seen += chunk.length;
+      if (seen > limit) callback(onExceeded());
+      else callback(null, chunk);
+    },
+  });
+}
+
 /** Encodes `source` into `destination`, hashing both sides in the same pass. */
 export async function compressFile(
   source: string,

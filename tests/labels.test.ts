@@ -18,6 +18,7 @@ beforeAll(() => {
       { labelId: 'SYS1', value: 'Customer account', language: 'en-US' },
       { labelId: 'SYS1', value: 'Kundenkonto', language: 'de' },
       { labelId: 'SYS2', value: 'Sales order line', language: 'en-US' },
+      { labelId: 'SYS3', value: '100% done', language: 'en-US' },
     ]
   );
   tools = collectLabelsTools(db);
@@ -41,6 +42,14 @@ describe('resolve_label_by_language', () => {
   it('returns "not found" for an unknown language', async () => {
     const res = await call('resolve_label_by_language', { labelId: 'SYS1', language: 'fr' });
     expect(res.content[0].text).toBe('not found');
+  });
+});
+
+describe('search_labels', () => {
+  it('treats % and _ in the query as literal text', async () => {
+    const percent = JSON.parse((await call('search_labels', { query: '%', limit: 20 })).content[0].text) as { label_id: string }[];
+    expect(percent.map((h) => h.label_id)).toEqual(['SYS3']);
+    expect(JSON.parse((await call('search_labels', { query: '_', limit: 20 })).content[0].text)).toEqual([]);
   });
 });
 
