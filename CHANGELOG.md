@@ -155,5 +155,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hostile input (a 500 KB method used to block the server for about a minute), `find_field_access`
   no longer loads every candidate's XML at once, and tool array inputs have upper bounds.
 - Keys containing `change-me` are refused; `.env.example` no longer ships a usable placeholder key.
-- Dependencies with advisories were updated (`npm audit` reports none), CI's token is read-only,
-  Dependabot is configured, and `SECURITY.md` explains how to report a vulnerability.
+- CI's token is read-only, Dependabot is configured, and `SECURITY.md` explains how to report a
+  vulnerability.
