@@ -126,6 +126,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `search_symbols` matches name prefixes (`Cust` finds `CustTable`), ranks exact names first and
+  falls back to a substring match on the name.
+- Object lookups by name are case-insensitive, as X++ names are; an exact spelling still wins.
+- `search_labels` treats `%` and `_` in the query as literal text.
+- A hosted server no longer fails to start when a large index takes longer than five minutes to
+  download: the download timeout is now a two-minute stall timeout.
+- `setup` refuses to overwrite an existing `.env` unless `--force` is given, and a replaced file is
+  made owner-only again.
 - Parser and indexer robustness issues, including interface declarations and enum implicit counter edge cases.
 - Chain of Command wrappers now preserve the original method's access modifier and `static` flag.
 - Generators fail closed on ungrounded Chain of Command and table extension input instead of emitting unverified code.
@@ -138,3 +146,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rate limiting is keyed on client IP only, preventing bypass through credential rotation.
 - Proxy trust is opt-in via `TRUST_PROXY_HOPS` (default `0`), so `X-Forwarded-For` cannot be spoofed to evade rate limiting by default.
 - Concurrent session cap and idle-session timeout bound resource usage.
+- Tools never read the source file an index names when the index was downloaded or uploaded, so a
+  crafted index cannot make `get_element_xml` return server files such as the process environment.
+- Decoding an uploaded or downloaded index stops at the declared size (compression bombs), the
+  manifest SAS is only forwarded to a database on the manifest's own host, and only the key that
+  started an upload may send its chunks or complete it.
+- X++ best-practice checks, method extraction and security export parsing run in linear time on
+  hostile input (a 500 KB method used to block the server for about a minute), `find_field_access`
+  no longer loads every candidate's XML at once, and tool array inputs have upper bounds.
+- Keys containing `change-me` are refused; `.env.example` no longer ships a usable placeholder key.
+- Dependencies with advisories were updated (`npm audit` reports none), CI's token is read-only,
+  Dependabot is configured, and `SECURITY.md` explains how to report a vulnerability.

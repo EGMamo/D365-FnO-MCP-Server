@@ -235,6 +235,28 @@ describe('syncIndexFromManifest', () => {
     }
   });
 
+  it('lets a slow download finish as long as data keeps arriving', async () => {
+    const dbPath = path.join(root, 'slow', 'index.db');
+    const packageBytes = fs.readFileSync(path.join(publishDir, version, 'd365_index.db.gz'));
+    const fetchImpl: typeof fetch = async (input, init) => {
+      if (String(input).includes('manifest.json')) return fetch(input, init);
+      const pieces = 8;
+      const size = Math.ceil(packageBytes.length / pieces);
+      let sent = 0;
+      return new Response(new ReadableStream<Uint8Array>({
+        async pull(controller) {
+          // Each piece arrives well inside the stall timeout, the whole body well after it.
+          await new Promise((resolve) => setTimeout(resolve, 40));
+          controller.enqueue(packageBytes.subarray(sent * size, (sent + 1) * size));
+          if (++sent === pieces) controller.close();
+        },
+      }), { status: 200 });
+    };
+    const result = await syncIndexFromManifest({ manifestUrl, dbPath, downloadTimeoutMs: 150, fetchImpl });
+    expect(result.status).toBe('downloaded');
+    expect(countObjects(dbPath)).toBe(2);
+  });
+
   it('times out a stalled database download', async () => {
     const dbPath = path.join(root, 'timeout', 'index.db');
     const manifestBody = fs.readFileSync(latestManifestPath, 'utf8');

@@ -129,7 +129,12 @@ export interface FetchManifestOptions {
 }
 
 const DEFAULT_MANIFEST_TIMEOUT_MS = 30_000;
-const DEFAULT_DOWNLOAD_TIMEOUT_MS = 5 * 60_000;
+/**
+ * A download is abandoned when no bytes arrive for this long. It is a stall
+ * timeout, not a deadline: a multi-GB index can take far longer than any fixed
+ * deadline and must still finish while data keeps flowing.
+ */
+const DEFAULT_DOWNLOAD_STALL_MS = 2 * 60_000;
 
 function requestTimeoutSignal(timeoutMs: number | undefined, defaultTimeoutMs: number): AbortSignal {
   return AbortSignal.timeout(timeoutMs ?? defaultTimeoutMs);
@@ -175,7 +180,7 @@ export interface SyncOptions extends FetchManifestOptions {
    * after the published one, instead of replacing it with an older snapshot.
    */
   keepNewerUpload?: boolean;
-  /** Override the deadline for downloading the database payload. */
+  /** Abort the database download when no bytes arrive for this long (default 2 minutes). */
   downloadTimeoutMs?: number;
 }
 
@@ -222,20 +227,33 @@ export async function syncIndexFromManifest(options: SyncOptions): Promise<SyncR
   const dbUrl = resolveDbUrl(new URL(options.manifestUrl), manifest.db.url);
   logger.info('Downloading published index', { url: redactUrl(dbUrl), bytes: manifest.db.bytes, version: manifest.version });
 
+  const stallMs = options.downloadTimeoutMs ?? DEFAULT_DOWNLOAD_STALL_MS;
+  const abort = new AbortController();
+  let stallTimer: NodeJS.Timeout | undefined;
+  const armStallTimer = () => {
+    clearTimeout(stallTimer);
+    stallTimer = setTimeout(
+      () => abort.abort(new Error(`no data received for ${Math.round(stallMs / 1000)} s`)),
+      stallMs
+    );
+  };
+  armStallTimer();
+
   let response: Response;
   try {
-    response = await fetchImpl(dbUrl, {
-      signal: requestTimeoutSignal(options.downloadTimeoutMs, DEFAULT_DOWNLOAD_TIMEOUT_MS),
-    });
+    response = await fetchImpl(dbUrl, { signal: abort.signal });
   } catch (err) {
-    throw new RemoteIndexError('download', `Index download failed: ${errorMessage(err)}`);
+    clearTimeout(stallTimer);
+    throw new RemoteIndexError('download', `Index download failed: ${errorMessage(abort.signal.reason ?? err)}`);
   }
   if (!response.ok || !response.body) {
+    clearTimeout(stallTimer);
     throw new RemoteIndexError('download', `Index download failed with HTTP ${response.status}`, response.status);
   }
 
   const encoded = new HashingTap();
   const decoded = new HashingTap();
+  encoded.on('data', armStallTimer);
   try {
     await pipeline(
       Readable.fromWeb(response.body as WebReadableStream<Uint8Array>),
@@ -250,7 +268,9 @@ export async function syncIndexFromManifest(options: SyncOptions): Promise<SyncR
     );
   } catch (err) {
     fs.rmSync(tmp, { force: true });
-    throw new RemoteIndexError('download', `Index download failed: ${errorMessage(err)}`);
+    throw new RemoteIndexError('download', `Index download failed: ${errorMessage(abort.signal.aborted ? abort.signal.reason : err)}`);
+  } finally {
+    clearTimeout(stallTimer);
   }
 
   const digest = encoded.digest();
