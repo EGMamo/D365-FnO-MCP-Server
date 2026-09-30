@@ -185,7 +185,7 @@ export type AppConfig = ReturnType<typeof buildConfig>;
 export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
   const parsed = configSchemaWithGuards.safeParse(source);
   if (!parsed.success) {
-    throw new ConfigError(parsed.error.errors.map((err) => `${err.path.join('.')}: ${err.message}`));
+    throw new ConfigError(parsed.error.issues.map((err) => `${err.path.join('.')}: ${err.message}`));
   }
   return buildConfig(parsed.data);
 }

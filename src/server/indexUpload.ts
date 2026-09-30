@@ -179,7 +179,7 @@ export class IndexUploadManager {
   create(input: unknown, owner: string): UploadSession {
     const parsed = uploadDeclarationSchema.safeParse(input);
     if (!parsed.success) {
-      throw new UploadError(400, `Invalid upload declaration: ${parsed.error.errors.map((e) => `${e.path.join('.')}: ${e.message}`).join('; ')}`);
+      throw new UploadError(400, `Invalid upload declaration: ${parsed.error.issues.map((e) => `${e.path.join('.')}: ${e.message}`).join('; ')}`);
     }
     const declaration = parsed.data;
     const { maxBytes, maxChunkBytes } = this.options;

@@ -232,7 +232,7 @@ export function registerSecurityTools(server: McpServer, db: Database) {
     {
       xml: z.string().min(1).max(2_000_000).describe('Contents of the exported security configuration XML file.'),
       prefix: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/).optional().describe('Prefix for every exported element name, e.g. Contoso.'),
-      renames: z.record(z.string()).optional().describe('Explicit old name -> new name map (wins over prefix).'),
+      renames: z.record(z.string(), z.string()).optional().describe('Explicit old name -> new name map (wins over prefix).'),
       include: z.array(z.string()).max(200).optional().describe('Only these element names.'),
       includeDependencies: z.boolean().default(true).describe('With include: also convert exported elements they reference.'),
       maxFiles: z.number().int().min(1).max(200).default(50),
