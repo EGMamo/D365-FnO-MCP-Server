@@ -67,10 +67,10 @@ Commands:
       --db-path <path>      SQLite index path (default D365_INDEX_DB_PATH or ./d365_index.db)
   index-xref                 Import compiler cross-reference snapshot from SQL Server
       --connection-string    SQL Server connection string (prefer D365_XREF_CONNECTION_STRING)
-      --db-path <path>       SQLite index path (default ./d365_index.db)
-      --allow-empty         Explicitly permit replacing the snapshot with no references
-      --allow-source-locks  Allow serializable source reads if snapshot isolation is disabled
-      --store-raw           Retain raw SQL rows (larger database; off by default)
+      --db-path <path>       SQLite index path (default D365_INDEX_DB_PATH or ./d365_index.db)
+      --allow-empty          Explicitly permit replacing the snapshot with no references
+      --allow-source-locks   Allow serializable source reads if snapshot isolation is disabled
+      --store-raw            Retain raw SQL rows (larger database; off by default)
   index-trace                Import Trace Parser (AxTrace) aggregates for the trace tools
       --connection-string    Trace database connection string (prefer D365_TRACE_CONNECTION_STRING)
       --from-json <file>     Import aggregates from a JSON file instead of SQL Server

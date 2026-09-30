@@ -6,6 +6,7 @@ import { promisify } from 'util';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { createRequire } from 'node:module';
 import { startStaticServer, type StaticServer } from './helpers/indexFixtureServer.js';
+import { HELP_TEXT } from '../src/cli/args.js';
 
 const execFileAsync = promisify(execFile);
 const testDir = path.dirname(fileURLToPath(import.meta.url));
@@ -297,4 +298,9 @@ describe('CLI', () => {
     expect(res.code).toBe(0);
     expect(res.stdout).toContain('Commands:');
   }, 120_000);
+
+  it('keeps the README CLI reference identical to --help', () => {
+    const readme = fs.readFileSync(path.join(testDir, '..', 'README.md'), 'utf-8').replace(/\r\n/g, '\n');
+    expect(readme).toContain(`\`\`\`\n${HELP_TEXT.trimEnd()}\n\`\`\``);
+  });
 });

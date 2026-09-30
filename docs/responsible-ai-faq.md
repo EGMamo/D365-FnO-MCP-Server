@@ -45,8 +45,9 @@ to run yourself. The server does not run it. Customer and transaction records ar
 
 Only these, and only when you configure them:
 
-- Downloading a published index (`D365_INDEX_URL`) or publishing one to your Azure Blob Storage.
-- `upload-index`, which sends an index to your own hosted server.
+- Downloading a published index (`D365_INDEX_URL`, or `pull-index`) or publishing one to your Azure
+  Blob Storage.
+- `upload-index` and `index-status --server`, which talk to your own hosted server.
 - `index-release-plans`, which downloads Microsoft's public release planner feed. It runs only when
   you run that command.
 - `index-xref` and `index-trace`, which read the SQL Server databases you point them at.
@@ -60,15 +61,16 @@ return **previews** as text. Writing files takes two steps and needs
 `D365_ENABLE_WRITE_TOOLS=1` on a local server: `write_table_extension` prepares a preview and a
 short-lived change ID, and `apply_table_extension_change` then writes the new table extension
 into an existing model (and optionally adds it to the Visual Studio project). It refuses to
-overwrite existing files. A server running from a
+overwrite existing files. With write tools on, `digest_knowledge` can also add articles to the
+knowledge base that every client of the server reads. A server running from a
 published index refuses to enable them, so a hosted deployment is always read-only.
 
 ## Who can access it?
 
-- **stdio mode** (default): only the local process that started it.
-- **HTTP mode**: every request needs an API key (`X-API-Key` or `Authorization: Bearer`) of at least
-  32 characters from `MCP_API_KEYS`. Each MCP session is tied to the key that opened it. The
+- **HTTP mode** (default): every request needs an API key (`X-API-Key` or `Authorization: Bearer`)
+  of at least 32 characters from `MCP_API_KEYS` or `MCP_API_KEY`. Each MCP session is tied to the key that opened it. The
   server has rate limits, request timeouts, and a session limit.
+- **stdio mode**: only the local process that started it.
 
 Anyone with a key can read everything in the index. Give keys only to people allowed to see the
 code base, give each person, pipeline, or agent its own key name, and rotate keys like any other
@@ -111,8 +113,9 @@ using them, to say when something isn't found, and to label generated code as a 
 
 - Metadata only. The server knows the code, not the data or the configuration of an environment.
 - One index at a time, from one PackagesLocalDirectory or published version.
-- Microsoft plans to retire the public release planner feed in September 2026. After that,
-  `index-release-plans` may stop working.
+- Microsoft announced it would stop publishing the public release planner feed after September
+  2026. If the feed is gone, `index-release-plans` fails and the last imported copy stays in the
+  index; `--from-json` still imports a saved feed.
 
 For hosting and key management, see [hosted-deployment.md](hosted-deployment.md) and the
 [security notes](../README.md#security-notes) in the README.

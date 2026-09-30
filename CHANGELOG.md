@@ -112,6 +112,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `docs/vs-addin-plan.md`: the extension that applies generated code was not pursued; the Visual
   Studio extension now handles connection setup and index uploads instead.
 
+### Added (initial scaffold)
+
 - Initial project scaffold: strict TypeScript configuration, ESLint flat config, and build pipeline.
 - AOT metadata parsers and indexer covering tables, classes, enums, EDTs, forms, and labels, with all object types wired into the indexer.
 - SQLite index with incremental passes (path + mtime based), `--force` full rebuild, stale-entry pruning, rename detection, and duplicate-name collision reporting.
@@ -120,7 +122,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - X++ generators grounded against the index with validation gates: `create_coc_extension`, `create_table_extension`, `create_class_extension`, `generate_xpp_class`, `create_runbase_batch`, `create_sys_operation`.
 - stdio transport in addition to the Streamable HTTP transport, for local MCP clients.
 - CLI with `serve`, `index`, `doctor`, and `setup` commands, including non-interactive setup flags.
-- Packaging and documentation polish: comprehensive README, `files`/`keywords` metadata, CHANGELOG, and a GitHub Actions CI workflow running typecheck, lint, build, and tests on Node 22.
+- Packaging and documentation polish: comprehensive README, `files`/`keywords` metadata, CHANGELOG, and a GitHub Actions CI workflow running typecheck, lint, build, and tests (now on Node 24).
 
 ### Fixed
 

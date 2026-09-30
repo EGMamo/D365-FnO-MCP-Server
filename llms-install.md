@@ -42,12 +42,31 @@ Add this to the client's MCP settings file:
 
 - Cline: `cline_mcp_settings.json`
 - Claude Desktop: `claude_desktop_config.json`
-- VS Code: `.vscode/mcp.json`, under `servers`
+- VS Code: `.vscode/mcp.json` (see the VS Code form below)
 
 ```json
 {
   "mcpServers": {
     "d365-fno": {
+      "command": "d365-fno-mcp-server",
+      "args": ["serve"],
+      "env": {
+        "MCP_TRANSPORT": "stdio",
+        "D365_PACKAGES_DIR": "<PackagesLocalDirectory>",
+        "D365_INDEX_DB_PATH": "<absolute path>/d365_index.db"
+      }
+    }
+  }
+}
+```
+
+VS Code uses a `servers` key and needs `"type": "stdio"`:
+
+```json
+{
+  "servers": {
+    "d365-fno": {
+      "type": "stdio",
       "command": "d365-fno-mcp-server",
       "args": ["serve"],
       "env": {
@@ -72,7 +91,8 @@ Restart the client and call `get_index_stats`. It should report thousands of obj
 
 ## Optional data
 
-These imports feed extra tools. They are all offline: the server reads only its local index.
+These imports feed extra tools. The server itself reads only its local index; `index-xref` and
+`index-trace` read SQL Server and `index-release-plans` downloads a public feed.
 
 - `index-xref`: compiler cross-references, for `find_usages`.
 - `index-trace`: Trace Parser data, for the performance tools.

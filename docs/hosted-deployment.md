@@ -28,9 +28,10 @@ Publish machine (has PackagesLocalDirectory)             Azure
   developer VM, or a unified development experience workstation
   (`%LOCALAPPDATA%\Microsoft\Dynamics365\<version>\PackagesLocalDirectory`).
   A scheduled task runs `scripts/publish-index.ps1` nightly.
-- **`DynamicsXrefDB`** lives in Azure SQL so `index-xref` no longer needs a
-  local SQL Server or LocalDB (which the `mssql` driver cannot reach with
-  Windows authentication). The web app never talks to SQL.
+- **`DynamicsXrefDB`** can live in Azure SQL, so the publish machine needs
+  no SQL Server of its own. A local SQL Server or LocalDB works too: use
+  `Trusted_Connection=yes` and install the optional `msnodesqlv8` driver plus
+  ODBC Driver 17 or 18. The web app never talks to SQL.
 - The **hosted server** starts by fetching `latest/manifest.json`, streaming
   the gzip database through a SHA-256 check into container-local disk, and
   opening it. It then serves the same read-only tools as a local server:
@@ -57,12 +58,14 @@ which has about 15 GB per instance shared with the image, so:
 `publish-index` writes:
 
 ```
-<out>/<version>/d365_index.db.gz     compact copy (VACUUM INTO), gzip level 6
+<out>/<version>/d365_index.db.gz     compact copy (VACUUM INTO), gzip by default
 <out>/<version>/manifest.json        db.url = "d365_index.db.gz"
 <out>/latest/manifest.json           db.url = "../<version>/d365_index.db.gz"
 ```
 
-`version` is `<built_at as YYYYMMDDTHHMMSSZ>-<first 8 hex of the gzip sha256>`.
+`--compression brotli` writes `d365_index.db.br` instead and `--compression none` the bare
+`d365_index.db`; `--level fastest|balanced|smallest` trades time for size (default `balanced`).
+`version` is `<built_at as YYYYMMDDTHHMMSSZ>-<first 8 hex of the package sha256>`.
 The manifest records the server version, build time, byte counts, object,
 label and usage-row counts and the compiler usage import time:
 
@@ -73,7 +76,7 @@ label and usage-row counts and the compiler usage import time:
   "serverVersion": "0.1.0",
   "builtAt": "2026-09-25T20:44:20.123Z",
   "publishedAt": "2026-09-26T01:00:00.000Z",
-  "db": { "url": "../20260925T204420Z-3f9a1c2b/d365_index.db.gz", "sha256": "…", "bytes": 412345678, "rawBytes": 3456789012, "gzip": true },
+  "db": { "url": "../20260925T204420Z-3f9a1c2b/d365_index.db.gz", "sha256": "…", "bytes": 412345678, "rawBytes": 3456789012, "rawSha256": "…", "gzip": true, "encoding": "gzip" },
   "stats": { "objects": 184320, "labels": 912004, "usageRows": 25731004 },
   "xref": { "importedAt": "2026-09-25T20:52:11.000Z" }
 }
