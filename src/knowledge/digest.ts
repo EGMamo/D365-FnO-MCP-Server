@@ -240,7 +240,7 @@ const STOPWORDS = new Set([
   'that', 'it', 'be', 'as', 'by', 'from', 'at', 'when', 'you', 'your', 'not', 'can', 'will',
 ]);
 
-export function tokenize(text: string): Set<string> {
+function tokenize(text: string): Set<string> {
   return new Set(
     text
       .toLowerCase()
@@ -250,7 +250,7 @@ export function tokenize(text: string): Set<string> {
   );
 }
 
-export function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
+function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
   if (a.size === 0 || b.size === 0) return 0;
   let intersection = 0;
   for (const w of a) if (b.has(w)) intersection++;
@@ -329,18 +329,6 @@ export function nextSlugNumber(kbDir: string): string {
     }
   }
   return String(max + 1).padStart(2, '0');
-}
-
-/**
- * Title + scenario summary for every existing topic. Use this to check for *conceptual*
- * duplication — the same underlying knowledge written up differently — which the lexical
- * `findDuplicates` similarity score cannot reliably catch.
- */
-export function listExistingTopicSummaries(kbDir: string): ExistingTopicSummary[] {
-  return listKnowledgeEntries(kbDir).map((entry) => {
-    const content = fs.readFileSync(entry.filePath, 'utf8');
-    return { slug: entry.slug, title: entry.title, summary: extractSummary(content) };
-  });
 }
 
 /**
