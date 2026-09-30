@@ -87,11 +87,7 @@ export function resolveEdt(db: Database, name: string): AxObject | null {
 /** Resolve a label id (with or without leading '@') to its value. */
 export function resolveLabel(db: Database, labelId: string): string | null {
   if (!labelId) return null;
-  const cleanId = labelId.startsWith('@') ? labelId.slice(1) : labelId;
-  const row = db.prepare(`SELECT value FROM ax_labels WHERE label_id = ? LIMIT 1`).get(cleanId) as
-    | { value: string }
-    | undefined;
-  return row ? row.value : null;
+  return dbUtils.resolveLabel(db, labelId)?.value ?? null;
 }
 
 /** Maximum number of base classes walked when resolving an inherited method. */

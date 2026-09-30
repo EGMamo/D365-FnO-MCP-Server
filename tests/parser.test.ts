@@ -207,3 +207,13 @@ describe('parseLabels', () => {
     ]);
   });
 });
+
+describe('parseLabels with a label file id', () => {
+  it('prefixes plain ids with the label file and keeps legacy @ ids global', () => {
+    const labels = parser.parseLabels('﻿Greeting=Hello\r\n ;comment\r\n@SYS1=Account\r\n', 'MyLabels');
+    expect(labels).toEqual([
+      { labelId: 'MyLabels:Greeting', value: 'Hello' },
+      { labelId: 'SYS1', value: 'Account' },
+    ]);
+  });
+});

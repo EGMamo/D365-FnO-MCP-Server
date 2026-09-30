@@ -38,10 +38,10 @@ afterEach(async () => {
 });
 
 /** A packaged fixture index with enough objects to span several small chunks. */
-async function makePackage(encoding: IndexEncoding, names = ['CustTable', 'SalesTable', 'InventTable']) {
+async function makePackage(encoding: IndexEncoding, names = ['CustTable', 'SalesTable', 'InventTable'], schemaVersion?: string) {
   const source = path.join(root, `source-${encoding}.db`);
   const objects = names.flatMap((name) => [{ type: 'Table', name }, { type: 'Class', name: `${name}_Helper` }]);
-  createIndexedDb(source, objects, { builtAt: '2026-09-26T08:00:00.000Z' });
+  createIndexedDb(source, objects, { builtAt: '2026-09-26T08:00:00.000Z', schemaVersion });
   const snapshot = snapshotIndex(source, path.join(root, `snapshot-${encoding}.db`));
   let packageFile: string;
   let packed: CompressedFile;
@@ -125,7 +125,7 @@ describe('index upload', () => {
     expect(outcome.checksumMatches).toBe(true);
     expect(outcome.serverSha256).toBe(packed.sha256);
     expect(outcome.checks.map((check) => [check.name, check.ok])).toEqual([
-      ['transfer', true], ['content', true], ['database', true],
+      ['transfer', true], ['content', true], ['database', true], ['schema', true],
     ]);
     expect(outcome.index).toMatchObject({ objects, builtAt: '2026-09-26T08:00:00.000Z' });
 
@@ -202,6 +202,20 @@ describe('index upload', () => {
     expect(server.activated).toHaveLength(0);
   });
 
+  it('refuses an index built by an older schema and replaces nothing', async () => {
+    const { packageFile, packed, objects } = await makePackage('gzip', undefined, '2');
+    const server = await startServer();
+    const outcome = await new IndexUploadClient(server.baseUrl, UPLOADER_KEY).upload({
+      serverUrl: server.baseUrl, apiKey: UPLOADER_KEY, packageFile, packed, objects, chunkSize: 4096, pollIntervalMs: 10,
+    });
+    expect(outcome.state).toBe('failed');
+    expect(outcome.checks.map((check) => [check.name, check.ok])).toEqual([
+      ['transfer', true], ['content', true], ['database', true], ['schema', false],
+    ]);
+    expect(outcome.error).toMatch(/older version \(schema 2\)/);
+    expect(server.activated).toHaveLength(0);
+  });
+
   it('fails the content check when the decoded database differs from the declaration', async () => {
     const { packageFile, packed, objects } = await makePackage('br');
     const server = await startServer();
@@ -235,7 +249,8 @@ describe('index upload', () => {
     const session = manager.create({ ...packed, chunkSize: packed.bytes }, 'uploader');
     const body = fs.createReadStream(path.join(root, 'package-gzip'));
     await expect(manager.writeChunk(session.id, 'other', 0, body, packed.sha256)).rejects.toMatchObject({ status: 403 });
-    body.destroy();
+    // The stream opens its file asynchronously; let it close before afterEach deletes the folder.
+    await new Promise((resolve) => body.destroy().once('close', resolve));
     expect(() => manager.complete(session.id, 'other')).toThrow(/belongs to 'uploader'/);
     expect(() => manager.abort(session.id, 'other')).toThrow(/belongs to 'uploader'/);
   });

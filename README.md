@@ -177,6 +177,7 @@ Commands:
       --integrity-check     Run PRAGMA integrity_check on the copy instead of quick_check
       --work-dir <dir>      Where to stage the package (default: the system temp folder)
       --progress json       One JSON event per line on stdout (used by the Visual Studio extension)
+      --stop-on-stdin-close Cancel cleanly (abort the server upload, delete the staging copy) when stdin closes
   index-status              Report whether the served index is current for the local packages folder
       --packages-dir <dir>  PackagesLocalDirectory to check (default D365_PACKAGES_DIR)
       --db-path <path>      Local SQLite index (default D365_INDEX_DB_PATH or ./d365_index.db)
@@ -386,11 +387,11 @@ In stdio mode no API key is needed, background indexing is skipped unless `D365_
 `d365-fno-mcp-server index` scans `D365_PACKAGES_DIR` and populates the SQLite index.
 
 - **Incremental by default** — files whose path and modification time are unchanged since the last pass are skipped, so re-indexing after a sync is fast.
-- **Label files are incremental too** — label source mtimes are tracked separately so unchanged `.label.txt` files are skipped on later passes.
+- **Label files are incremental too** — label files are read from `AxLabelFile/LabelResources/<language>/<LabelFile>.<language>.label.txt`, and their mtimes are tracked separately so unchanged files are skipped on later passes. Labels are stored under the id code uses without the `@`: `MyLabels:Greeting` for `@MyLabels:Greeting`, and `SYS1` for a legacy `@SYS1`.
 - **Raw XML storage** — full element XML is stored by default for backward compatibility. Set `D365_INDEX_STORE_RAW_XML=0` to shrink the database; raw XML requests will fall back to reading the original source file from disk.
 - **Search index rebuilds** — FTS indexes are rebuilt only when objects or labels changed during the run.
 - **`--force`** — ignores mtimes and re-parses every file without deleting the database or its independently imported compiler usage snapshot. It is *not* required after upgrading the server. For a corrupt SQLite file, first back it up/move it explicitly; `--force` will not destroy it.
-- **Upgrading an existing index** — schema changes are additive, so an existing `d365_index.db` keeps working; just run `npm run index` again without `--force`. Unchanged AOT objects stay skipped, and any `raw_xml` already stored is preserved even if you set `D365_INDEX_STORE_RAW_XML=0` (the flag only stops writing new raw XML). The first upgraded run reprocesses label files once to populate label mtime tracking, after which labels are skipped like every other file.
+- **Upgrading an existing index** — schema changes are additive, so an existing `d365_index.db` keeps working; just run `npm run index` again without `--force`. Unchanged AOT objects stay skipped, and any `raw_xml` already stored is preserved even if you set `D365_INDEX_STORE_RAW_XML=0` (the flag only stops writing new raw XML). The first upgraded run re-reads every label file once (indexes older than schema 3 stored labels under different ids), after which labels are skipped like every other file. `index-status` and the Visual Studio **Check Index Freshness** command report an index built by an older schema as out of date.
 - **Pruning** — entries whose source files no longer exist (deleted or renamed objects) are removed at the end of a full pass, along with their cross-references and labels.
 - **Collisions** — when two files declare the same object name, the collision is counted and reported so duplicate/overlayed metadata is visible rather than silently overwritten.
 

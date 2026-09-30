@@ -117,6 +117,7 @@ Commands:
       --integrity-check     Run PRAGMA integrity_check on the copy instead of quick_check
       --work-dir <dir>      Where to stage the package (default: the system temp folder)
       --progress json       One JSON event per line on stdout (used by the Visual Studio extension)
+      --stop-on-stdin-close Cancel cleanly (abort the server upload, delete the staging copy) when stdin closes
   index-status              Report whether the served index is current for the local packages folder
       --packages-dir <dir>  PackagesLocalDirectory to check (default D365_PACKAGES_DIR)
       --db-path <path>      Local SQLite index (default D365_INDEX_DB_PATH or ./d365_index.db)

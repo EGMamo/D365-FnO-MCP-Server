@@ -86,7 +86,15 @@ internal sealed class IndexUploadViewModel : NotifyPropertyChangedObject, IIndex
         {
             if (this.running is { } source)
             {
-                await source.CancelAsync();
+                this.Status = "Cancelling: letting the current step clean up...";
+                try
+                {
+                    await source.CancelAsync();
+                }
+                catch (ObjectDisposedException)
+                {
+                    // The run finished between the click and here.
+                }
             }
         })
         { CanExecute = false };

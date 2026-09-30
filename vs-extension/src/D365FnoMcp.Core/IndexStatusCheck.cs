@@ -182,8 +182,7 @@ public static class IndexStatusCheck
 
                 log(line, isError);
             },
-            cancellationToken,
-            Directory.Exists(Path.GetDirectoryName(settings.IndexDbPath)) ? Path.GetDirectoryName(settings.IndexDbPath) : null);
+            cancellationToken);
 
         if (report is not null && exitCode == 0)
         {

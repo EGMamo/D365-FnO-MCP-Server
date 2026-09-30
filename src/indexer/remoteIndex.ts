@@ -7,6 +7,7 @@ import type { ReadableStream as WebReadableStream } from 'node:stream/web';
 import { z } from 'zod';
 import { byteLimit, createDecompressor, HashingTap, INDEX_ENCODINGS, type IndexEncoding } from './compression.js';
 import { logger } from '../utils/logger.js';
+import { getMeta, INDEX_SCHEMA_VERSION, META_KEYS } from './db.js';
 
 /**
  * Downloads a published index (produced by `publish-index`) described by a
@@ -319,6 +320,14 @@ export function verifyIndexFile(filePath: string, expectedObjects: number): void
     const count = Number(row.n);
     if (count !== expectedObjects) {
       throw new Error(`object count ${count} does not match the manifest (${expectedObjects})`);
+    }
+    // Older schemas still open (changes are additive) but lack data this version serves, such as label ids.
+    const schemaVersion = Number(getMeta(db, META_KEYS.schemaVersion)) || null;
+    if (schemaVersion === null || schemaVersion < INDEX_SCHEMA_VERSION) {
+      logger.warn('Published index was built by an older schema; publish a fresh index', {
+        schemaVersion,
+        expected: INDEX_SCHEMA_VERSION,
+      });
     }
   } finally {
     db.close();

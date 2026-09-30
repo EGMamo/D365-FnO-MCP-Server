@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { Database } from '../indexer/db.js';
 import { z } from 'zod';
-import { likeContains, resolveLabelByLanguage, searchLabelsFts } from '../indexer/db.js';
+import { likeContains, resolveLabel, resolveLabelByLanguage, searchLabelsFts } from '../indexer/db.js';
 
 export function registerLabelsTools(server: McpServer, db: Database) {
   server.tool(
@@ -9,9 +9,8 @@ export function registerLabelsTools(server: McpServer, db: Database) {
     'Resolve a label ID to its value',
     { labelId: z.string() },
     async ({ labelId }) => {
-      const cleanId = labelId.startsWith('@') ? labelId.substring(1) : labelId;
-      const label = db.prepare(`SELECT value FROM ax_labels WHERE label_id = ? LIMIT 1`).get(cleanId) as { value: string } | undefined;
-      
+      const label = resolveLabel(db, labelId);
+
       if (!label) {
         return { content: [{ type: 'text', text: "Label not found" }] };
       }

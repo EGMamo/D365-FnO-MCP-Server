@@ -6,7 +6,7 @@ import { pipeline } from 'node:stream/promises';
 import express, { type Request, type Response, type Router } from 'express';
 import { z } from 'zod';
 import { byteLimit, createDecompressor, hashFile, HashingTap, INDEX_ENCODINGS, type IndexEncoding } from '../indexer/compression.js';
-import { getMeta, META_KEYS } from '../indexer/db.js';
+import { getMeta, INDEX_SCHEMA_VERSION, META_KEYS } from '../indexer/db.js';
 import { getUsageSnapshotStatus } from '../indexer/xrefUsage.js';
 import { publishedDbFileName, versionName } from '../indexer/publishIndex.js';
 import { manifestSchema, type CachedManifest, type IndexManifest } from '../indexer/remoteIndex.js';
@@ -58,7 +58,7 @@ export type UploadState = 'receiving' | 'verifying' | 'activating' | 'persisting
 const ACTIVE_STATES: UploadState[] = ['receiving', 'verifying', 'activating', 'persisting'];
 
 export interface UploadCheck {
-  name: 'transfer' | 'content' | 'database';
+  name: 'transfer' | 'content' | 'database' | 'schema';
   ok: boolean;
   expected: string;
   actual: string;
@@ -415,6 +415,19 @@ export class IndexUploadManager {
       });
       if (!objectsOk) throw new Error('The database object count differs from the declared one; nothing was replaced.');
 
+      const schemaOk = facts.schemaVersion !== null && facts.schemaVersion >= INDEX_SCHEMA_VERSION;
+      session.checks.push({
+        name: 'schema',
+        ok: schemaOk,
+        expected: `schema ${INDEX_SCHEMA_VERSION} or later`,
+        actual: `schema ${facts.schemaVersion ?? 'unknown'}`,
+      });
+      if (!schemaOk) {
+        throw new Error(
+          `The database was built by an older version (schema ${facts.schemaVersion ?? 'unknown'}); this server needs schema ${INDEX_SCHEMA_VERSION}. Run \`index\` with this version and upload again; nothing was replaced.`
+        );
+      }
+
       const fileName = publishedDbFileName(declaration.encoding);
       const index: UploadedIndex = {
         version: versionName(facts.builtAt, declaration.sha256),
@@ -522,6 +535,8 @@ interface IndexFacts {
   builtAt: string;
   serverVersion: string | null;
   xrefImportedAt: string | null;
+  /** `schema_version` from `ax_meta`; null when the index predates it. */
+  schemaVersion: number | null;
 }
 
 /** Reads what the manifest records from a database, read-only and without an integrity scan. */
@@ -556,6 +571,7 @@ export function readIndexFacts(file: string): IndexFacts {
       builtAt,
       serverVersion: getMeta(db, META_KEYS.serverVersion),
       xrefImportedAt: imported ? (usage.importedAt ?? null) : null,
+      schemaVersion: Number(getMeta(db, META_KEYS.schemaVersion)) || null,
     };
   } finally {
     db.close();

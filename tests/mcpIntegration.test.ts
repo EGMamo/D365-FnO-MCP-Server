@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { openDb, upsertObject, rebuildFts, setMeta, META_KEYS } from '../src/indexer/db.js';
+import { openDb, upsertObject, rebuildFts, setMeta, META_KEYS, INDEX_SCHEMA_VERSION } from '../src/indexer/db.js';
 import { publishIndex, snapshotIndex } from '../src/indexer/publishIndex.js';
 import { compressFile } from '../src/indexer/compression.js';
 import { IndexUploadClient } from '../src/indexer/uploadClient.js';
@@ -276,6 +276,7 @@ describe('compiled MCP server index upload', () => {
     setMeta(db, META_KEYS.builtAt, '2026-09-26T09:00:00.000Z');
     setMeta(db, META_KEYS.serverVersion, '0.1.0');
     setMeta(db, META_KEYS.storeRawXml, '1');
+    setMeta(db, META_KEYS.schemaVersion, String(INDEX_SCHEMA_VERSION));
     db.close();
     const snapshot = snapshotIndex(source, path.join(root, 'upload-snapshot.db'));
     const packageFile = path.join(root, 'upload.gz');

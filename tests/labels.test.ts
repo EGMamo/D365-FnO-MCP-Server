@@ -71,3 +71,24 @@ describe('search_labels_fts', () => {
     expect(JSON.parse(res.content[0].text)).toHaveLength(1);
   });
 });
+
+describe('resolve_label', () => {
+  it('prefers the en-US text and accepts the label file forms', async () => {
+    const local = seedDb([], [
+      { labelId: 'SYS1', value: 'Kundenkonto', language: 'de' },
+      { labelId: 'SYS1', value: 'Customer account', language: 'en-US' },
+      { labelId: 'MyLabels:Greeting', value: 'Hello', language: 'en-US' },
+      { labelId: 'SYS:SYS7', value: 'Written without @', language: 'en-US' },
+    ]);
+    const localTools = collectLabelsTools(local);
+    const resolve = async (labelId: string) => (await localTools.get('resolve_label')!({ labelId })).content[0].text;
+    try {
+      expect(await resolve('@SYS1')).toBe('Customer account');
+      expect(await resolve('@MyLabels:Greeting')).toBe('Hello');
+      expect(await resolve('@SYS7')).toBe('Written without @');
+      expect(await resolve('@Greeting')).toBe('Label not found');
+    } finally {
+      local.close();
+    }
+  });
+});

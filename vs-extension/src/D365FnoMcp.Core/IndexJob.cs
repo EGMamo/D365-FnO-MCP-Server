@@ -1,7 +1,8 @@
 namespace D365FnoMcp.Core;
 
 /// <summary>One CLI run: arguments plus environment variables (secrets travel only in the environment).</summary>
-public sealed record CliStep(string Name, IReadOnlyList<string> Arguments, IReadOnlyDictionary<string, string> Environment, bool JsonProgress);
+/// <remarks><paramref name="StopsOnStdinClose"/>: the CLI cancels cleanly when its stdin closes, so cancelling closes stdin instead of killing it.</remarks>
+public sealed record CliStep(string Name, IReadOnlyList<string> Arguments, IReadOnlyDictionary<string, string> Environment, bool JsonProgress, bool StopsOnStdinClose = false);
 
 /// <summary>Secrets the job needs, read from the secret store just before it starts.</summary>
 public sealed record JobSecrets(string ApiKey, string? XrefPassword);
@@ -92,6 +93,7 @@ public static class IndexJob
             "--level", settings.CompressionLevel.ToString().ToLowerInvariant(),
             "--parallel", settings.ParallelUploads.ToString(System.Globalization.CultureInfo.InvariantCulture),
             "--progress", "json",
+            "--stop-on-stdin-close",
         };
         if (settings.UseChunks)
         {
@@ -109,7 +111,7 @@ public static class IndexJob
             uploadEnvironment["D365_PACKAGES_DIR"] = settings.PackagesDirectory;
         }
 
-        steps.Add(new CliStep("Upload", upload, uploadEnvironment, JsonProgress: true));
+        steps.Add(new CliStep("Upload", upload, uploadEnvironment, JsonProgress: true, StopsOnStdinClose: true));
         return steps;
     }
 

@@ -15,12 +15,18 @@ export async function* scanPackagesDir(dir: string): AsyncGenerator<ScannedFile>
   
   const files = await glob([
     `${searchDir}/**/Ax{Table,Class,Enum,Form,Query,DataEntityView,Edt,SecurityRole,SecurityRoleExtension,SecurityDuty,SecurityDutyExtension,SecurityPrivilege,MenuItemDisplay,MenuItemAction,MenuItemOutput}/*.xml`,
-    `${searchDir}/**/AxLabelFile/*.label.txt`
+    `${searchDir}/**/AxLabelFile/LabelResources/*/*.label.txt`
   ], { windowsPathsNoEscape: true });
 
   for (const filePath of files) {
-    const stat = await fs.stat(filePath);
-    const mtime = stat.mtimeMs;
+    let mtime: number;
+    try {
+      mtime = (await fs.stat(filePath)).mtimeMs;
+    } catch (err) {
+      // Deleted between the directory listing and now (a branch switch or a deployment in progress).
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      throw err;
+    }
     
     // Extract info from path
     // Format: .../PackagesLocalDirectory/PackageName/ModelName/Type/Name.xml
@@ -60,9 +66,10 @@ export async function* scanPackagesDir(dir: string): AsyncGenerator<ScannedFile>
       name = fileName.replace('.xml', '');
       type = folderToType[typeDir] ?? typeDir.replace('Ax', '');
     } else if (filePath.endsWith('.label.txt')) {
+      // Format: .../PackageName/ModelName/AxLabelFile/LabelResources/<language>/<LabelFileId>.<language>.label.txt
       const fileName = parts[parts.length - 1];
-      model = parts[parts.length - 3];
-      pkg = parts[parts.length - 4];
+      model = parts[parts.length - 5];
+      pkg = parts[parts.length - 6];
 
       name = fileName.replace('.label.txt', '');
       type = 'Label';
@@ -77,4 +84,18 @@ export async function* scanPackagesDir(dir: string): AsyncGenerator<ScannedFile>
       mtime
     };
   }
+}
+
+export interface LabelFileName {
+  /** The label file id that `@<LabelFileId>:<LabelId>` references name. */
+  labelFileId: string;
+  language: string;
+}
+
+/** Splits `<LabelFileId>.<language>.label.txt` (for example `SYS.en-US.label.txt`). */
+export function parseLabelFileName(filePath: string): LabelFileName {
+  const base = (filePath.split(/[\\/]/).pop() ?? '').replace(/\.label\.txt$/i, '');
+  const dot = base.indexOf('.');
+  if (dot <= 0) return { labelFileId: base, language: 'en-US' };
+  return { labelFileId: base.slice(0, dot), language: base.slice(dot + 1) || 'en-US' };
 }

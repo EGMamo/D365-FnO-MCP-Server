@@ -5,6 +5,7 @@ import type { AxParam } from './parser.js';
 import { createUsageSchema } from './xrefUsage.js';
 import { createTraceSchema } from './traces.js';
 import { createReleasePlanSchema } from './releasePlans.js';
+import { createBpSchema } from './bpFindings.js';
 
 export type Database = DatabaseSync;
 
@@ -195,6 +196,7 @@ export function openDb(dbPath: string): Database {
   createUsageSchema(db);
   createTraceSchema(db);
   createReleasePlanSchema(db);
+  createBpSchema(db);
 
   return db;
   } catch (err) {
@@ -202,6 +204,19 @@ export function openDb(dbPath: string): Database {
     throw err;
   }
 }
+
+/**
+ * Version of what `index` writes, recorded as `schema_version` in `ax_meta`.
+ *   2  security objects and `ax_security_grants`.
+ *   3  labels read from `AxLabelFile/LabelResources/<language>/`, with ids
+ *      stored as code references them (`MyLabels:Id`, legacy `SYS1`).
+ * Tables and columns are only ever added, so any version opens; the number
+ * says which data an index built by an older version is missing.
+ */
+export const INDEX_SCHEMA_VERSION = 3;
+
+/** Indexes built before this version store labels under different ids and are re-read in full. */
+export const LABEL_IDS_SCHEMA_VERSION = 3;
 
 /** Keys the indexer records in `ax_meta` so consumers can tell what an index holds. */
 export const META_KEYS = {
@@ -213,6 +228,8 @@ export const META_KEYS = {
   storeRawXml: 'store_raw_xml',
   indexDurationMs: 'index_duration_ms',
   schemaVersion: 'schema_version',
+  /** Set while a run may have changed objects or labels without rebuilding the FTS tables yet. */
+  ftsPending: 'fts_pending',
 } as const;
 
 export function setMeta(db: Database, key: string, value: string): void {
@@ -717,6 +734,11 @@ export function createIndexWriter(db: Database) {
       insertLabel.run(item.labelId, item.language || 'en-US', item.value, item.sourceFile || sourceFile);
     }
   };
+  const insertMissingLabel = db.prepare(`
+    INSERT INTO ax_labels (label_id, language, value, source_file)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(label_id, language) DO NOTHING
+  `);
   const upsertLabelSourceMtime = db.prepare(`
     INSERT INTO ax_label_sources (source_file, file_mtime, label_count)
     VALUES (?, ?, ?)
@@ -790,6 +812,14 @@ export function createIndexWriter(db: Database) {
       }
       insertLabels(labels, sourceFile);
     },
+    /** Inserts only labels no source currently provides; returns how many were added. */
+    fillMissingLabels(labels: LabelInput[], sourceFile: string): number {
+      let added = 0;
+      for (const item of labels) {
+        added += Number(insertMissingLabel.run(item.labelId, item.language || 'en-US', item.value, sourceFile).changes);
+      }
+      return added;
+    },
     countLabelsFromSource(sourceFile: string): number {
       return (countLabelsBySource.get(sourceFile) as { count: number }).count;
     },
@@ -843,17 +873,44 @@ export function listModels(db: Database): { model: string; objectCount: number }
     .all() as { model: string; objectCount: number }[];
 }
 
+/**
+ * The stored ids a label reference can have: `@MyLabels:Greeting` is stored as
+ * `MyLabels:Greeting`; a legacy `@SYS1` as `SYS1`, or as `SYS:SYS1` when its
+ * label file writes the id without the `@`.
+ */
+export function labelIdCandidates(labelId: string): string[] {
+  const cleanId = labelId.startsWith('@') ? labelId.substring(1) : labelId;
+  const legacy = /^([A-Za-z]+)\d+$/.exec(cleanId);
+  return legacy ? [cleanId, `${legacy[1]}:${cleanId}`] : [cleanId];
+}
+
+/**
+ * Resolves a label reference, in `language` when given, otherwise preferring
+ * `en-US`. Returns null when absent.
+ */
+export function resolveLabel(
+  db: Database,
+  labelId: string,
+  language?: string
+): { label_id: string; language: string; value: string } | null {
+  const [first, second = first] = labelIdCandidates(labelId);
+  const sql = language
+    ? `SELECT label_id, language, value FROM ax_labels WHERE label_id IN (?, ?) AND language = ? COLLATE NOCASE
+       ORDER BY label_id = ? DESC LIMIT 1`
+    : `SELECT label_id, language, value FROM ax_labels WHERE label_id IN (?, ?)
+       ORDER BY label_id = ? DESC, language = 'en-US' DESC LIMIT 1`;
+  const params: SQLInputValue[] = language ? [first, second, language, first] : [first, second, first];
+  const row = db.prepare(sql).get(...params) as { label_id: string; language: string; value: string } | undefined;
+  return row ?? null;
+}
+
 /** Resolves a label ID for a specific language. Returns null when absent. */
 export function resolveLabelByLanguage(
   db: Database,
   labelId: string,
   language: string
 ): { label_id: string; language: string; value: string } | null {
-  const cleanId = labelId.startsWith('@') ? labelId.substring(1) : labelId;
-  const row = db
-    .prepare(`SELECT label_id, language, value FROM ax_labels WHERE label_id = ? AND language = ? LIMIT 1`)
-    .get(cleanId, language) as { label_id: string; language: string; value: string } | undefined;
-  return row ?? null;
+  return resolveLabel(db, labelId, language);
 }
 
 export interface LabelHit {
@@ -876,7 +933,7 @@ export function searchLabelsFts(
     let sql = `SELECT label_id, language, value FROM ax_labels WHERE value LIKE ? ESCAPE '\\'`;
     const params: SQLInputValue[] = [likeContains(query)];
     if (language) {
-      sql += ` AND language = ?`;
+      sql += ` AND language = ? COLLATE NOCASE`;
       params.push(language);
     }
     sql += ` LIMIT ?`;
@@ -896,7 +953,7 @@ export function searchLabelsFts(
     `;
     const params: SQLInputValue[] = [ftsQuery];
     if (language) {
-      sql += ` AND l.language = ?`;
+      sql += ` AND l.language = ? COLLATE NOCASE`;
       params.push(language);
     }
     sql += ` ORDER BY rank LIMIT ?`;

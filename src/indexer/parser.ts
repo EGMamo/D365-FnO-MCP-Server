@@ -774,16 +774,29 @@ export function parseAxMenuItem(xml: string, type: string, _name?: string) {
   };
 }
 
-export function parseLabels(content: string) {
+/**
+ * Parses a `.label.txt` file (`Id=Text` lines; indented lines are comments).
+ *
+ * With `labelFileId`, ids are stored the way code references them, minus the
+ * leading `@`: `Id` in label file `MyLabels` becomes `MyLabels:Id`
+ * (`@MyLabels:Id`), while legacy ids that the file already writes with `@`
+ * (`@SYS1=...` in `SYS.en-US.label.txt`) stay global (`SYS1`, for `@SYS1`).
+ */
+export function parseLabels(content: string, labelFileId?: string) {
   const labels: { labelId: string; value: string }[] = [];
-  const lines = content.split('\n');
+  const lines = content.replace(/^\uFEFF/, '').split('\n');
   for (const line of lines) {
     if (line.includes('=')) {
       const [key, ...valueParts] = line.split('=');
-      if (key && !key.startsWith(' ')) {
-        labels.push({ labelId: key.trim(), value: valueParts.join('=').trim() });
+      if (key && !key.startsWith(' ') && !key.startsWith('\t')) {
+        labels.push({ labelId: labelKey(key.trim(), labelFileId), value: valueParts.join('=').trim() });
       }
     }
   }
   return labels;
+}
+
+function labelKey(id: string, labelFileId?: string): string {
+  if (id.startsWith('@')) return id.slice(1);
+  return labelFileId ? `${labelFileId}:${id}` : id;
 }

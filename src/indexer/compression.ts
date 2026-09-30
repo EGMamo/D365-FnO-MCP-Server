@@ -115,7 +115,8 @@ export async function compressFile(
   destination: string,
   encoding: IndexEncoding,
   level: CompressionLevel = 'balanced',
-  onProgress?: (rawBytesRead: number) => void
+  onProgress?: (rawBytesRead: number) => void,
+  signal?: AbortSignal
 ): Promise<CompressedFile> {
   const rawTap = new HashingTap();
   const encodedTap = new HashingTap();
@@ -126,7 +127,8 @@ export async function compressFile(
     rawTap,
     createCompressor(encoding, level, sizeHint),
     encodedTap,
-    fs.createWriteStream(destination)
+    fs.createWriteStream(destination),
+    { signal }
   );
   return {
     encoding,
