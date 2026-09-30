@@ -14,7 +14,7 @@ export async function* scanPackagesDir(dir: string): AsyncGenerator<ScannedFile>
   const searchDir = dir.replace(/\\/g, '/');
   
   const files = await glob([
-    `${searchDir}/**/Ax{Table,Class,Enum,Form,Query,DataEntityView,Edt}/*.xml`,
+    `${searchDir}/**/Ax{Table,Class,Enum,Form,Query,DataEntityView,Edt,SecurityRole,SecurityRoleExtension,SecurityDuty,SecurityDutyExtension,SecurityPrivilege,MenuItemDisplay,MenuItemAction,MenuItemOutput}/*.xml`,
     `${searchDir}/**/AxLabelFile/*.label.txt`
   ], { windowsPathsNoEscape: true });
 
@@ -40,6 +40,14 @@ export async function* scanPackagesDir(dir: string): AsyncGenerator<ScannedFile>
       AxQuery: 'Query',
       AxDataEntityView: 'DataEntity',  // Note: folder is DataEntityView, type is DataEntity
       AxEdt: 'Edt',
+      AxSecurityRole: 'SecurityRole',
+      AxSecurityRoleExtension: 'SecurityRoleExtension',
+      AxSecurityDuty: 'SecurityDuty',
+      AxSecurityDutyExtension: 'SecurityDutyExtension',
+      AxSecurityPrivilege: 'SecurityPrivilege',
+      AxMenuItemDisplay: 'MenuItemDisplay',
+      AxMenuItemAction: 'MenuItemAction',
+      AxMenuItemOutput: 'MenuItemOutput',
       AxLabelFile: 'Label',
     };
 

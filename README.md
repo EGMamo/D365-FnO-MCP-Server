@@ -5,6 +5,11 @@ A Model Context Protocol (MCP) server that gives AI coding assistants first-clas
 ## Features
 
 - **Metadata search** — search AOT objects, inspect table schemas, class hierarchies, method signatures, EDTs, enums, form data sources, and raw element XML.
+- **Security model analysis**: traces Role → Duty → Privilege → entry point (including extensions and sub-roles), answers "who can open this form?", compares roles, and checks segregation-of-duties rules you supply.
+- **Exposing F&O to AI agents**: checks whether a data entity is OData-ready and generates read-only entities, privileges, read-only roles and OData actions, all grounded against the index.
+- **Performance trace analysis**: imports Trace Parser (`AxTrace`) aggregates and reports N+1 queries, slow SQL and top methods, each linked back to the X++ object, and the table indexes and table group involved.
+- **Batch and telemetry helpers**: classifies batch classes (RunBaseBatch / SysOperation), checks batch capability, `BatchRetryable`, pack/unpack versioning and idempotency, and generates ready-to-run KQL for F&O batch telemetry, X++ exceptions, slow SQL and Commerce store health.
+- **Release plan awareness** (optional): imports Microsoft release plans for Finance, SCM, Commerce, Project Operations and HR, searches them offline, and maps a feature to the indexed objects and your packages' customizations that it may affect.
 - **Label lookup** — resolve label IDs and full-text search label files across packages.
 - **X++ generators with grounding** — Chain of Command extensions, table/class extensions, plain classes, RunBase batch jobs, and SysOperation classes. Generators validate their inputs against the index and fail closed rather than emit code for objects that do not exist.
 - **Dual MCP transport** — Streamable HTTP (API-key protected) for remote/shared use, and stdio for local clients such as Claude Desktop, Claude Code, or VS Code.
@@ -111,6 +116,17 @@ Commands:
       --allow-empty        Intentionally replace usage data with an empty snapshot
       --allow-source-locks Allow serializable source reads if snapshot isolation is off
       --store-raw          Retain original SQL rows (off by default)
+  index-trace              Import Trace Parser (AxTrace) aggregates for the trace tools
+      --from-json <file>   Import from a JSON file instead of SQL Server
+      --source <label>     Import label; re-importing a label replaces it
+      --trace <name>       Only this TraceName
+      --max-rows <n>       Per-session cap for methods and statements (default 1000)
+  index-release-plans      Import Microsoft release plans (the only command that calls the internet)
+      --from-json <file>   Import a saved feed instead of downloading
+      --url <url>          Feed URL (default releaseplans.microsoft.com)
+      --products <a,b>     Product names to keep (default: F&O products)
+      --all-products       Keep every product
+      --db-path <path>     SQLite index path (default ./d365_index.db)
   doctor [--hosted]         Validate environment and report issues (exit 1 on failure)
                             --hosted checks a published-index deployment (implied by D365_INDEX_URL)
   pull-index                Download the published index instead of building one
@@ -356,6 +372,21 @@ Metadata:
 Labels:
 `resolve_label`, `resolve_label_by_language`, `search_labels`, `search_labels_fts`
 
+Security (roles, duties, privileges and menu items are indexed, including role/duty extensions):
+`get_security_object` (role/duty/privilege, optionally flattened with sub-roles and extensions), `find_security_path` (which roles, duties and privileges reach a form, class, report, menu item or data entity), `analyze_sod_conflicts` (report roles holding both duties of a user-supplied segregation-of-duties rule), `diff_roles` (compare two roles' effective duties and privileges)
+
+Data entities and agent exposure (previews only; table and entity keys are read from the stored XML):
+`check_entity_odata_readiness` (public names, key backed by a unique index, unsupported fields, OData URL, granting privileges/roles), `create_data_entity` (read-only entity for a table, keyed on its natural key), `create_security_privilege` (menu item and data entity grants with view/maintain presets), `create_readonly_role_for_entities` (privilege + duty + role granting Read on a list of entities, e.g. for an AI agent), `create_odata_action` (entity extension with a `[SysODataActionAttribute]` method)
+
+Performance traces (after `index-trace`; see below):
+`list_trace_sessions`, `find_n_plus_one` (method lines with many cheap statements), `find_slow_sql` (slowest statements by max or total time, with table indexes), `get_top_methods` (by exclusive, inclusive or database time), `search_trace` (methods, SQL text and tables)
+
+Batch and telemetry:
+`analyze_batch_class` (framework, batch capability, retryability, pack/unpack and idempotency findings, plus KQL for the class), `generate_kql_query` (KQL templates for Application Insights and Log Analytics; see below)
+
+Release plans (after `index-release-plans`; see below):
+`search_release_plans` (keywords, product, wave and status as of today, or full details by plan ID), `check_feature_impact` (maps a feature or AOT name fragments to indexed objects, and to the objects in your packages that match or reference them)
+
 X++ generators (grounded against the index):
 `create_coc_extension`, `create_table_extension`, `create_class_extension`, `generate_xpp_class`, `create_runbase_batch`, `create_sys_operation`
 
@@ -418,6 +449,106 @@ recorded provenance, and an intentionally empty successful snapshot are distinct
 timestamp does not prove that the compiler database itself is current. `find_references` remains the
 separate structural/declared relationship query and should not be interpreted as a compiler call graph.
 
+## Optional performance trace data (Trace Parser)
+
+Trace Parser imports an `.etl` trace into an `AxTrace` SQL Server database. `index-trace` reads
+per-session aggregates from it (session totals, per-method call counts and times, and SQL
+statements with their tables) and stores them in the local index. Set the connection string in
+`D365_TRACE_CONNECTION_STRING` (read-only login, same guidance as for XRef):
+
+```text
+d365-fno-mcp-server index-trace --db-path ./d365_index.db --trace "Sales order posting"
+```
+
+Without SQL Server access, import a JSON file with the same fields:
+
+```text
+d365-fno-mcp-server index-trace --from-json ./trace.json --source posting-trace
+```
+
+```json
+{
+  "sessions": [{ "session_id": "1", "trace_name": "Posting", "user_name": "admin", "total_ms": 12000, "db_ms": 8000, "db_calls": 5200 }],
+  "methods": [{ "session_id": "1", "method_name": "SalesFormLetter::run", "calls": 1, "inclusive_ms": 11000, "exclusive_ms": 50, "db_ms": 10, "db_calls": 4, "worst_line_db_calls": 3, "worst_line_db_ms": 8 }],
+  "statements": [{ "session_id": "1", "statement": "SELECT ... FROM SALESLINE ...", "table_names": "SALESLINE", "method_name": "SalesLine::find", "executions": 400, "total_ms": 900, "max_ms": 12 }]
+}
+```
+
+The command checks the `AxTrace` columns before reading and fails if they are missing. Queries are
+parameterized, and methods and statements are capped per session (`--max-rows`). Each `--source`
+label is one import: importing it again replaces it in one transaction, and a failed import keeps
+the previous data. The N+1 (more than 100 calls, under 5 ms average) and slow SQL (over 5 s)
+defaults come from the FastTrack Trace Parser Agent (MIT License, Copyright (c) Microsoft
+Corporation), and each tool accepts its own thresholds.
+
+Traces contain user names and SQL text. They stay in the local index: `publish-index` and
+`upload-index` remove every trace table from the copy they produce.
+
+## Telemetry queries (KQL)
+
+`generate_kql_query` returns KQL text for you to run in Application Insights or Log Analytics.
+The server never connects to Azure. Scenarios:
+
+| Target | Scenarios |
+|---|---|
+| Application Insights (`customEvents`, `exceptions`) | `batch-failures`, `batch-failures-over-time`, `batch-long-running-tasks`, `batch-throttling`, `batch-throttled-vs-running`, `batch-thread-availability`, `batch-priority-distribution`, `batch-queue-sizes`, `batch-exceptions`, `xpp-exceptions`, `slow-sql` |
+| Log Analytics (Commerce Store Monitoring Agent) | `store-heartbeat`, `store-commerce-events`, `store-db-metrics`, `store-perf` |
+
+Optional filters:
+- `timespan` (for example `24h`) or `startTime`/`endTime`
+- `environmentId`
+- `batchJobIds`
+- `className`, which is checked against the index
+- `computer`
+
+Values are escaped as KQL string literals. Each result lists its target and prerequisites. Batch
+events need 10.0.44 (build 7.0.7606.126+) or 10.0.45 (build 7.0.7690.21+) or later, with batch
+telemetry enabled in *Monitoring and telemetry parameters*. `analyze_batch_class` includes the
+failure and long-running queries for the analysed class.
+
+Query shapes and field names are adapted from Microsoft's Dynamics-365-FastTrack-FSCM-Telemetry-Samples
+(MIT License, Copyright (c) Microsoft Corporation).
+
+## Optional release plans
+
+`index-release-plans` downloads the public feed behind
+[releaseplans.microsoft.com](https://releaseplans.microsoft.com) and stores the Finance, Supply
+Chain Management, Commerce, Project Operations, Human Resources and F&O cross-app features in the
+local index. It is the only command that calls the internet, and it runs only when you start it.
+The MCP tools read the local copy.
+
+```text
+d365-fno-mcp-server index-release-plans --db-path ./d365_index.db
+```
+
+The feed returns 100 features per page, so a full download reads about 13 pages and takes around a
+minute. Each import replaces the previous one in one transaction; a failed import keeps the old data.
+Without internet access, save the feed JSON elsewhere (one page, an array of pages, or an array of
+features) and import it with `--from-json`. Release plans are public, so `publish-index` keeps them.
+
+`check_feature_impact` is a name-based heuristic: it turns the feature name into AOT prefixes
+(vendor → `Vend`, warehouse → `WHS`, …) or uses the `terms` you pass, and with `packages` lists
+your objects that match or extend, use or reference the matching objects. Use it to decide what to
+regression test, not as a Microsoft impact analysis.
+
+Microsoft plans to stop publishing release plans after September 2026 in favour of the Microsoft
+AI at Work roadmap. The paging and product scope follow the FastTrack Release Planner Helper
+(MIT License, Copyright (c) Microsoft Corporation).
+
+## Local agents (GitHub Copilot and Claude Code)
+
+[`agents/`](agents) contains four ready-made agents: `xpp-developer`, `performance-reviewer`,
+`security-reviewer` and `release-planner`. They come as GitHub Copilot custom agents
+(`agents/github-copilot/*.agent.md`, for VS Code and Copilot CLI) and as Claude Code subagents
+(`agents/claude-code/*.md`). Each uses a focused set of this server's tools plus the Microsoft
+Learn MCP server, and none of them can use the write tools. Register the servers as `d365-fno`
+and `microsoft-learn`, then copy the files into `.github/agents/` or `.claude/agents/` in your X++
+repo. Setup, client configs and customization: [docs/local-agents.md](docs/local-agents.md).
+Edit `agents/source/` and run `npm run build:agents` to regenerate both formats.
+
+What the server reads, stores, sends and logs, and the limits of its results:
+[docs/responsible-ai-faq.md](docs/responsible-ai-faq.md).
+
 ## Development
 
 ```bash
@@ -442,7 +573,7 @@ database. Set `D365_RUN_SQL_INTEGRATION=1` and `D365_XREF_CONNECTION_STRING`, th
 `npx vitest run tests/xrefSql.live.test.ts`. If source locks are acceptable, additionally set
 `D365_TEST_ALLOW_SOURCE_LOCKS=1`. Without opt-in this test is reported as skipped, not live-validated.
 
-`mssql` is an optional dependency: only `index-xref` loads it, so the container image and
+`mssql` is an optional dependency: only `index-xref` and `index-trace` load it, so the container image and
 `npm install --omit=optional` leave it out.
 
 ## Security notes
@@ -452,6 +583,7 @@ database. Set `D365_RUN_SQL_INTEGRATION=1` and `D365_XREF_CONNECTION_STRING`, th
 - **Trust proxy** — `TRUST_PROXY_HOPS` defaults to `0`, meaning `X-Forwarded-For` is ignored and the socket address is used. Only raise it when the server genuinely sits behind that many trusted proxies; otherwise clients can spoof their IP and evade rate limiting.
 - **Session limits** — `MAX_CONCURRENT_SESSIONS` and `SESSION_IDLE_TIMEOUT_MS` bound memory use and clean up abandoned sessions.
 - **Exposure** — the server grants read access to your source metadata and should not be exposed to untrusted networks. It binds every interface unless `MCP_HOST` says otherwise; set `MCP_HOST=127.0.0.1` for a local server, and front a shared one with TLS (App Service terminates HTTPS in hosted mode).
+- **Data and AI use** — see the [Responsible AI and security FAQ](docs/responsible-ai-faq.md) for what the server reads, stores and sends, and how to review AI output that uses it.
 
 ## License
 

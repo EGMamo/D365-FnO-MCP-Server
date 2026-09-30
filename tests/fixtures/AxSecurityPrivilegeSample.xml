@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AxSecurityPrivilege xmlns:i="http://www.w3.org/2001/XMLSchema-instance">
+	<Name>SampleFormMaintain</Name>
+	<Label>Maintain sample form</Label>
+	<DataEntityPermissions>
+		<AxSecurityDataEntityPermission>
+			<Grant>
+				<Read>Allow</Read>
+				<Update>Allow</Update>
+			</Grant>
+			<Name>SampleEntity</Name>
+		</AxSecurityDataEntityPermission>
+	</DataEntityPermissions>
+	<EntryPoints>
+		<AxSecurityEntryPointReference>
+			<Name>SampleForm</Name>
+			<Grant>
+				<Create>Allow</Create>
+				<Delete>Allow</Delete>
+				<Read>Allow</Read>
+				<Update>Allow</Update>
+			</Grant>
+			<ObjectName>SampleForm</ObjectName>
+			<ObjectType>MenuItemDisplay</ObjectType>
+		</AxSecurityEntryPointReference>
+	</EntryPoints>
+</AxSecurityPrivilege>

@@ -3,76 +3,98 @@
 ## Project Purpose
 A **Model Context Protocol (MCP) server** for Microsoft Dynamics 365 Finance & Operations (D365 FnO),
 targeting developers. Gives AI agents deep insight into **local AOT source code** — tables, classes,
-enums, labels, cross-references — by indexing `PackagesLocalDirectory` XML files into SQLite.
+forms, data entities, EDTs, enums, labels, security objects, cross-references — by indexing
+`PackagesLocalDirectory` XML files into SQLite. Optional imports add XRef usages, Trace Parser
+captures and Microsoft release plans.
 
-> **No live D365 environment connection.** Pure local code intelligence tool.
+> **No live D365 environment connection.** Pure code intelligence tool; it never calls OData,
+> Dataverse or Application Insights (KQL is generated, not executed).
 
 ## Tech Stack
-- **Runtime**: Node.js 24, TypeScript (ESNext modules, strict mode)
-- **MCP Transport**: HTTP Streamable SSE — MCP spec 2025-03-26 (`StreamableHTTPServerTransport`)
+- **Runtime**: Node.js 24+, TypeScript (ESNext modules, strict mode)
+- **MCP Transports**: Streamable HTTP (`MCP_TRANSPORT=http`, default, `/mcp`) or stdio
 - **MCP SDK**: `@modelcontextprotocol/sdk`
-- **Local Indexing**: `PackagesLocalDirectory` AOT XML files -> parsed with `fast-xml-parser` -> stored in SQLite via Node's built-in SQLite driver
-- **Auth (MCP clients)**: API Key via `X-API-Key` HTTP header
-- **No live D365 connection**: No Azure AD, no OData, no network calls to D365
-- **Distribution**: Local clone only — `git clone` → `npm install` → `npm start`
+- **Indexing**: AOT XML -> `fast-xml-parser` -> SQLite via Node's built-in `node:sqlite`
+- **Auth (HTTP)**: API keys (`X-API-Key` or `Authorization: Bearer`), named keys in `MCP_API_KEYS`, >= 32 chars, sessions bound to the key
+- **Hosted mode**: read-only on Azure App Service from a published index (`D365_INDEX_URL`); see `docs/hosted-deployment.md`
+- **Optional**: `mssql` (only for `index-xref` / `index-trace`)
 
 ## Key Design Decisions
-- Pure local tool — reads `PackagesLocalDirectory` XML only, no network calls to D365
-- Single config point: `.env` file with `MCP_PORT`, `MCP_API_KEY`, `D365_PACKAGES_DIR`, `D365_INDEX_DB_PATH`
-- SQLite index is incremental (file mtime-based, no full rebuilds)
-- Cross-references enabled: `get_table_details` shows which classes/forms reference a table
-- 9 MCP tools total: 7 metadata + 2 label
+- Read-only by default. Generators return previews; file writes need `D365_ENABLE_WRITE_TOOLS=1`, are two-step (`write_table_extension` -> `apply_table_extension_change`) and are refused with a published index
+- Every generator is grounded: it resolves referenced objects/fields/EDTs against the index and reports what it could not resolve
+- Network use is opt-in: publish/pull/upload of the index (your storage/server) and `index-release-plans` (public feed)
+- Trace data stays local; `publish-index` / `upload-index` strip it
+- Index is incremental (file mtime-based)
+
+## MCP Tools (50)
+- **Metadata** (`tools/metadata.ts`): search_symbols, get_table_schema, get_class_hierarchy, get_method_signature, find_references, find_usages, get_enum_values, get_edt_details, get_form_datasources, get_query_datasources, get_data_entity_details, get_element_xml, list_objects, list_packages, list_models, get_index_staleness, get_index_stats, get_usage_snapshot_status
+- **Labels** (`tools/labels.ts`): resolve_label, search_labels, resolve_label_by_language, search_labels_fts
+- **Generators** (`tools/generators.ts`): create_coc_extension, create_table_extension, create_class_extension, generate_xpp_class, create_runbase_batch, create_sys_operation
+- **Entities / integration** (`tools/entities.ts`): check_entity_odata_readiness, create_data_entity, create_security_privilege, create_readonly_role_for_entities, create_odata_action
+- **Security** (`tools/security.ts`): get_security_object, find_security_path, analyze_sod_conflicts, diff_roles
+- **Traces** (`tools/traces.ts`): list_trace_sessions, get_top_methods, find_slow_sql, find_n_plus_one, search_trace
+- **Telemetry / batch** (`tools/telemetry.ts`): generate_kql_query, analyze_batch_class
+- **Release plans** (`tools/releasePlans.ts`): search_release_plans, check_feature_impact
+- **Workspace / writes** (`tools/workspace.ts`, `tools/writers.ts`): get_visual_studio_workspace, write_table_extension, apply_table_extension_change
+- **Knowledge** (`tools/knowledge.ts`): digest_knowledge (plus knowledge topics in `d365-fno-assistant-knowledge/`)
 
 ## File Structure
 ```
 src/
-  index.ts              # Entry point
-  config.ts             # Zod env validation
-  transport.ts          # HTTP/SSE + API key middleware
-  indexer/
-    scanner.ts          # AOT file discovery (glob)
-    parser.ts           # XML parsing (fast-xml-parser)
-    db.ts               # SQLite schema & queries
-    buildIndex.ts       # Incremental index orchestrator
-  tools/
-    metadata.ts         # 7 AOT metadata tools
-    labels.ts           # 2 label tools
-tests/
-.env.example
-README.md
+  index.ts                # CLI entry point (serve, index, index-xref, index-trace, index-release-plans,
+                          #   index-status, publish-index, pull-index, upload-index, digest, doctor, setup)
+  config.ts, configLoader.ts  # Zod env validation
+  cli/                    # One module per command
+  server/                 # start.ts (tool registration), httpTransport.ts, stdioTransport.ts, apiKeys.ts, indexUpload.ts
+  indexer/                # scanner, parser, db schema, buildIndex, xref/trace/release-plan importers, publish/pull/upload
+  tools/                  # MCP tool handlers (see above)
+  security/model.ts       # Role/duty/privilege flattening
+  validation/grounding.ts # Object resolution and naming checks for generators
+  workspace/              # Visual Studio workspace discovery and safe offline writes
+  knowledge/              # Knowledge digest
+tests/                    # vitest
+docs/                     # roadmap, hosted deployment, local agents, RAI FAQ
+agents/                   # source/ -> github-copilot/*.agent.md + claude-code/*.md (npm run build:agents)
+infra/                    # Azure App Service deployment
 ```
 
 ## D365 FnO AOT File Layout (PackagesLocalDirectory)
 ```
 PackagesLocalDirectory/
   <PackageName>/
-    <PackageName>/
-      AxTable/          *.xml  → tables
-      AxClass/          *.xml  → X++ classes
-      AxEnum/           *.xml  → enums
-      AxForm/           *.xml  → forms
-      AxQuery/          *.xml  → queries
-      AxDataEntityView/ *.xml  → data entities
-      AxLabelFile/      *.label.txt → labels
+    Descriptor/*.xml      → model descriptors
+    <ModelName>/
+      AxTable/ AxTableExtension/ AxClass/ AxForm/ AxQuery/ AxEnum/ AxEdt/
+      AxDataEntityView/ AxSecurityRole/ AxSecurityDuty/ AxSecurityPrivilege/
+      AxMenuItemAction/ AxMenuItemDisplay/ AxMenuItemOutput/   *.xml
+      AxLabelFile/        *.label.txt → labels
 ```
 
-## Environment Variables (.env)
+## Main Environment Variables (.env)
 ```
-MCP_PORT=3000
-MCP_API_KEY=<secret>
+MCP_TRANSPORT=http            # or stdio
+MCP_HOST= / MCP_PORT=3000
+MCP_API_KEYS=name=<32+ chars>,other=<32+ chars>
 D365_PACKAGES_DIR=K:\\AosService\\PackagesLocalDirectory
+D365_CUSTOM_METADATA_DIR=     # optional extra metadata root
 D365_INDEX_DB_PATH=./d365_index.db
+D365_INDEX_URL=               # hosted mode: published manifest URL
+D365_ENABLE_WRITE_TOOLS=0     # local only
+RATE_LIMIT_MAX_REQUESTS / RATE_LIMIT_WINDOW_MS / TRUST_PROXY_HOPS
+MAX_CONCURRENT_SESSIONS / SESSION_IDLE_TIMEOUT_MS / MCP_REQUEST_TIMEOUT_MS
 ```
+See the README Configuration table for the full list.
 
 ## Coding Conventions
 - Use `zod` for all input validation (tool inputs + env vars)
-- Use named exports (no default exports except in `index.ts`)
-- Keep tool handlers thin — delegate to indexer/db modules
-- All DB queries in `src/indexer/db.ts` (single source of truth)
-- Log format: `[D365-MCP] <timestamp> <level> <message>`
-- Errors thrown from tools should be user-friendly strings (MCP clients display them)
+- Use named exports
+- Keep tool handlers thin; put schema and shared queries in `src/indexer/`
+- Never invent AOT names: resolve against the index and report unresolved names
+- Errors returned from tools should be user-friendly strings (MCP clients display them)
+- Agents: edit `agents/source/*.md`, never the generated files; run `npm run build:agents`
+- Tests: vitest; open databases through `openDb`; run `npm run build` before the full suite (integration tests use `dist/`)
 
 ## References
-- MCP Spec: https://spec.modelcontextprotocol.io/specification/2025-03-26/
-- D365 OData: https://learn.microsoft.com/en-us/dynamics365/fin-ops-core/dev-itpro/data-entities/odata
-- D365 Metadata REST: https://learn.microsoft.com/en-us/dynamics365/fin-ops-core/dev-itpro/dev-tools/metadata-api
+- MCP Spec: https://modelcontextprotocol.io/specification
+- Roadmap: `docs/roadmap.md`
+- Microsoft Learn MCP: https://learn.microsoft.com/api/mcp

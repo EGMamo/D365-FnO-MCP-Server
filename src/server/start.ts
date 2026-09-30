@@ -14,6 +14,11 @@ import { startStdioServer } from './stdioTransport.js';
 import { logger } from '../utils/logger.js';
 import { registerMetadataTools, type PublishedIndexInfo } from '../tools/metadata.js';
 import { registerLabelsTools } from '../tools/labels.js';
+import { registerSecurityTools } from '../tools/security.js';
+import { registerEntityTools } from '../tools/entities.js';
+import { registerTraceTools } from '../tools/traces.js';
+import { registerReleasePlanTools } from '../tools/releasePlans.js';
+import { registerTelemetryTools } from '../tools/telemetry.js';
 import { registerGeneratorTools } from '../tools/generators.js';
 import { registerWriterTools } from '../tools/writers.js';
 import { registerKnowledgeResources, registerKnowledgeDigestTool } from '../tools/knowledge.js';
@@ -128,6 +133,11 @@ export async function startServer(): Promise<void> {
 
     registerMetadataTools(server, db, { published });
     registerLabelsTools(server, db);
+    registerSecurityTools(server, db);
+    registerEntityTools(server, db);
+    registerTraceTools(server, db);
+    registerTelemetryTools(server, db);
+    registerReleasePlanTools(server, db);
     registerGeneratorTools(server, db);
     registerWriterTools(server, db, {
       enableWriteTools: config.enableWriteTools,

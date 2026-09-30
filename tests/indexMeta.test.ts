@@ -31,7 +31,7 @@ describe('index build metadata', () => {
     expect(builtAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     expect(getMeta(db, META_KEYS.serverVersion)).toBe('0.1.0');
     expect(getMeta(db, META_KEYS.storeRawXml)).toBe('1');
-    expect(getMeta(db, META_KEYS.schemaVersion)).toBe('1');
+    expect(getMeta(db, META_KEYS.schemaVersion)).toBe('2');
     expect(Number(getMeta(db, META_KEYS.indexDurationMs))).toBeGreaterThanOrEqual(0);
   });
 

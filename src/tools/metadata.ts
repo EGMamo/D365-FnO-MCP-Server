@@ -7,6 +7,25 @@ import fs from 'fs/promises';
 import { findUsageRefs, getUsageSnapshotStatus } from '../indexer/xrefUsage.js';
 
 /** Provenance of a snapshot index (published or uploaded) the server serves without source files. */
+
+/** Every object type the indexer stores, for tools that accept any indexed type. */
+export const INDEXED_OBJECT_TYPES = [
+  'Table',
+  'Class',
+  'Enum',
+  'Form',
+  'Query',
+  'DataEntity',
+  'Edt',
+  'SecurityRole',
+  'SecurityRoleExtension',
+  'SecurityDuty',
+  'SecurityDutyExtension',
+  'SecurityPrivilege',
+  'MenuItemDisplay',
+  'MenuItemAction',
+  'MenuItemOutput',
+] as const;
 export interface PublishedIndexInfo {
   /** `manifest`: pulled from a published manifest; `upload`: uploaded to this server. */
   source?: 'manifest' | 'upload';
@@ -36,7 +55,7 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
     'Full-text search across all AOT objects',
     {
       query: z.string(),
-      type: z.enum(['Table', 'Class', 'Enum', 'Form', 'Query', 'DataEntity', 'Edt']).optional(),
+      type: z.enum(INDEXED_OBJECT_TYPES).optional(),
       limit: z.number().int().min(1).max(100).default(20)
     },
     async ({ query, type, limit }) => {
@@ -220,7 +239,7 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
   server.tool(
     'get_element_xml',
     'Raw XML of any AOT object',
-    { name: z.string(), type: z.enum(['Table', 'Class', 'Enum', 'Form', 'Query', 'DataEntity', 'Edt']) },
+    { name: z.string(), type: z.enum(INDEXED_OBJECT_TYPES) },
     async ({ name, type }) => {
       const obj = dbUtils.getObjectByName(db, name, type);
       if (!obj) return { content: [{ type: 'text', text: `Object ${name} of type ${type} not found.` }] };
@@ -246,7 +265,7 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
     'list_objects',
     'List AOT objects',
     {
-      type: z.enum(['Table', 'Class', 'Enum', 'Form', 'Query', 'DataEntity', 'Edt']).optional(),
+      type: z.enum(INDEXED_OBJECT_TYPES).optional(),
       package: z.string().optional(),
       offset: z.number().int().min(0).default(0),
       limit: z.number().int().min(1).max(500).default(50),

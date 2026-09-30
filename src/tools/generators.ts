@@ -13,21 +13,21 @@ import {
 } from '../validation/grounding.js';
 import * as dbUtils from '../indexer/db.js';
 
-type ToolResult = {
+export type ToolResult = {
   content: { type: 'text'; text: string }[];
   isError?: boolean;
 };
 
-function ok(text: string): ToolResult {
+export function ok(text: string): ToolResult {
   return { content: [{ type: 'text', text }] };
 }
 
-function fail(lines: string | string[]): ToolResult {
+export function fail(lines: string | string[]): ToolResult {
   const text = Array.isArray(lines) ? lines.join('\n') : lines;
   return { content: [{ type: 'text', text }], isError: true };
 }
 
-function xmlEscape(value: string): string {
+export function xmlEscape(value: string): string {
   return value
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -35,7 +35,7 @@ function xmlEscape(value: string): string {
     .replace(/"/g, '&quot;');
 }
 
-function xmlCommentSafe(value: string): string {
+export function xmlCommentSafe(value: string): string {
   // Angle brackets are escaped and every '-' is padded, so neither '--' nor '-->'
   // can ever be formed inside the generated comment.
   return value

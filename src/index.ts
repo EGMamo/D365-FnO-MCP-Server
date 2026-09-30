@@ -43,6 +43,33 @@ export async function run(argv: string[]): Promise<CliResult> {
         }),
       };
     }
+    case 'index-trace': {
+      const { indexTraceCommand } = await import('./cli/index-trace-command.js');
+      const maxRows = flagString(flags, 'max-rows');
+      return {
+        code: await indexTraceCommand({
+          connectionString: flagString(flags, 'connection-string'),
+          fromJson: flagString(flags, 'from-json'),
+          source: flagString(flags, 'source'),
+          trace: flagString(flags, 'trace'),
+          maxRows: maxRows === undefined ? undefined : Number(maxRows),
+          dbPath: flagString(flags, 'db-path'),
+        }),
+      };
+    }
+    case 'index-release-plans': {
+      const { indexReleasePlansCommand } = await import('./cli/index-release-plans-command.js');
+      const products = flagString(flags, 'products');
+      return {
+        code: await indexReleasePlansCommand({
+          fromJson: flagString(flags, 'from-json'),
+          url: flagString(flags, 'url'),
+          allProducts: flagBool(flags, 'all-products'),
+          products: products?.split(',').map((p) => p.trim()).filter(Boolean),
+          dbPath: flagString(flags, 'db-path'),
+        }),
+      };
+    }
     case 'index-xref': {
       const { indexXrefCommand } = await import('./cli/index-xref-command.js');
       return {

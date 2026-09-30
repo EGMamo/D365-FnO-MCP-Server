@@ -9,6 +9,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Security model indexing: `AxSecurityRole`, `AxSecurityDuty`, `AxSecurityPrivilege` (plus
+  role/duty extensions) and `AxMenuItemDisplay/Action/Output` are indexed. Privilege entry-point
+  and data-entity grants go to a new `ax_security_grants` table. Role/duty/privilege/menu-item
+  links are stored as cross-references. The index schema version is now `2`. Run `index` again
+  (no `--force` needed) to pick up the new types.
+- Security tools: `get_security_object`, `find_security_path`, `analyze_sod_conflicts` and
+  `diff_roles`. `search_symbols`, `list_objects` and `get_element_xml` accept the new object types.
+- Knowledge topic `20-security-model`.
+- Data entity and agent-exposure tools: `check_entity_odata_readiness`, `create_data_entity`,
+  `create_security_privilege`, `create_readonly_role_for_entities` and `create_odata_action`.
+  Table indexes and entity keys are parsed on demand from the stored XML, so no re-index is needed.
+- Knowledge topic `21-exposing-fno-to-agents`.
+- `index-trace` command: imports Trace Parser (`AxTrace`) aggregates from SQL Server
+  (`D365_TRACE_CONNECTION_STRING`) or a JSON file into the local index, one replaceable import
+  per `--source`.
+- Trace tools: `list_trace_sessions`, `find_n_plus_one`, `find_slow_sql`, `get_top_methods` and
+  `search_trace`. Findings link methods to AOT objects and SQL tables to their indexes and table
+  group. Default thresholds come from the FastTrack Trace Parser Agent (MIT).
+- `publish-index` and `upload-index` remove imported trace data from the published copy.
+- Knowledge topic `22-performance-antipatterns`.
+- `analyze_batch_class`: reports a class's batch framework and inheritance, batch capability,
+  `BatchRetryable` status, pack/unpack versioning and idempotency or set-based hints, together
+  with KQL for its batch telemetry.
+- `generate_kql_query`: KQL templates for F&O batch telemetry, X++ exceptions and slow SQL in
+  Application Insights, and for Commerce store health in Log Analytics. Queries are generated,
+  never executed. Adapted from the FastTrack FSCM Telemetry Samples (MIT).
+- Knowledge topic `23-batch-and-telemetry`.
+- `index-release-plans` command: imports Microsoft release plans for the F&O products (or
+  `--all-products`) from releaseplans.microsoft.com, following every feed page, or from a saved
+  JSON file. It is the only command that downloads from a public internet source.
+- Release plan tools: `search_release_plans` (keywords, product, wave, status, details by plan ID)
+  and `check_feature_impact` (maps a feature or AOT name fragments to indexed objects and to
+  matching or referencing objects in the packages you name).
+- Local agents in `agents/`: `xpp-developer`, `performance-reviewer`, `security-reviewer` and
+  `release-planner`, as GitHub Copilot custom agents and Claude Code subagents generated from
+  `agents/source/` by `npm run build:agents`. They use this server and the Microsoft Learn MCP
+  server, and a test checks that every tool they name exists. Setup in `docs/local-agents.md`.
+- `docs/responsible-ai-faq.md`: what the server reads, stores, sends and logs, who can access it,
+  and the limits of its results.
+- `docs/roadmap.md`: expansion roadmap drawn from Microsoft's Dynamics 365 FastTrack
+  implementation assets, with a catalog of its AI ERP agents.
 - `index-status` command: compares the local packages folder with the local index and with the
   index a server serves (`--server`), and reports added, changed and removed files per model and
   whether a newer local index still needs uploading. `--json` for tools.

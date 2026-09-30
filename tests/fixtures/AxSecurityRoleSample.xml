@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AxSecurityRole xmlns:i="http://www.w3.org/2001/XMLSchema-instance">
+	<Name>SampleClerkRole</Name>
+	<Description>Maintains sample records</Description>
+	<Label>Sample clerk</Label>
+	<Duties>
+		<AxSecurityDutyReference>
+			<Name>SampleMaintainDuty</Name>
+		</AxSecurityDutyReference>
+	</Duties>
+	<Privileges>
+		<AxSecurityPrivilegeReference>
+			<Name>SampleEntityView</Name>
+		</AxSecurityPrivilegeReference>
+	</Privileges>
+	<SubRoles>
+		<AxSecurityRoleReference>
+			<Name>SampleViewerRole</Name>
+		</AxSecurityRoleReference>
+	</SubRoles>
+</AxSecurityRole>

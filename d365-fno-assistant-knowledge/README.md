@@ -41,6 +41,10 @@ concerns one topic.
 | `resources/17-coc-side-effect-suppression-pattern.md` | Context-scoped flag to bypass a CoC side effect on a specific call path |
 | `resources/18-outbound-batch-integration-pattern.md` | DMF export → landing zone → ETL → REST upsert → sync-log callback architecture |
 | `resources/19-documentation-ways-of-working.md` | Spec docs go stale; as-built doc template shape; treat notes as point-in-time |
+| `resources/20-security-model.md` | Role → Duty → Privilege → Entry point traversal, extensions, sub-roles, SoD rules, static-analysis limits |
+| `resources/21-exposing-fno-to-agents.md` | OData, virtual tables, the ERP MCP server; OData readiness, natural keys, read-only agent roles, OData actions |
+| `resources/22-performance-antipatterns.md` | Trace Parser workflow, N+1 and slow SQL, set-based operations, index checks, caching by table group |
+| `resources/23-batch-and-telemetry.md` | SysOperation vs RunBaseBatch, pack/unpack, BatchRetryable and idempotency, batch telemetry events and KQL |
 
 ## Provenance
 

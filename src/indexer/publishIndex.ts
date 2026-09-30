@@ -91,6 +91,11 @@ function normalizeCopy(dbFile: string, relativePathsRoot?: string): void {
   const db = new DatabaseSync(dbFile);
   try {
     db.exec('PRAGMA journal_mode = DELETE');
+    // Trace imports carry user names and environment SQL; they stay on the machine that imported them.
+    const traces = db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ax_trace_imports'`).get();
+    if (traces) {
+      db.exec('DELETE FROM ax_trace_sql; DELETE FROM ax_trace_methods; DELETE FROM ax_trace_sessions; DELETE FROM ax_trace_imports; VACUUM');
+    }
     if (relativePathsRoot) {
       db.exec('BEGIN');
       try {

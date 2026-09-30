@@ -2,6 +2,8 @@ import { createRequire } from 'node:module';
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
 import fs from 'fs';
 import { createUsageSchema } from './xrefUsage.js';
+import { createTraceSchema } from './traces.js';
+import { createReleasePlanSchema } from './releasePlans.js';
 
 export type Database = DatabaseSync;
 
@@ -133,6 +135,16 @@ export function openDb(dbPath: string): Database {
       UNIQUE(object_id, key)
     );
 
+    CREATE TABLE IF NOT EXISTS ax_security_grants (
+      id INTEGER PRIMARY KEY,
+      object_id INTEGER REFERENCES ax_objects(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL,
+      target_type TEXT NOT NULL,
+      target_name TEXT NOT NULL,
+      child_name TEXT NOT NULL DEFAULT '',
+      grants TEXT NOT NULL DEFAULT ''
+    );
+
     CREATE VIRTUAL TABLE IF NOT EXISTS ax_fts
       USING fts5(name, type, package, content=ax_objects, content_rowid=id);
 
@@ -170,6 +182,8 @@ export function openDb(dbPath: string): Database {
     CREATE INDEX IF NOT EXISTS idx_ax_xref_from ON ax_xref(from_type, from_name);
     CREATE INDEX IF NOT EXISTS idx_ax_xref_to ON ax_xref(to_type, to_name);
     CREATE INDEX IF NOT EXISTS idx_ax_labels_source_file ON ax_labels(source_file);
+    CREATE INDEX IF NOT EXISTS idx_ax_security_grants_object_id ON ax_security_grants(object_id);
+    CREATE INDEX IF NOT EXISTS idx_ax_security_grants_target ON ax_security_grants(target_type, target_name);
 
     CREATE TABLE IF NOT EXISTS ax_meta (
       key TEXT PRIMARY KEY,
@@ -178,6 +192,8 @@ export function openDb(dbPath: string): Database {
     );
   `);
   createUsageSchema(db);
+  createTraceSchema(db);
+  createReleasePlanSchema(db);
 
   return db;
   } catch (err) {
@@ -620,6 +636,18 @@ export function createIndexWriter(db: Database) {
     }
   };
 
+  const deleteSecurityGrants = db.prepare(`DELETE FROM ax_security_grants WHERE object_id = ?`);
+  const insertSecurityGrant = db.prepare(`
+    INSERT INTO ax_security_grants (object_id, kind, target_type, target_name, child_name, grants)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `);
+  const insertSecurityGrants = (objectId: number | bigint, grants: SecurityGrantInput[]) => {
+    deleteSecurityGrants.run(objectId);
+    for (const g of grants) {
+      insertSecurityGrant.run(objectId, g.kind, g.objectType, g.objectName, g.childName || '', g.grants.join(','));
+    }
+  };
+
   const deleteMethods = db.prepare(`DELETE FROM ax_methods WHERE object_id = ?`);
   const insertMethod = db.prepare(`
     INSERT INTO ax_methods (object_id, name, access_modifier, return_type, params, is_static, is_abstract)
@@ -716,6 +744,9 @@ export function createIndexWriter(db: Database) {
     },
     upsertMethods(objectId: number | bigint, methods: any[]): void {
       insertMethods(objectId, methods || []);
+    },
+    upsertSecurityGrants(objectId: number | bigint, grants: SecurityGrantInput[]): void {
+      insertSecurityGrants(objectId, grants || []);
     },
     upsertLabels(labels: any[], sourceFile: string): void {
       if (!labels || labels.length === 0) {
@@ -943,6 +974,45 @@ export function getObjectByName(db: Database, name: string, type: string) {
     controls,
     properties,
   };
+}
+
+export interface SecurityGrantInput {
+  kind: string;
+  objectType: string;
+  objectName: string;
+  childName?: string;
+  grants: string[];
+}
+
+export interface SecurityGrantRow {
+  kind: string;
+  target_type: string;
+  target_name: string;
+  child_name: string;
+  grants: string;
+}
+
+/** Entry-point and data-entity grants of a privilege, in file order. */
+export function getSecurityGrants(db: Database, privilegeName: string): SecurityGrantRow[] {
+  return db
+    .prepare(
+      `SELECT g.kind, g.target_type, g.target_name, g.child_name, g.grants
+         FROM ax_security_grants g JOIN ax_objects o ON o.id = g.object_id
+        WHERE o.type = 'SecurityPrivilege' AND o.name = ?
+        ORDER BY g.id`
+    )
+    .all(privilegeName) as unknown as SecurityGrantRow[];
+}
+
+/** Outgoing cross-references of one object, optionally filtered by kind. */
+export function getXrefsFrom(db: Database, name: string, type: string, xrefKind?: string): Xref[] {
+  let sql = `SELECT * FROM ax_xref WHERE from_name = ? AND from_type = ?`;
+  const params: SQLInputValue[] = [name, type];
+  if (xrefKind !== undefined) {
+    sql += ` AND xref_kind = ?`;
+    params.push(xrefKind);
+  }
+  return db.prepare(sql).all(...params) as unknown as Xref[];
 }
 
 export function getXrefsTo(

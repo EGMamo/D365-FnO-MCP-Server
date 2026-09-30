@@ -71,6 +71,19 @@ Commands:
       --allow-empty         Explicitly permit replacing the snapshot with no references
       --allow-source-locks  Allow serializable source reads if snapshot isolation is disabled
       --store-raw           Retain raw SQL rows (larger database; off by default)
+  index-trace                Import Trace Parser (AxTrace) aggregates for the trace tools
+      --connection-string    Trace database connection string (prefer D365_TRACE_CONNECTION_STRING)
+      --from-json <file>     Import aggregates from a JSON file instead of SQL Server
+      --source <label>       Label for this import; re-importing a label replaces it (default: database or file name)
+      --trace <name>         Only this TraceName (default: every trace in the database)
+      --max-rows <n>         Per-session cap for methods and SQL statements (default 1000)
+      --db-path <path>       SQLite index path (default D365_INDEX_DB_PATH or ./d365_index.db)
+  index-release-plans        Store Microsoft release plans for the release plan tools (network; opt-in)
+      --from-json <file>     Import a saved releaseplans.microsoft.com feed instead of downloading
+      --url <url>            Feed URL (default https://releaseplans.microsoft.com/en-US/allreleaseplans/)
+      --products <a,b>       Product names to keep (default: Finance, SCM, Commerce, Project Operations, HR, cross-app)
+      --all-products         Keep every product in the feed
+      --db-path <path>       SQLite index path (default D365_INDEX_DB_PATH or ./d365_index.db)
   doctor [--hosted]         Validate environment and report issues (exit 1 on failure)
                             --hosted checks a published-index deployment (implied by D365_INDEX_URL)
   pull-index                Download the published index instead of building one

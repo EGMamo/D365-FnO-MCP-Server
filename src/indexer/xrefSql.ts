@@ -92,7 +92,7 @@ export function toOdbcConnectionString(connectionString: string): string {
  * omit it because only `index-xref` needs SQL Server access. Windows
  * authentication additionally needs the native `msnodesqlv8` driver.
  */
-async function loadMssql(windowsAuthentication: boolean) {
+export async function loadMssql(windowsAuthentication: boolean) {
   if (windowsAuthentication) {
     try {
       return await import('mssql/msnodesqlv8.js');

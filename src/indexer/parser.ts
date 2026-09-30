@@ -370,6 +370,32 @@ export function parseAxClass(xml: string, _name?: string, _pkg?: string) {
   };
 }
 
+export interface AxClassSources {
+  declaration: string;
+  /** Method bodies keyed by lower-case method name; empty for single-source (legacy) classes. */
+  methods: Map<string, string>;
+  /** Whole class source: the declaration and every method. */
+  all: string;
+}
+
+/** Declaration and per-method X++ source of an AxClass, comments preserved. */
+export function parseAxClassSources(xml: string): AxClassSources {
+  const parsed = parser.parse(xml) as XmlNode;
+  const root = node(parsed['AxClass']);
+  const sourceCode = node(root['SourceCode']);
+  const methodNodes = nodes(node(sourceCode['Methods'] ?? root['Methods'])['Method']);
+  const methods = new Map<string, string>();
+  for (const m of methodNodes) {
+    const src = collectSource(m['Source']);
+    const name = text(m['Name']) || parseXppMethods(src)[0]?.name || '';
+    if (name) methods.set(name.toLowerCase(), src);
+  }
+  const classSource = collectSource(root['Source']);
+  const declaration = collectSource(sourceCode['Declaration']) || classSource;
+  const all = classSource || [declaration, ...methods.values()].filter(Boolean).join('\n');
+  return { declaration, methods, all };
+}
+
 export function parseAxEnum(xml: string, _name?: string, _pkg?: string) {
   const parsed = parser.parse(xml) as XmlNode;
   const root = node(parsed['AxEnum']);
@@ -515,6 +541,101 @@ export function parseAxDataEntity(xml: string, _name?: string, _pkg?: string) {
   };
 }
 
+export interface AxTableIndexDetail {
+  name: string;
+  fields: string[];
+  /** AOT default is No, i.e. a unique index. */
+  allowDuplicates: boolean;
+  alternateKey: boolean;
+  enabled: boolean;
+}
+
+export interface AxTableKeys {
+  indexes: AxTableIndexDetail[];
+  primaryIndex: string;
+  replacementKey: string;
+  clusteredIndex: string;
+  /** Regular, TempDB or InMemory. */
+  tableType: string;
+  tableGroup: string;
+  saveDataPerCompany: boolean;
+}
+
+/** Index and key details of an AxTable, parsed on demand (not stored in the index). */
+export function parseAxTableKeys(xml: string): AxTableKeys {
+  const parsed = parser.parse(xml) as XmlNode;
+  const root = node(parsed['AxTable']);
+  const indexes = nodes(node(root['Indexes'])['AxTableIndex']).map((i) => ({
+    name: text(i['Name']),
+    fields: nodes(node(i['Fields'])['AxTableIndexField'])
+      .map((f) => text(f['DataField']))
+      .filter(Boolean),
+    allowDuplicates: isYes(i['AllowDuplicates']),
+    alternateKey: isYes(i['AlternateKey']),
+    enabled: !isNo(i['Enabled']),
+  }));
+  return {
+    indexes,
+    primaryIndex: text(root['PrimaryIndex']),
+    replacementKey: text(root['ReplacementKey']),
+    clusteredIndex: text(root['ClusteredIndex']),
+    tableType: text(root['TableType']) || 'Regular',
+    tableGroup: text(root['TableGroup']),
+    saveDataPerCompany: !isNo(root['SaveDataPerCompany']),
+  };
+}
+
+export interface AxDataEntityKey {
+  name: string;
+  fields: string[];
+}
+
+export interface AxDataEntityDetails {
+  keys: AxDataEntityKey[];
+  primaryKey: string;
+  isPublic: boolean;
+  isReadOnly: boolean;
+  dataManagementEnabled: boolean;
+  publicEntityName: string;
+  publicCollectionName: string;
+  stagingTable: string;
+  entityCategory: string;
+  /** Field name -> i:type such as AxDataEntityViewMappedField or AxDataEntityViewUnmappedFieldString. */
+  fieldKinds: Record<string, string>;
+}
+
+/** Entity keys and OData-relevant flags of an AxDataEntityView, parsed on demand. */
+export function parseAxDataEntityDetails(xml: string): AxDataEntityDetails {
+  const parsed = parser.parse(xml) as XmlNode;
+  const root = node(parsed['AxDataEntityView']);
+  const keys = nodes(node(root['Keys'])['AxDataEntityViewKey']).map((k) => ({
+    name: text(k['Name']),
+    fields: nodes(node(k['Fields'])['AxDataEntityViewKeyField'])
+      .map((f) => text(f['DataField']))
+      .filter(Boolean),
+  }));
+  const fieldKinds: Record<string, string> = {};
+  const fieldsNode = node(root['Fields']);
+  for (const key of Object.keys(fieldsNode)) {
+    if (!key.startsWith('AxDataEntityViewField')) continue;
+    for (const f of nodes(fieldsNode[key])) {
+      fieldKinds[text(f['Name'])] = text(typeAttr(f)) || 'AxDataEntityViewMappedField';
+    }
+  }
+  return {
+    keys,
+    primaryKey: text(root['PrimaryKey']),
+    isPublic: isYes(root['IsPublic']),
+    isReadOnly: isYes(root['IsReadOnly']),
+    dataManagementEnabled: isYes(root['DataManagementEnabled']),
+    publicEntityName: text(root['PublicEntityName']),
+    publicCollectionName: text(root['PublicCollectionName']),
+    stagingTable: text(root['DataManagementStagingTable']),
+    entityCategory: text(root['EntityCategory']),
+    fieldKinds,
+  };
+}
+
 export function parseAxEdt(xml: string, _name?: string, _pkg?: string) {
   const parsed = parser.parse(xml) as XmlNode;
   const root = node(parsed['AxEdt']);
@@ -526,6 +647,129 @@ export function parseAxEdt(xml: string, _name?: string, _pkg?: string) {
     helpText: text(root['HelpText']),
     stringSize: rawSize === '' ? 0 : Number(rawSize) || 0,
     edtType: canonicalFieldType(text(typeAttr(root))),
+    properties: root,
+  };
+}
+
+/** A permission granted by a privilege: an entry point (menu item, service op) or a data entity. */
+export interface AxSecurityGrant {
+  kind: 'entrypoint' | 'dataentity';
+  objectType: string;
+  objectName: string;
+  /** Child object for entry points that target a form control or service operation. */
+  childName: string;
+  /** Granted access levels, e.g. ['Read', 'Update']. */
+  grants: string[];
+}
+
+const GRANT_LEVELS = ['Read', 'Update', 'Create', 'Correct', 'Delete', 'Invoke'] as const;
+
+function parseGrant(value: unknown): string[] {
+  const grant = node(value);
+  return GRANT_LEVELS.filter((level) => text(grant[level]).toLowerCase() === 'allow');
+}
+
+/** Names of `<Container><AxXxxReference><Name>..</Name></AxXxxReference></Container>` children. */
+function referenceNames(container: unknown): string[] {
+  const names: string[] = [];
+  const containerNode = node(container);
+  for (const key of Object.keys(containerNode)) {
+    if (!key.startsWith('Ax')) continue;
+    for (const ref of nodes(containerNode[key])) {
+      const name = text(ref['Name']);
+      if (name) names.push(name);
+    }
+  }
+  return names;
+}
+
+/** Parses `AxSecurityRole` and `AxSecurityRoleExtension`. */
+export function parseAxSecurityRole(xml: string, _name?: string, _pkg?: string) {
+  const parsed = parser.parse(xml) as XmlNode;
+  const root = node(parsed['AxSecurityRole'] ?? parsed['AxSecurityRoleExtension']);
+  return {
+    label: text(root['Label']),
+    description: text(root['Description']),
+    duties: referenceNames(root['Duties']),
+    privileges: referenceNames(root['Privileges']),
+    subRoles: referenceNames(root['SubRoles']),
+    properties: root,
+  };
+}
+
+/** Parses `AxSecurityDuty` and `AxSecurityDutyExtension`. */
+export function parseAxSecurityDuty(xml: string, _name?: string, _pkg?: string) {
+  const parsed = parser.parse(xml) as XmlNode;
+  const root = node(parsed['AxSecurityDuty'] ?? parsed['AxSecurityDutyExtension']);
+  return {
+    label: text(root['Label']),
+    description: text(root['Description']),
+    privileges: referenceNames(root['Privileges']),
+    properties: root,
+  };
+}
+
+export function parseAxSecurityPrivilege(xml: string, _name?: string, _pkg?: string) {
+  const parsed = parser.parse(xml) as XmlNode;
+  const root = node(parsed['AxSecurityPrivilege']);
+  const grants: AxSecurityGrant[] = [];
+
+  const entryPoints = node(root['EntryPoints']);
+  for (const key of Object.keys(entryPoints)) {
+    if (!key.startsWith('AxSecurityEntryPoint')) continue;
+    for (const ep of nodes(entryPoints[key])) {
+      const objectName = text(ep['ObjectName']) || text(ep['Name']);
+      if (!objectName) continue;
+      grants.push({
+        kind: 'entrypoint',
+        objectType: text(ep['ObjectType']) || 'MenuItemDisplay',
+        objectName,
+        childName: text(ep['ObjectChildName']),
+        grants: parseGrant(ep['Grant']),
+      });
+    }
+  }
+
+  const entityPermissions = node(root['DataEntityPermissions']);
+  for (const key of Object.keys(entityPermissions)) {
+    if (!key.startsWith('AxSecurityDataEntity')) continue;
+    for (const perm of nodes(entityPermissions[key])) {
+      const objectName = text(perm['Name']);
+      if (!objectName) continue;
+      grants.push({
+        kind: 'dataentity',
+        objectType: 'DataEntity',
+        objectName,
+        childName: '',
+        grants: parseGrant(perm['Grant']),
+      });
+    }
+  }
+
+  return {
+    label: text(root['Label']),
+    description: text(root['Description']),
+    grants,
+    properties: root,
+  };
+}
+
+const MENU_ITEM_DEFAULT_OBJECT_TYPE: Record<string, string> = {
+  MenuItemDisplay: 'Form',
+  MenuItemAction: 'Class',
+  MenuItemOutput: 'SSRSReport',
+};
+
+/** Parses `AxMenuItemDisplay`, `AxMenuItemAction` and `AxMenuItemOutput`. */
+export function parseAxMenuItem(xml: string, type: string, _name?: string) {
+  const parsed = parser.parse(xml) as XmlNode;
+  const root = node(parsed[`Ax${type}`]);
+  return {
+    label: text(root['Label']),
+    object: text(root['Object']),
+    objectType: text(root['ObjectType']) || MENU_ITEM_DEFAULT_OBJECT_TYPE[type] || '',
+    configurationKey: text(root['ConfigurationKey']),
+    linkedPermissionObject: text(root['LinkedPermissionObject']),
     properties: root,
   };
 }

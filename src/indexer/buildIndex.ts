@@ -3,6 +3,7 @@ import { scanPackagesDir } from './scanner.js';
 import * as dbUtils from './db.js';
 import * as parser from './parser.js';
 import { getUsageSnapshotStatus } from './xrefUsage.js';
+import { extensionBaseName } from '../security/model.js';
 import fs from 'fs/promises';
 import path from 'path';
 import { createHash } from 'crypto';
@@ -296,6 +297,68 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
             }
             break;
           }
+          case 'SecurityRole':
+          case 'SecurityRoleExtension': {
+            parsed = parser.parseAxSecurityRole(content, file.name, file.package);
+            writer.upsertProperties(objectId, { label: parsed.label, description: parsed.description });
+            const from = { fromType: file.type, fromName: file.name };
+            for (const duty of parsed.duties) {
+              xrefs.push({ ...from, toType: 'SecurityDuty', toName: duty, xrefKind: 'role_duty' });
+            }
+            for (const priv of parsed.privileges) {
+              xrefs.push({ ...from, toType: 'SecurityPrivilege', toName: priv, xrefKind: 'role_privilege' });
+            }
+            for (const role of parsed.subRoles) {
+              xrefs.push({ ...from, toType: 'SecurityRole', toName: role, xrefKind: 'subrole' });
+            }
+            if (file.type === 'SecurityRoleExtension') {
+              xrefs.push({ ...from, toType: 'SecurityRole', toName: extensionBaseName(file.name), xrefKind: 'extends' });
+            }
+            break;
+          }
+          case 'SecurityDuty':
+          case 'SecurityDutyExtension': {
+            parsed = parser.parseAxSecurityDuty(content, file.name, file.package);
+            writer.upsertProperties(objectId, { label: parsed.label, description: parsed.description });
+            for (const priv of parsed.privileges) {
+              xrefs.push({ fromType: file.type, fromName: file.name, toType: 'SecurityPrivilege', toName: priv, xrefKind: 'duty_privilege' });
+            }
+            if (file.type === 'SecurityDutyExtension') {
+              xrefs.push({ fromType: file.type, fromName: file.name, toType: 'SecurityDuty', toName: extensionBaseName(file.name), xrefKind: 'extends' });
+            }
+            break;
+          }
+          case 'SecurityPrivilege': {
+            parsed = parser.parseAxSecurityPrivilege(content, file.name, file.package);
+            writer.upsertProperties(objectId, { label: parsed.label, description: parsed.description });
+            writer.upsertSecurityGrants(objectId, parsed.grants);
+            for (const g of parsed.grants) {
+              xrefs.push({
+                fromType: 'SecurityPrivilege',
+                fromName: file.name,
+                toType: g.objectType,
+                toName: g.objectName,
+                xrefKind: g.kind === 'dataentity' ? 'entity_permission' : 'entrypoint',
+              });
+            }
+            break;
+          }
+          case 'MenuItemDisplay':
+          case 'MenuItemAction':
+          case 'MenuItemOutput': {
+            parsed = parser.parseAxMenuItem(content, file.type, file.name);
+            writer.upsertProperties(objectId, {
+              label: parsed.label,
+              object: parsed.object,
+              objectType: parsed.objectType,
+              configurationKey: parsed.configurationKey,
+              linkedPermissionObject: parsed.linkedPermissionObject,
+            });
+            if (parsed.object) {
+              xrefs.push({ fromType: file.type, fromName: file.name, toType: parsed.objectType, toName: parsed.object, xrefKind: 'menuitem_target' });
+            }
+            break;
+          }
         }
 
         writer.deleteXrefsFrom(file.type, file.name);
@@ -407,7 +470,7 @@ function recordBuildMeta(db: Database, packagesDir: string, storeRawXml: boolean
     dbUtils.setMeta(db, dbUtils.META_KEYS.packagesDirHash, hash);
     dbUtils.setMeta(db, dbUtils.META_KEYS.storeRawXml, storeRawXml ? '1' : '0');
     dbUtils.setMeta(db, dbUtils.META_KEYS.indexDurationMs, String(durationMs));
-    dbUtils.setMeta(db, dbUtils.META_KEYS.schemaVersion, '1');
+    dbUtils.setMeta(db, dbUtils.META_KEYS.schemaVersion, '2');
     db.exec('COMMIT');
   } catch (err) {
     db.exec('ROLLBACK');
