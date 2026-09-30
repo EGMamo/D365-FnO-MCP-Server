@@ -18,6 +18,11 @@ export function setSourceFileReads(allowed: boolean): void {
   sourceReadsAllowed = allowed;
 }
 
+/** False while the server serves an index built elsewhere. */
+export function sourceFileReadsAllowed(): boolean {
+  return sourceReadsAllowed;
+}
+
 function readable(filePath: string | null | undefined): filePath is string {
   return sourceReadsAllowed && typeof filePath === 'string' && /\.xml$/i.test(filePath);
 }

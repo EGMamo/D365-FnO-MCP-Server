@@ -3,7 +3,7 @@ import type { Database } from '../indexer/db.js';
 import { z } from 'zod';
 import * as dbUtils from '../indexer/db.js';
 import { getIndexStats } from '../indexer/buildIndex.js';
-import { loadObjectXml } from '../indexer/sourceFiles.js';
+import { loadObjectXml, sourceFileReadsAllowed } from '../indexer/sourceFiles.js';
 import { findUsageRefs, getUsageSnapshotStatus } from '../indexer/xrefUsage.js';
 
 /** Provenance of a snapshot index (published or uploaded) the server serves without source files. */
@@ -249,7 +249,10 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
         content: [
           {
             type: 'text',
-            text: `Raw XML for ${type} ${name} is not stored in the index and its source file is not available on this server.`,
+            // The path is only worth showing (and only safe to echo) for an index built on this machine.
+            text: sourceFileReadsAllowed()
+              ? `Raw XML for ${type} ${name} is not stored in the index and the source file could not be read at ${obj.file_path}.`
+              : `Raw XML for ${type} ${name} is not stored in the index and its source file is not available on this server.`,
           },
         ],
       };

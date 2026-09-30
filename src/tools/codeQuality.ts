@@ -139,9 +139,11 @@ export async function fieldAccessReport(db: Database, args: FieldAccessArgs): Pr
   const maxObjects = args.maxObjects ?? 200;
   const types = args.objectType ? [args.objectType] : [...CODE_TYPES];
   const like = `%${args.field.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
-  let candidates = db.prepare(`SELECT type, name, raw_xml, file_path FROM ax_objects
+  // Names only: a short field name matches most of the index, and loading every
+  // candidate's XML at once would hold gigabytes in memory before truncation.
+  let candidates = db.prepare(`SELECT type, name FROM ax_objects
       WHERE type IN (${types.map(() => '?').join(',')}) AND raw_xml LIKE ? ESCAPE '\\' ORDER BY name`)
-    .all(...types, like) as unknown as CodeObject[];
+    .all(...types, like) as unknown as { type: string; name: string }[];
 
   let narrowed = false;
   const usageTable = db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='ax_usage_refs'`).get();
@@ -161,8 +163,10 @@ export async function fieldAccessReport(db: Database, args: FieldAccessArgs): Pr
   }
 
   const accesses: (FieldAccess & { objectType: string; object: string })[] = [];
+  const rawXml = db.prepare('SELECT raw_xml FROM ax_objects WHERE type = ? AND name = ?');
   for (const obj of candidates) {
-    const methods = extractMethodSources(obj.raw_xml ?? '');
+    const row = rawXml.get(obj.type, obj.name) as { raw_xml: string | null } | undefined;
+    const methods = extractMethodSources(row?.raw_xml ?? '');
     const decl = methods.find((m) => m.name === 'classDeclaration');
     const ext = decl ? extensionTarget(decl.source) : null;
     const thisIsTable = (obj.type === 'Table' && obj.name.toLowerCase() === args.table.toLowerCase()) ||
