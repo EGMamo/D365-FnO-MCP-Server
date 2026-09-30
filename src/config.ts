@@ -1,7 +1,7 @@
 import dotenv from 'dotenv';
 import { ConfigError, loadConfig, type AppConfig } from './configLoader.js';
 
-dotenv.config();
+dotenv.config({ quiet: true });
 
 export { VERSION } from './version.js';
 export { ConfigError, loadConfig } from './configLoader.js';
