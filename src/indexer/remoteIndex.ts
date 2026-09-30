@@ -162,7 +162,7 @@ export async function fetchManifest(manifestUrl: string, options: FetchManifestO
   }
   const parsed = manifestSchema.safeParse(body);
   if (!parsed.success) {
-    const issues = parsed.error.errors.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('; ');
+    const issues = parsed.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('; ');
     throw new RemoteIndexError('invalid', `Index manifest is invalid: ${issues}`);
   }
   return parsed.data;
