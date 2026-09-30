@@ -1,4 +1,4 @@
-import fs from 'node:fs/promises';
+import { loadObjectXml } from '../indexer/sourceFiles.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { Database } from '../indexer/db.js';
@@ -20,15 +20,6 @@ interface CodeObject {
   name: string;
   raw_xml: string | null;
   file_path: string;
-}
-
-async function loadXml(obj: CodeObject): Promise<string | null> {
-  if (obj.raw_xml) return obj.raw_xml;
-  try {
-    return await fs.readFile(obj.file_path, 'utf-8');
-  } catch {
-    return null;
-  }
 }
 
 function findCodeObject(db: Database, name: string, type?: string): CodeObject | null {
@@ -75,7 +66,7 @@ export async function checkBestPractices(db: Database, args: BestPracticeArgs): 
   } else if (args.objectName) {
     const obj = findCodeObject(db, args.objectName, args.objectType);
     if (!obj) return fail(`${args.objectType ?? 'Object'} ${args.objectName} not found in the index (types with code: ${CODE_TYPES.join(', ')}).`);
-    const xml = await loadXml(obj);
+    const xml = await loadObjectXml(obj);
     if (!xml) return fail(`Source of ${obj.type} ${obj.name} is unavailable: raw XML was not stored and ${obj.file_path} is not readable.`);
     methods = extractMethodSources(xml);
     target = { type: obj.type, name: obj.name };

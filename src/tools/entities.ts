@@ -1,4 +1,4 @@
-import fs from 'node:fs/promises';
+import { loadObjectXml } from '../indexer/sourceFiles.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { Database } from '../indexer/db.js';
@@ -27,16 +27,6 @@ interface IndexedObject {
 
 function getObject(db: Database, name: string, type: string): IndexedObject | null {
   return dbUtils.getObjectByName(db, name, type) as IndexedObject | null;
-}
-
-/** Stored XML, else the source file. Hosted indexes built without raw XML may have neither. */
-async function loadXml(obj: IndexedObject): Promise<string | null> {
-  if (obj.raw_xml) return obj.raw_xml;
-  try {
-    return await fs.readFile(obj.file_path, 'utf-8');
-  } catch {
-    return null;
-  }
 }
 
 interface TableField {
@@ -114,7 +104,7 @@ export async function checkEntityODataReadiness(db: Database, entityName: string
   const warnings: string[] = [];
   const info: string[] = [];
 
-  const xml = await loadXml(entity);
+  const xml = await loadObjectXml(entity);
   const details = xml ? parseAxDataEntityDetails(xml) : null;
   if (!details) {
     warnings.push('Entity XML is not stored in the index and the source file is unavailable; key, read-only and field-kind checks were skipped.');
@@ -171,7 +161,7 @@ export async function checkEntityODataReadiness(db: Database, entityName: string
       continue;
     }
     tablesByDs.set(ds.name.toLowerCase(), tableFields(db, table));
-    const tableXml = await loadXml(table);
+    const tableXml = await loadObjectXml(table);
     const tableType = tableXml ? parseAxTableKeys(tableXml).tableType : '';
     if (tableType && tableType !== 'Regular') {
       blockers.push(`Data source '${ds.name}' uses ${tableType} table '${table.name}'; entities must be backed by regular tables.`);
@@ -258,7 +248,7 @@ export async function generateDataEntityXml(db: Database, spec: DataEntitySpec):
 
   const table = getObject(db, spec.table, 'Table');
   if (!table) return fail(`Grounding failed: table '${spec.table}' was not found in the index.`);
-  const xml = await loadXml(table);
+  const xml = await loadObjectXml(table);
   if (!xml) {
     return fail(`Grounding failed: the XML of table '${table.name}' is not stored in the index and its source file is unavailable, so its keys cannot be read.`);
   }

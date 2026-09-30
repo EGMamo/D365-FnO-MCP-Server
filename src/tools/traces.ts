@@ -1,4 +1,4 @@
-import fs from 'node:fs/promises';
+import { loadObjectXml } from '../indexer/sourceFiles.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { Database } from '../indexer/db.js';
@@ -103,7 +103,7 @@ async function resolveTables(
       match = { sqlName, table: row?.name ?? null };
       if (row) {
         match.package = row.package;
-        const xml = row.raw_xml ?? (await fs.readFile(row.file_path, 'utf-8').catch(() => null));
+        const xml = await loadObjectXml(row);
         if (xml) {
           try {
             const keys = parseAxTableKeys(xml);
