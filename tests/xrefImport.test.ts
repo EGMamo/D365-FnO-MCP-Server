@@ -4,7 +4,8 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { importXrefSnapshot } from '../src/cli/index-xref-command.js';
 import { openDb } from '../src/indexer/db.js';
-import { findUsageRefs, getUsageSnapshotStatus, replaceUsageRefs, usageSnapshotVersion } from '../src/indexer/xrefUsage.js';
+import { findUsageRefs, getUsageSnapshotStatus, usageSnapshotVersion } from '../src/indexer/xrefUsage.js';
+import { seedLegacyUsageRefs } from './helpers/usageRefs.js';
 import { xrefPageQuery, type XrefSqlClient, type XrefTableSchema } from '../src/indexer/xrefSql.js';
 
 let root: string;
@@ -23,7 +24,7 @@ beforeEach(() => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'd365-xref-import-'));
   dbPath = path.join(root, 'index.db');
   const db = openDb(dbPath);
-  replaceUsageRefs(db, [{
+  seedLegacyUsageRefs(db, [{
     sourceType: 'Class', sourceName: 'OldCaller', targetName: 'Target',
     referenceKind: 'Call', sourceTable: 'References', raw: {},
   }]);
@@ -50,7 +51,11 @@ describe('atomic xref import', () => {
     expect(await importXrefSnapshot(dbPath, client([row]))).toBe(1);
     const db = openDb(dbPath);
     try {
-      expect(findUsageRefs(db, 'Target')[0]).toMatchObject({ sourceName: 'Caller', sourceLine: 23, raw: {} });
+      expect(findUsageRefs(db, 'Target', 'Class', 'go')).toMatchObject([{
+        sourceType: 'Class', sourceName: 'Caller', sourceMethod: 'run',
+        targetName: 'Target', targetMethod: 'go', referenceKind: 'Call', sourceLine: 23, raw: {},
+      }]);
+      expect(findUsageRefs(db, 'Target', 'Class', 'other')).toEqual([]);
       expect(usageSnapshotVersion(db)).toBeTruthy();
       expect(getUsageSnapshotStatus(db)).toMatchObject({ status: 'imported', rowCount: 1 });
       expect(db.prepare('SELECT row_count FROM ax_usage_snapshot').get()).toMatchObject({ row_count: 1 });

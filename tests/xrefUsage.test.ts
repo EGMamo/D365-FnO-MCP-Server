@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { openDb } from '../src/indexer/db.js';
-import { findUsageRefs, normalizeUsageRow, replaceUsageRefs } from '../src/indexer/xrefUsage.js';
+import { normalizeUsageRow } from '../src/indexer/xrefUsage.js';
 import { collectMetadataTools } from './helpers/toolHarness.js';
 
 describe('xref usage normalization', () => {
@@ -15,28 +15,6 @@ describe('xref usage normalization', () => {
       targetType: 'Class', targetName: 'SalesTable', targetMethod: 'confirm',
       referenceKind: 'Call', sourceLine: 42, sourceColumn: 8,
     });
-  });
-
-  it('replaces snapshots and supports usage lookup', () => {
-    const db = openDb(':memory:');
-    replaceUsageRefs(db, [{
-      sourceType: 'Class', sourceName: 'Caller', sourceMethod: 'run',
-      targetType: 'Class', targetName: 'Target', targetMethod: 'go',
-      referenceKind: 'Call', sourceLine: 3, sourceTable: 'References', raw: { Kind: 'Call' },
-    }]);
-    expect(findUsageRefs(db, 'Target', 'Class', 'go')).toMatchObject([{
-      sourceType: 'Class',
-      sourceName: 'Caller',
-      sourceMethod: 'run',
-      targetName: 'Target',
-      targetMethod: 'go',
-      referenceKind: 'Call',
-      sourceLine: 3,
-      raw: { Kind: 'Call' },
-    }]);
-    replaceUsageRefs(db, []);
-    expect(findUsageRefs(db, 'Target')).toEqual([]);
-    db.close();
   });
 
   it('normalizes Windows-style compiler paths', () => {

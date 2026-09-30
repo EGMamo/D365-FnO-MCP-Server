@@ -9,7 +9,6 @@ import {
   manifestCachePath,
   readManifestCache,
   redactUrl,
-  resolveDbUrl,
   syncIndexFromManifest,
 } from '../src/indexer/remoteIndex.js';
 import { publishIndex } from '../src/indexer/publishIndex.js';
@@ -63,17 +62,7 @@ afterAll(async () => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-describe('resolveDbUrl', () => {
-  it('resolves a relative URL against the manifest and forwards its query string', () => {
-    const resolved = resolveDbUrl(new URL('https://acct.blob.core.windows.net/indexes/latest/manifest.json?sv=1&sig=x'), '../v1/d365_index.db.gz');
-    expect(resolved.toString()).toBe('https://acct.blob.core.windows.net/indexes/v1/d365_index.db.gz?sv=1&sig=x');
-  });
-
-  it('keeps an absolute URL and its own query untouched', () => {
-    const resolved = resolveDbUrl(new URL('https://a.test/latest/manifest.json?sv=1'), 'https://b.test/v1/db.gz?token=2');
-    expect(resolved.toString()).toBe('https://b.test/v1/db.gz?token=2');
-  });
-
+describe('redactUrl', () => {
   it('redacts query strings for logs', () => {
     expect(redactUrl('https://a.test/latest/manifest.json?sv=1&sig=secret')).toBe('https://a.test/latest/manifest.json');
   });

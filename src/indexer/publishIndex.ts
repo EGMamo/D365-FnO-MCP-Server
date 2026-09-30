@@ -23,7 +23,6 @@ import { compressFile, ENCODING_SUFFIX, type CompressedFile, type CompressionLev
 const require = createRequire(import.meta.url);
 const { DatabaseSync } = require('node:sqlite') as typeof import('node:sqlite');
 
-export const PUBLISHED_DB_FILE = 'd365_index.db.gz';
 export const MANIFEST_FILE = 'manifest.json';
 export const LATEST_DIR = 'latest';
 
@@ -58,7 +57,7 @@ function escapeSqlString(value: string): string {
 }
 
 /** `2026-09-25T20:44:20.123Z` -> `20260925T204420Z`, safe for folder and blob names. */
-export function compactTimestamp(iso: string): string {
+function compactTimestamp(iso: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) throw new Error(`Invalid built_at timestamp in the index: ${iso}`);
   return date.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');

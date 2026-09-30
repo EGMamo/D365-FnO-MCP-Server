@@ -115,9 +115,10 @@ describe('CLI', () => {
 
   it('index --force reparses objects without deleting compiler usage data', async () => {
     const { openDb } = await import('../src/indexer/db.js');
-    const { replaceUsageRefs, findUsageRefs } = await import('../src/indexer/xrefUsage.js');
+    const { findUsageRefs } = await import('../src/indexer/xrefUsage.js');
+    const { seedLegacyUsageRefs } = await import('./helpers/usageRefs.js');
     const seeded = openDb(dbPath);
-    replaceUsageRefs(seeded, [{
+    seedLegacyUsageRefs(seeded, [{
       sourceType: 'Class', sourceName: 'Caller', targetName: 'Target',
       referenceKind: 'Call', sourceTable: 'References', raw: {},
     }]);

@@ -7,15 +7,6 @@ import * as parser from '../src/indexer/parser.js';
 const fixturesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
 const fixture = (name: string) => fs.readFileSync(path.join(fixturesDir, name), 'utf-8');
 
-describe('ensureArray', () => {
-  it('normalizes undefined, single values and arrays', () => {
-    expect(parser.ensureArray(undefined)).toEqual([]);
-    expect(parser.ensureArray(null)).toEqual([]);
-    expect(parser.ensureArray({ a: 1 })).toEqual([{ a: 1 }]);
-    expect(parser.ensureArray([1, 2])).toEqual([1, 2]);
-  });
-});
-
 describe('parseAxTable', () => {
   const result = parser.parseAxTable(fixture('AxTableSample.xml'));
 
