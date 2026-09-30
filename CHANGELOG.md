@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A role-separated [user and administrator guide](docs/user-and-admin-guide.md), and expanded security knowledge on naming, grants, extensions, and non-admin testing.
 - `MCP_LOG_LEVEL` filters the structured stderr log (`DEBUG` by default, or `INFO`, `WARN`, `ERROR`, `FATAL`, `SILENT`).
 - Code quality tools, adapted from GitHub community projects (all MIT):
   - `check_xpp_best_practices`: heuristic X++ checks modelled on AppChecker's rule catalog.

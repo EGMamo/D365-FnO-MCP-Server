@@ -29,7 +29,7 @@ concerns one topic.
 | `resources/05-field-groups-and-forms.md` | Naming conventions, `DataGroup` gotcha, preserving `[Form]` |
 | `resources/06-lookups-and-filtering.md` | `SysTableLookup`, hiding disabled values, dependent/cascading filters |
 | `resources/07-label-files.md` | Label storage/reference pattern, stale-compiled-label gotcha |
-| `resources/08-security.md` | Privilege/duty/role naming and coverage rules |
+| `resources/08-security.md` | Privilege/duty/role naming, entry-point grants, extensions, BP coverage and non-admin testing |
 | `resources/09-sysoperation-batch-pattern.md` | Contract/Service/Controller batch pattern |
 | `resources/10-transactions.md` | Correct `ttsbegin`/`ttscommit`/`ttsabort` shape |
 | `resources/11-best-practice-warnings.md` | BP warning → cause → fix quick reference |

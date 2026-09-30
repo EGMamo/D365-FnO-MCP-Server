@@ -18,6 +18,7 @@ A Model Context Protocol (MCP) server that gives AI coding assistants first-clas
 - **Hosted mode** — run the server read-only on Azure App Service. It downloads a published index at start-up (`D365_INDEX_URL`), so developers connect over HTTPS with a personal API key and install nothing locally. See [docs/hosted-deployment.md](docs/hosted-deployment.md).
 - **Index uploads** — `upload-index` sends a freshly built index to a running server, compressed (gzip, Brotli or none) and in parallel chunks, each carrying its own SHA-256. The server checks the whole package and the decompressed database before it switches over (`D365_INDEX_UPLOAD_KEYS`).
 - **Visual Studio extension** — sets up the MCP connection for Copilot in Visual Studio 2022/2026 (`.mcp.json` plus a connection test), and indexes `PackagesLocalDirectory` and the XRef database and uploads the result from inside the IDE. See [docs/visual-studio-extension.md](docs/visual-studio-extension.md).
+- **User and operator guide** — [docs/user-and-admin-guide.md](docs/user-and-admin-guide.md) separates developer workflows from server configuration, index maintenance, and access controls.
 
 ## Prerequisites
 
