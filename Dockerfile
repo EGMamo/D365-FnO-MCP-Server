@@ -13,6 +13,8 @@
 # The mount is empty and harmless when no secret is given.
 
 FROM node:24-slim AS build
+# The base image's npm would otherwise print an upgrade notice on every install.
+ENV NPM_CONFIG_UPDATE_NOTIFIER=false
 WORKDIR /app
 COPY package.json package-lock.json tsconfig.json tsconfig.build.json ./
 # The optional mssql driver is only needed by index-xref, which never runs here.
@@ -24,6 +26,7 @@ RUN npm run build
 
 FROM node:24-slim AS runtime
 ENV NODE_ENV=production \
+    NPM_CONFIG_UPDATE_NOTIFIER=false \
     MCP_TRANSPORT=http \
     MCP_PORT=8080 \
     D365_INDEX_DB_PATH=/data/d365_index.db \
@@ -33,7 +36,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN --mount=type=secret,id=npmrc,target=/root/.npmrc \
     --mount=type=secret,id=cafile,target=/etc/npm-cafile.crt \
-    npm ci --omit=dev --omit=optional && npm cache clean --force
+    npm ci --omit=dev --omit=optional && rm -rf /root/.npm
 COPY --from=build /app/dist ./dist
 # findKnowledgeDir() walks up from dist/src/tools, so the knowledge base must sit next to dist/.
 COPY d365-fno-assistant-knowledge ./d365-fno-assistant-knowledge

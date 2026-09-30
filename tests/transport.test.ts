@@ -81,6 +81,7 @@ describe('http transport auth', () => {
   });
 
   it('accepts every configured key and logs its name, never its value', async () => {
+    vi.stubEnv('MCP_LOG_LEVEL', 'INFO');
     const lines: string[] = [];
     const write = vi.spyOn(process.stderr, 'write').mockImplementation(((chunk: string | Uint8Array) => {
       lines.push(chunk.toString());
@@ -95,6 +96,7 @@ describe('http transport auth', () => {
       expect(res.status).toBe(400);
     } finally {
       write.mockRestore();
+      vi.unstubAllEnvs();
     }
     const request = lines.map((line) => JSON.parse(line) as { message: string; apiKey?: string })
       .find((entry) => entry.message === 'Request');

@@ -73,7 +73,7 @@ export interface SeedObject {
     name: string;
     accessModifier?: string;
     returnType?: string;
-    params?: unknown[];
+    params?: { name: string; type: string }[];
     isStatic?: boolean;
   }[];
   properties?: Record<string, unknown>;

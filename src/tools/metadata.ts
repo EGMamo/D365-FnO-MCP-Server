@@ -95,7 +95,7 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
     async ({ className, methodName }) => {
       const obj = dbUtils.getObjectByName(db, className, 'Class');
       if (!obj) return { content: [{ type: 'text', text: `Class ${className} not found.` }] };
-      const method = obj.methods.find((m: any) => m.name === methodName);
+      const method = obj.methods.find((m) => m.name === methodName);
       if (!method) return { content: [{ type: 'text', text: `Method ${methodName} not found in ${className}.` }] };
       return { content: [{ type: 'text', text: JSON.stringify(method, null, 2) }] };
     }
