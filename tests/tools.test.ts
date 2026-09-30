@@ -276,12 +276,14 @@ describe('create_coc_extension', () => {
     expect(res.content[0].text).toContain('private');
   });
 
-  it('rejects targeting an existing extension class', async () => {    const res = await call('create_coc_extension', {
+  it('rejects targeting an existing extension class', async () => {
+    const res = await call('create_coc_extension', {
       targetClass: 'SomeThing_Extension',
       extensionName: 'Another_Extension',
       methods: [{ name: 'insert' }],
     });
     expect(res.isError).toBe(true);
+    expect(res.content[0].text).toContain('looks like an extension class');
   });
 });
 

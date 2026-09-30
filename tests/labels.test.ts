@@ -19,6 +19,7 @@ beforeAll(() => {
       { labelId: 'SYS1', value: 'Kundenkonto', language: 'de' },
       { labelId: 'SYS2', value: 'Sales order line', language: 'en-US' },
       { labelId: 'SYS3', value: '100% done', language: 'en-US' },
+      { labelId: 'SYS4', value: 'Customer group', language: 'en-US' },
     ]
   );
   tools = collectLabelsTools(db);
@@ -29,7 +30,7 @@ afterAll(() => {
 });
 
 describe('resolve_label_by_language', () => {
-  it('defaults to en-US when no language is given', async () => {
+  it('picks the en-US value when other languages share the label id', async () => {
     const res = await call('resolve_label_by_language', { labelId: 'SYS1', language: 'en-US' });
     expect(res.content[0].text).toBe('Customer account');
   });
@@ -66,7 +67,7 @@ describe('search_labels_fts', () => {
   });
 
   it('respects the limit', async () => {
-    const res = await call('search_labels_fts', { query: 'e', limit: 1 });
-    expect(JSON.parse(res.content[0].text).length).toBeLessThanOrEqual(1);
+    const res = await call('search_labels_fts', { query: 'Customer', limit: 1 });
+    expect(JSON.parse(res.content[0].text)).toHaveLength(1);
   });
 });

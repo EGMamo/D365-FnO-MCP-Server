@@ -77,6 +77,9 @@ describe('read-only workspace provenance and capabilities', () => {
   });
 });
 
+// runChecks opens a real SQLite index; slow Windows runners can exceed vitest's 5s default.
+const DOCTOR_TIMEOUT_MS = 30_000;
+
 describe('workspace doctor checks', () => {
   it.each([['23.0.0', 'fail'], ['24.0.0', 'pass']])('enforces the Node 24 threshold for %s', async (version, status) => {
     const original = Object.getOwnPropertyDescriptor(process.versions, 'node')!;
@@ -91,7 +94,7 @@ describe('workspace doctor checks', () => {
     } finally {
       Object.defineProperty(process.versions, 'node', original);
     }
-  });
+  }, DOCTOR_TIMEOUT_MS);
 
   it('is read-only and reports configured provenance even when write tools are off', () => {
     const before = treeSnapshot(fixture.root);
@@ -146,7 +149,7 @@ describe('workspace doctor checks', () => {
     } finally {
       Object.defineProperty(process.versions, 'node', original);
     }
-  });
+  }, DOCTOR_TIMEOUT_MS);
 
   it('fails malformed API keys even on stdio', async () => {
     const original = Object.getOwnPropertyDescriptor(process.versions, 'node')!;
