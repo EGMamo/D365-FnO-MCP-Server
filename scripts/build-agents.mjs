@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 // Generates the GitHub Copilot and Claude Code agent files from agents/source/*.md.
 // Usage: node scripts/build-agents.mjs [--check]
 import fs from 'node:fs';
