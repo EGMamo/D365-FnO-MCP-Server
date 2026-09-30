@@ -170,7 +170,7 @@ describe('buildIndex with fixtures', () => {
 
   it('stores table fields with correct types', () => {
     const table = getObjectByName(db, 'SampleTable', 'Table')!;
-    expect(table.fields.map((f: { name: string; type: string }) => [f.name, f.type])).toEqual([
+    expect(table.fields.map((f) => [f.name, f.type])).toEqual([
       ['AccountNum', 'String'],
       ['LineNum', 'Int'],
       ['Amount', 'Real'],
@@ -180,10 +180,10 @@ describe('buildIndex with fixtures', () => {
 
   it('stores class methods with params', () => {
     const cls = getObjectByName(db, 'SampleClass', 'Class')!;
-    const construct = cls.methods.find((m: { name: string }) => m.name === 'construct');
+    const construct = cls.methods.find((m) => m.name === 'construct')!;
     expect(construct).toBeDefined();
     expect(construct.is_static).toBe(1);
-    const build = cls.methods.find((m: { name: string }) => m.name === 'buildMessage');
+    const build = cls.methods.find((m) => m.name === 'buildMessage')!;
     expect(build.params).toEqual([
       { name: '_prefix', type: 'str' },
       { name: '_count', type: 'int' },
@@ -204,10 +204,10 @@ describe('buildIndex with fixtures', () => {
     const form = getObjectByName(db, 'SampleForm', 'Form')!;
     expect(form.dataSources).toEqual([{ name: 'SampleTable', table_name: 'SampleTable' }]);
     expect(form.properties.pattern).toBe('SimpleListDetails');
-    const controlNames = form.controls.map((c: { name: string }) => c.name);
+    const controlNames = form.controls.map((c) => c.name);
     expect(controlNames).toContain('MainGroup');
     expect(controlNames).toContain('AccountNum');
-    const nested = form.controls.find((c: { name: string }) => c.name === 'AccountNum');
+    const nested = form.controls.find((c) => c.name === 'AccountNum')!;
     expect(nested.parent_name).toBe('MainGroup');
   });
 
