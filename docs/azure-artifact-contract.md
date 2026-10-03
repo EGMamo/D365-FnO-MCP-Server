@@ -53,8 +53,9 @@ Every manifest records:
 - generator name/version and SQLite index schema version;
 - database path, byte count, SHA-256 and object/label/usage counts;
 - validation-report path, byte count and SHA-256;
-- source provenance for PackagesLocalDirectory, exactly two VSIX assets, dbrefx/XRef and optional
-  inputs; each entry has a non-secret source ID, version, acquisition time, byte count and SHA-256;
+- source provenance for PackagesLocalDirectory, one or two version-applicable VSIX assets,
+  dbrefx/XRef and optional inputs; each entry has a non-secret source ID, version, acquisition time,
+  byte count and SHA-256;
 - completeness for code metadata, data-model metadata, UI/form patterns, workflow/service metadata,
   reporting/analytics, labels/resources, extensions, reports and security graphs;
 - minimum/maximum compatible server versions, required index schema and required capabilities.

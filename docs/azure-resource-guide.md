@@ -133,7 +133,7 @@ containing:
 - A durable, machine-readable validation report.
 - Source provenance for:
   - `PackagesLocalDirectory`;
-  - both required VSIX assets;
+  - one or two version-applicable VSIX assets;
   - dbrefx and XRef inputs;
   - optional feeds or imports included in the build.
 - A capability inventory that declares the presence and completeness of:
@@ -296,7 +296,8 @@ On a disposable Windows worker host, verify:
    Verified with X++ compiler `7.0.7996.111`.
 4. Noninteractive authentication succeeds.
 5. The required SDK/package download command succeeds.
-6. Both VSIX assets and dbrefx/XRef data can be acquired and extracted.
+6. The version-applicable VS2022 tools VSIX and XRef backup can be acquired.
+   Acquisition and hashing are verified; XRef restore/import remains open.
 7. Node.js and SQLite index generation complete.
 8. Peak disk, memory, and runtime fit the selected Windows VM.
 
@@ -483,7 +484,7 @@ same.
    - Require every discovered path and application version to agree with the
      requested acquisition version. Fail closed on stale or conflicting
      side-by-side configuration entries.
-   - Download both required VSIX assets.
+   - Download every VSIX asset applicable to the selected Visual Studio generation.
    - Download dbrefx/XRef data and any approved optional source.
    - Record version, source, acquisition time, and hash for every asset.
 4. **Build candidate**
@@ -714,7 +715,7 @@ approved secret-management process.
 - Target environment ID and URL.
 - Expected D365 application/SDK version or update policy.
 - Confirmed `pac` commands and source locations for the package local
-  directory, both VSIX assets, and dbrefx/XRef data.
+  directory, version-applicable VSIX assets, and dbrefx/XRef data.
 - Power Platform application-user roles and an approving administrator.
 
 ### Identity and secrets

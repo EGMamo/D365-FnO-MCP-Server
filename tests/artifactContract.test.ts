@@ -5,6 +5,7 @@ import path from 'node:path';
 import {
   ARTIFACT_DATABASE_FILE,
   ARTIFACT_VALIDATION_FILE,
+  ArtifactProvenanceSchema,
   type ArtifactCompatibilityPolicy,
   type ArtifactProvenance,
   type CapabilityInventory,
@@ -55,13 +56,6 @@ const provenance: ArtifactProvenance = {
       acquiredAt: FIRST_TIME,
       sha256: HASH_B,
       bytes: 2000,
-    },
-    {
-      sourceId: 'power-platform-tools-vsix',
-      version: '1.0.0.0',
-      acquiredAt: FIRST_TIME,
-      sha256: HASH_C,
-      bytes: 3000,
     },
   ],
   dbrefx: {
@@ -138,6 +132,34 @@ function createBundle(createdAt = FIRST_TIME, inventory = capabilities) {
 }
 
 describe('Azure artifact contract', () => {
+  it('requires one or two version-applicable VSIX assets', () => {
+    expect(ArtifactProvenanceSchema.safeParse(provenance).success).toBe(true);
+    expect(ArtifactProvenanceSchema.safeParse({
+      ...provenance,
+      vsixAssets: [],
+    }).success).toBe(false);
+    expect(ArtifactProvenanceSchema.safeParse({
+      ...provenance,
+      vsixAssets: [
+        ...provenance.vsixAssets,
+        {
+          sourceId: 'legacy-finops-tools-vsix',
+          version: '10.0.2500.1',
+          acquiredAt: FIRST_TIME,
+          sha256: HASH_C,
+          bytes: 3000,
+        },
+        {
+          sourceId: 'unexpected-third-vsix',
+          version: '1.0.0.0',
+          acquiredAt: FIRST_TIME,
+          sha256: HASH_D,
+          bytes: 4000,
+        },
+      ],
+    }).success).toBe(false);
+  });
+
   it('creates, validates, stages, and atomically activates a complete immutable bundle', () => {
     const bundle = createBundle();
     const target = path.join(root, 'runtime', 'active.db');

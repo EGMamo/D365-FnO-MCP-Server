@@ -69,7 +69,7 @@ const SourceProvenanceSchema = z
 export const ArtifactProvenanceSchema = z
   .object({
     packagesLocalDirectory: SourceProvenanceSchema,
-    vsixAssets: z.array(SourceProvenanceSchema).length(2),
+    vsixAssets: z.array(SourceProvenanceSchema).min(1).max(2),
     dbrefx: SourceProvenanceSchema,
     optionalInputs: z.array(SourceProvenanceSchema).max(100).default([]),
   })
