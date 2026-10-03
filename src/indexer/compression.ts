@@ -4,17 +4,14 @@ import { PassThrough, Transform, type Duplex } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { constants, createBrotliCompress, createBrotliDecompress, createGunzip, createGzip } from 'node:zlib';
 
-/**
- * Transfer encodings for a packaged index. The names match HTTP content
- * codings so manifests and upload requests share one vocabulary.
- */
+/** Encodings available to an index-building pipeline. */
 export const INDEX_ENCODINGS = ['gzip', 'br', 'identity'] as const;
 export type IndexEncoding = (typeof INDEX_ENCODINGS)[number];
 
 export const COMPRESSION_LEVELS = ['fastest', 'balanced', 'smallest'] as const;
 export type CompressionLevel = (typeof COMPRESSION_LEVELS)[number];
 
-/** File name suffix of a packaged index per encoding. */
+/** File name suffix per encoding. */
 export const ENCODING_SUFFIX: Record<IndexEncoding, string> = { gzip: '.gz', br: '.br', identity: '' };
 
 /**
@@ -24,7 +21,7 @@ export const ENCODING_SUFFIX: Record<IndexEncoding, string> = { gzip: '.gz', br:
 const GZIP_LEVEL: Record<CompressionLevel, number> = { fastest: 1, balanced: 6, smallest: 9 };
 const BROTLI_QUALITY: Record<CompressionLevel, number> = { fastest: 1, balanced: 5, smallest: 9 };
 
-/** Accepts the CLI spellings (`brotli`, `none`) as well as the encoding names. */
+/** Accepts friendly spellings (`brotli`, `none`) as well as encoding names. */
 export function parseEncoding(value: string): IndexEncoding {
   const normalized = value.trim().toLowerCase();
   if (normalized === 'brotli') return 'br';
@@ -85,7 +82,7 @@ export class HashingTap extends Transform {
 
 export interface CompressedFile {
   encoding: IndexEncoding;
-  /** SHA-256 and size of the encoded (transferred) bytes. */
+  /** SHA-256 and size of the encoded bytes. */
   sha256: string;
   bytes: number;
   /** SHA-256 and size of the database itself. */
@@ -95,7 +92,7 @@ export interface CompressedFile {
 
 /**
  * Pass-through stream that fails once more than `limit` bytes flow through it.
- * Guards decoders against compression bombs: a declared or published size is
+ * Guards decoders against compression bombs: a declared size is
  * known up front, so nothing past it needs to reach the disk.
  */
 export function byteLimit(limit: number, onExceeded: () => Error): Transform {

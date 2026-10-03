@@ -16,8 +16,4 @@
   <ItemGroup>
     <ProjectReference Include="..\D365FnoMcp.Core\D365FnoMcp.Core.csproj" />
   </ItemGroup>
-  <ItemGroup>
-    <EmbeddedResource Include="IndexUpload\IndexUploadControl.xaml" LogicalName="D365FnoMcp.Extension.IndexUpload.IndexUploadControl.xaml" />
-    <Page Remove="IndexUpload\IndexUploadControl.xaml" />
-  </ItemGroup>
 </Project>

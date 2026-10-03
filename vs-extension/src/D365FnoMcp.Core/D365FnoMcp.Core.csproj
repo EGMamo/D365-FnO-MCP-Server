@@ -8,4 +8,7 @@
   <ItemGroup>
     <InternalsVisibleTo Include="D365FnoMcp.Core.Tests" />
   </ItemGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
 </Project>

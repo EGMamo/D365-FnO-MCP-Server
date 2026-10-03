@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A fail-closed Azure artifact contract for immutable content-addressed index bundles, including
+  source provenance, capability inventory, compatibility bounds, durable validation reports,
+  concurrency-safe active/previous promotion, pointer-only rollback and validated local API
+  activation, plus an Azure Blob adapter with managed identity, create-only bundle writes, ETag
+  pointer promotion, acquisition leases, rollback-safe retention, and fail-closed materialization.
+  Azure infrastructure remains gated on Windows acquisition proof and worker integration.
+- A guided Azure resource plan. The default SDK acquisition worker is Windows because Microsoft
+  documents `pac tool xpp install` as a .NET Full Framework command; Linux Container Apps Jobs remain
+  conditional on a documented and complete X++ SDK acquisition proof. A candidate Windows ARM64 VM
+  acquired and registered SDK `10.0.2645.124`; X++ compiler `7.0.7996.111` starts successfully under
+  ARM64 emulation. A separate work-laptop configuration supplies layout evidence only. The new
+  `scripts/verify-windows-xpp.ps1` captures non-secret PAC registrations, optional generated XPP
+  configurations, package-directory presence, compiler discovery from both configuration and
+  versioned SDK paths, and optional bounded compiler startup evidence.
+- Knowledge topic `24-form-patterns-ui-layout`: how the web client splits a form into logical and
+  physical halves, how to select a form pattern from `Form.Design.Style` and form shape, the
+  available top-level, support, and subpattern families, and the layout properties
+  (`ArrangeMethod`, `ColumnsMode`, `HeightMode`/`WidthMode`) that drive responsive sizing.
+- Visual Studio single-gateway foundation: a loopback-only MCP gateway proxies hosted tools,
+  forwards the installed D365 SDK version, keeps the hosted API key in Windows Credential Manager,
+  and adds a privacy-safe `workspace_get_context` tool.
+- Session-start SDK version warnings. The index records the four-part D365 application version it was built from (read from Unified Developer Experience paths, or from the new `D365_APP_VERSION` for layouts that do not name it), and every session is told which version it is querying through the MCP `instructions`. A client declaring an older *build* — over the `X-D365-Client-Sdk-Version` header on HTTP, or `D365_APP_VERSION` on stdio — is warned that returned elements may not exist locally; an older *revision* of the same build is only a notice. Nothing is blocked. See [SDK version warnings](README.md#sdk-version-warnings).
 - A role-separated [user and administrator guide](docs/user-and-admin-guide.md), and expanded security knowledge on naming, grants, extensions, and non-admin testing.
 - `MCP_LOG_LEVEL` filters the structured stderr log (`DEBUG` by default, or `INFO`, `WARN`, `ERROR`, `FATAL`, `SILENT`).
 - Code quality tools, adapted from GitHub community projects (all MIT):
@@ -112,6 +134,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- Retired developer-built index distribution: `publish-index`, `pull-index`, `upload-index`,
+  manifest download at server startup, direct upload routes, SAS/publish configuration, and the
+  Visual Studio Index and Upload/freshness/update workflows. Production candidates are now expected
+  to be built, validated and atomically promoted by private Azure automation.
+
 - `docs/vs-addin-plan.md`: the extension that applies generated code was not pursued; the Visual
   Studio extension now handles connection setup and index uploads instead.
 
@@ -129,6 +156,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Concurrent knowledge-digest writes now reserve the shared numeric prefix atomically, preventing
+  different article slugs from receiving the same sequence number.
 - Label files are found where Visual Studio keeps them
   (`AxLabelFile/LabelResources/<language>/<LabelFile>.<language>.label.txt`); before, a real
   `PackagesLocalDirectory` indexed no labels. The language comes from the file name, and labels are

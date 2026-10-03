@@ -27,13 +27,13 @@ code review, or security review.
 
 | Data | Source | Stored where | Contains |
 | --- | --- | --- | --- |
-| AOT metadata and labels | XML files in PackagesLocalDirectory | Local SQLite index; optionally published to your Azure Storage | Source code and definitions. May contain comments or hard-coded values written by developers |
+| AOT metadata and labels | XML files in PackagesLocalDirectory | Local SQLite index; production candidates are built by the private Azure worker | Source code and definitions. May contain comments or hard-coded values written by developers |
 | XRef usages (optional) | `index-xref` from the DYNAMICSXREFDB database you choose | Same index | Cross-references between objects |
 | Trace Parser captures (optional) | `index-trace` from a Trace Parser `AxTrace` database or a JSON export | Local index only | Method timings, SQL statements, user names, and session details |
 | Release plans (optional) | `index-release-plans` from Microsoft's public release planner feed | Same index | Public Microsoft feature descriptions |
 
-**Trace data is removed** from any index copy made by `publish-index` or `upload-index`, so it never
-reaches a hosted server.
+**Trace data is local by default.** The Azure worker must explicitly select which imports belong in
+a production candidate; developer databases are never uploaded.
 
 ## Does it connect to Dynamics 365 or read business data?
 
@@ -45,9 +45,7 @@ to run yourself. The server does not run it. Customer and transaction records ar
 
 Only these, and only when you configure them:
 
-- Downloading a published index (`D365_INDEX_URL`, or `pull-index`) or publishing one to your Azure
-  Blob Storage.
-- `upload-index` and `index-status --server`, which talk to your own hosted server.
+- The private Azure acquisition worker downloading approved SDK assets and promoting an index.
 - `index-release-plans`, which downloads Microsoft's public release planner feed. It runs only when
   you run that command.
 - `index-xref` and `index-trace`, which read the SQL Server databases you point them at.

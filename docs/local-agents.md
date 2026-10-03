@@ -22,7 +22,7 @@ None of the agents can use `write_table_extension` or `apply_table_extension_cha
 
 Follow the [Quick start](../README.md#quick-start) on the machine that has the
 PackagesLocalDirectory (usually the development VM): `setup`, `doctor`, `index`. You can also
-download a published index with `pull-index`. You don't need to run `serve`: the clients below
+connect to the hosted API or use an Azure-promoted index. You don't need to run `serve`: the clients below
 start the server themselves over stdio.
 
 ## 2. Register the two MCP servers

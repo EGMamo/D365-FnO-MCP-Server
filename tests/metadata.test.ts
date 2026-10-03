@@ -82,18 +82,12 @@ describe('get_index_staleness', () => {
     expect(stale.length).toBe(2);
   });
 
-  it('reports the snapshot provenance instead of scanning files on a hosted server', async () => {
-    const published = {
-      manifestUrl: 'https://acct.blob.core.windows.net/indexes/latest/manifest.json',
-      syncedAt: '2026-09-26T01:00:00.000Z',
-      builtAt: '2026-09-25T20:00:00.000Z',
-      version: '20260925T200000Z-abcdef01',
-    };
-    const hosted = collectMetadataTools(db, { published });
-    const handler = hosted.get('get_index_staleness');
+  it('reports snapshot mode instead of scanning when source files are unavailable', async () => {
+    const snapshot = collectMetadataTools(db, { sourceFilesAvailable: false });
+    const handler = snapshot.get('get_index_staleness');
     if (!handler) throw new Error('get_index_staleness not registered');
     const report = JSON.parse((await handler({ limit: 100 })).content[0].text);
-    expect(report).toMatchObject({ mode: 'published', ...published });
+    expect(report).toMatchObject({ mode: 'snapshot', builtAt: null });
     expect(JSON.stringify(report)).not.toContain('missing');
   });
 });

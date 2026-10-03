@@ -9,12 +9,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { openDb, upsertObject, rebuildFts, setMeta, META_KEYS, INDEX_SCHEMA_VERSION } from '../src/indexer/db.js';
-import { publishIndex, snapshotIndex } from '../src/indexer/publishIndex.js';
-import { compressFile } from '../src/indexer/compression.js';
-import { IndexUploadClient } from '../src/indexer/uploadClient.js';
+import { openDb, upsertObject, rebuildFts, setMeta, META_KEYS } from '../src/indexer/db.js';
 import { descriptorXml, projectXml, treeSnapshot } from './workspaceFixtures.js';
-import { startStaticServer, type StaticServer } from './helpers/indexFixtureServer.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const entry = path.join(repoRoot, 'dist', 'src', 'index.js');
@@ -23,7 +19,6 @@ let root: string;
 let environment: Record<string, string>;
 const clients: Client[] = [];
 const children: ChildProcess[] = [];
-const staticServers: StaticServer[] = [];
 
 beforeEach(() => {
   if (!fs.existsSync(entry)) throw new Error('Run npm run build before the compiled MCP integration tests.');
@@ -39,7 +34,7 @@ beforeEach(() => {
     file_path: path.join(classDir, 'AlreadyIndexed.xml'), raw_xml: '', file_mtime: 1,
   });
   rebuildFts(db);
-  // Build metadata lets the hosted-mode case publish this database as-is.
+  // Build metadata describes the prebuilt index served by deployment tests.
   setMeta(db, META_KEYS.builtAt, '2026-09-25T20:00:00.000Z');
   setMeta(db, META_KEYS.serverVersion, '0.1.0');
   setMeta(db, META_KEYS.storeRawXml, '1');
@@ -50,7 +45,6 @@ beforeEach(() => {
     )),
     D365_PACKAGES_DIR: packages,
     D365_INDEX_DB_PATH: dbPath,
-    D365_INDEX_ON_START: '0',
     D365_ENABLE_WRITE_TOOLS: '0',
     MCP_API_KEY: apiKey,
     MCP_PORT: '0',
@@ -66,20 +60,17 @@ afterEach(async () => {
       await exited;
     }
   }
-  await Promise.all(staticServers.splice(0).map((server) => server.close()));
   if (root) fs.rmSync(root, { recursive: true, force: true });
 });
 
-let lastHttpPort = 0;
-
 async function connect(
   transport: 'http' | 'stdio',
-  indexOnStart: boolean,
-  baseEnv: Record<string, string> = environment
+  baseEnv: Record<string, string> = environment,
+  extraHeaders: Record<string, string> = {}
 ): Promise<Client> {
   const client = new Client({ name: 'd365-integration-test', version: '1.0.0' });
   clients.push(client);
-  const env = { ...baseEnv, MCP_TRANSPORT: transport, D365_INDEX_ON_START: indexOnStart ? '1' : '0' };
+  const env = { ...baseEnv, MCP_TRANSPORT: transport };
   if (transport === 'stdio') {
     await client.connect(new StdioClientTransport({
       command: process.execPath, args: [entry, 'serve'], env, cwd: root, stderr: 'pipe',
@@ -104,9 +95,8 @@ async function connect(
         }
       });
     });
-    lastHttpPort = port;
     await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`), {
-      requestInit: { headers: { 'X-API-Key': apiKey } },
+      requestInit: { headers: { 'X-API-Key': apiKey, ...extraHeaders } },
     }));
   }
   return client;
@@ -127,7 +117,7 @@ async function search(client: Client, query: string): Promise<unknown[]> {
 
 describe.each(['stdio', 'http'] as const)('compiled MCP server over %s', (transport) => {
   it('initializes, exposes resources/prompts, calls actual tools, and disables writes/indexing', async () => {
-    const client = await connect(transport, false);
+    const client = await connect(transport);
     const listedTools = (await client.listTools()).tools;
     const tools = listedTools.map((tool) => tool.name);
     expect(tools).toContain('get_visual_studio_workspace');
@@ -164,11 +154,6 @@ describe.each(['stdio', 'http'] as const)('compiled MCP server over %s', (transp
     })).toMatchObject({ isError: true });
   }, 30_000);
 
-  it('performs startup indexing only with the flag enabled', async () => {
-    const client = await connect(transport, true);
-    await expect.poll(async () => (await search(client, 'SampleClass')).length, { timeout: 10_000 }).toBe(1);
-  }, 30_000);
-
   it('previews and applies a synthetic supported offline project through the real protocol', async () => {
     const workspace = path.join(root, 'workspace');
     const metadata = path.join(root, 'metadata');
@@ -193,7 +178,7 @@ describe.each(['stdio', 'http'] as const)('compiled MCP server over %s', (transp
       file_path: path.join(root, 'ExampleTable.xml'), raw_xml: '', file_mtime: 1,
     });
     db.close();
-    const client = await connect(transport, false);
+    const client = await connect(transport);
     const beforeMetadata = treeSnapshot(metadata);
     const beforeProject = fs.readFileSync(path.join(workspace, 'MyProject.rnrproj'));
     const preview = await client.callTool({
@@ -225,107 +210,71 @@ describe.each(['stdio', 'http'] as const)('compiled MCP server over %s', (transp
   }, 30_000);
 });
 
-describe('compiled MCP server in hosted mode', () => {
-  it('serves a published index over http with named keys and no packages directory', async () => {
-    const publishDir = path.join(root, 'publish');
-    const { manifest } = await publishIndex({
-      dbPath: environment.D365_INDEX_DB_PATH, outDir: publishDir, serverVersion: '0.1.0',
-    });
-    const server = await startStaticServer(publishDir);
-    staticServers.push(server);
-
-    const hostedDb = path.join(root, 'hosted', 'index.db');
-    const env: Record<string, string> = {
-      ...Object.fromEntries(Object.entries(environment).filter(
-        ([name]) => name !== 'D365_PACKAGES_DIR' && name !== 'MCP_API_KEY'
-      )),
-      D365_INDEX_URL: `${server.baseUrl}/latest/manifest.json?sv=test`,
-      D365_INDEX_DB_PATH: hostedDb,
-      MCP_API_KEYS: `alice=${apiKey}`,
-    };
-    const client = await connect('http', false, env);
-
-    const tools = (await client.listTools()).tools.map((tool) => tool.name);
-    expect(tools).toContain('search_symbols');
-    expect(tools).not.toContain('write_table_extension');
+describe('compiled MCP server deployment behavior', () => {
+  it('serves a prebuilt index over http without a packages directory', async () => {
+    const env = Object.fromEntries(Object.entries(environment).filter(([name]) => name !== 'D365_PACKAGES_DIR'));
+    env.MCP_API_KEYS = `alice=${apiKey}`;
+    delete env.MCP_API_KEY;
+    const client = await connect('http', env);
     expect(await search(client, 'AlreadyIndexed')).toHaveLength(1);
-    expect(fs.existsSync(hostedDb)).toBe(true);
-
-    const stats = JSON.parse(textOf(await client.callTool({ name: 'get_index_stats', arguments: {} }))) as {
-      builtAt: string; totalObjects: number;
-    };
-    expect(stats.builtAt).toBe(manifest.builtAt);
-    expect(stats.totalObjects).toBe(1);
-
     const staleness = JSON.parse(textOf(await client.callTool({ name: 'get_index_staleness', arguments: {} }))) as {
-      mode: string; version: string; builtAt: string; manifestUrl: string;
+      mode: string; builtAt: string;
     };
-    expect(staleness.mode).toBe('published');
-    expect(staleness.version).toBe(manifest.version);
-    expect(staleness.builtAt).toBe(manifest.builtAt);
-    expect(staleness.manifestUrl).toBe(`${server.baseUrl}/latest/manifest.json`);
-
-    // The published index names a file that exists on this machine, but paths from
-    // an index built elsewhere are never followed.
-    const indexedFile = path.join(root, 'packages', 'Package', 'Model', 'AxClass', 'AlreadyIndexed.xml');
-    fs.writeFileSync(indexedFile, '<AxClass><Name>SecretOnHost</Name></AxClass>');
-    const xml = textOf(await client.callTool({ name: 'get_element_xml', arguments: { name: 'AlreadyIndexed', type: 'Class' } }));
-    expect(xml).not.toContain('SecretOnHost');
-    expect(xml).toContain('not available on this server');
+    expect(staleness).toMatchObject({ mode: 'snapshot', builtAt: '2026-09-25T20:00:00.000Z' });
   }, 30_000);
 
   it('runs over stdio without any API key', async () => {
-    const client = await connect('stdio', false, { ...environment, MCP_API_KEY: '' });
+    const client = await connect('stdio', { ...environment, MCP_API_KEY: '' });
     expect(await search(client, 'AlreadyIndexed')).toHaveLength(1);
   }, 30_000);
 });
 
-describe('compiled MCP server index upload', () => {
-  it('swaps in an uploaded index, closes old sessions, and keeps it across a restart', async () => {
-    environment.D365_INDEX_UPLOAD_KEYS = 'default';
-    const first = await connect('http', false);
-    expect(await search(first, 'AlreadyIndexed')).toHaveLength(1);
+describe('compiled MCP server SDK version warning', () => {
+  const INDEX_VERSION = '10.0.2645.136';
 
-    const source = path.join(root, 'upload-source.db');
-    const db = openDb(source);
-    upsertObject(db, {
-      type: 'Class', name: 'UploadedClass', package: 'Package', model: 'Model',
-      file_path: 'Package/Model/AxClass/UploadedClass.xml', raw_xml: '<AxClass/>', file_mtime: 1,
-    });
-    rebuildFts(db);
-    setMeta(db, META_KEYS.builtAt, '2026-09-26T09:00:00.000Z');
-    setMeta(db, META_KEYS.serverVersion, '0.1.0');
-    setMeta(db, META_KEYS.storeRawXml, '1');
-    setMeta(db, META_KEYS.schemaVersion, String(INDEX_SCHEMA_VERSION));
+  /** Stamps the application version the pre-seeded fixture index describes. */
+  function stampIndexVersion(version: string): void {
+    const db = openDb(path.join(root, 'index.db'));
+    setMeta(db, META_KEYS.appVersion, version);
     db.close();
-    const snapshot = snapshotIndex(source, path.join(root, 'upload-snapshot.db'));
-    const packageFile = path.join(root, 'upload.gz');
-    const packed = await compressFile(snapshot.file, packageFile, 'gzip', 'fastest');
+  }
 
-    const baseUrl = `http://127.0.0.1:${lastHttpPort}`;
-    const outcome = await new IndexUploadClient(baseUrl, apiKey).upload({
-      serverUrl: baseUrl, apiKey, packageFile, packed, objects: snapshot.stats.objects, chunkSize: 2048, pollIntervalMs: 20,
-    });
-    expect(outcome).toMatchObject({ state: 'completed', checksumMatches: true });
-    expect(await new IndexUploadClient(baseUrl, apiKey).info()).toMatchObject({
-      index: { source: 'upload', objects: 1, uploadedBy: 'default', builtAt: '2026-09-26T09:00:00.000Z' },
-    });
+  it('warns a stdio client whose configured SDK is an older build', async () => {
+    stampIndexVersion(INDEX_VERSION);
+    const client = await connect('stdio', { ...environment, D365_APP_VERSION: '10.0.2541.21' });
 
-    // The session opened on the old index was closed by the swap.
-    await expect(first.callTool({ name: 'search_symbols', arguments: { query: 'AlreadyIndexed' } })).rejects.toThrow();
-    const second = await connect('http', false);
-    expect(await search(second, 'UploadedClass')).toHaveLength(1);
-    expect(await search(second, 'AlreadyIndexed')).toHaveLength(0);
-    const staleness = JSON.parse(textOf(await second.callTool({ name: 'get_index_staleness', arguments: {} })));
-    expect(staleness).toMatchObject({ mode: 'published', source: 'upload', uploadedBy: 'default' });
+    const instructions = client.getInstructions() ?? '';
+    expect(instructions).toContain('WARNING');
+    expect(instructions).toContain('10.0.2541.21');
+    expect(instructions).toContain(INDEX_VERSION);
+  }, 30_000);
 
-    // A restart serves the uploaded index from disk.
-    for (const child of children.splice(0)) {
-      const exited = once(child, 'exit');
-      child.kill('SIGTERM');
-      await exited;
-    }
-    const third = await connect('http', false);
-    expect(await search(third, 'UploadedClass')).toHaveLength(1);
-  }, 60_000);
+  it('does not warn a stdio client running the indexed version', async () => {
+    stampIndexVersion(INDEX_VERSION);
+    const client = await connect('stdio', { ...environment, D365_APP_VERSION: INDEX_VERSION });
+
+    const instructions = client.getInstructions() ?? '';
+    expect(instructions).toContain(INDEX_VERSION);
+    expect(instructions).not.toContain('WARNING');
+    expect(instructions).not.toContain('NOTICE');
+  }, 30_000);
+
+  it('warns an http client that declares an older build in the request header', async () => {
+    stampIndexVersion(INDEX_VERSION);
+    const client = await connect('http', environment, { 'X-D365-Client-Sdk-Version': '10.0.2541.21' });
+
+    const instructions = client.getInstructions() ?? '';
+    expect(instructions).toContain('WARNING');
+    expect(instructions).toContain('10.0.2541.21');
+  }, 30_000);
+
+  it('tells an http client that declares nothing how to declare its version', async () => {
+    stampIndexVersion(INDEX_VERSION);
+    const client = await connect('http');
+
+    const instructions = client.getInstructions() ?? '';
+    expect(instructions).toContain(INDEX_VERSION);
+    expect(instructions).toContain('x-d365-client-sdk-version');
+    expect(instructions).not.toContain('WARNING');
+  }, 30_000);
 });

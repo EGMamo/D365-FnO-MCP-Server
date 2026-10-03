@@ -95,53 +95,7 @@ export async function run(argv: string[]): Promise<CliResult> {
     }
     case 'doctor': {
       const { doctorCommand } = await import('./cli/doctor.js');
-      return { code: await doctorCommand(process.env, { hosted: flagBool(flags, 'hosted') }) };
-    }
-    case 'pull-index': {
-      const { pullIndexCommand } = await import('./cli/pull-index-command.js');
-      return {
-        code: await pullIndexCommand({
-          url: flagString(flags, 'url'),
-          dbPath: flagString(flags, 'db-path'),
-          force: flagBool(flags, 'force'),
-        }),
-      };
-    }
-    case 'publish-index': {
-      const { publishIndexCommand } = await import('./cli/publish-index-command.js');
-      return {
-        code: await publishIndexCommand({
-          dbPath: flagString(flags, 'db-path'),
-          out: flagString(flags, 'out'),
-          dbUrlPrefix: flagString(flags, 'db-url-prefix'),
-          allowNoRawXml: flagBool(flags, 'allow-no-raw-xml'),
-          integrityCheck: flagBool(flags, 'integrity-check'),
-          relativePaths: flagBool(flags, 'relative-paths'),
-          compression: flagString(flags, 'compression'),
-          level: flagString(flags, 'level'),
-        }),
-      };
-    }
-    case 'upload-index': {
-      const { uploadIndexCommand } = await import('./cli/upload-index-command.js');
-      return {
-        code: await uploadIndexCommand({
-          server: flagString(flags, 'server'),
-          dbPath: flagString(flags, 'db-path'),
-          compression: flagString(flags, 'compression'),
-          level: flagString(flags, 'level'),
-          chunkSizeMb: flagString(flags, 'chunk-size'),
-          noChunks: flagBool(flags, 'no-chunks'),
-          parallel: flagString(flags, 'parallel'),
-          retries: flagString(flags, 'retries'),
-          relativePaths: flagBool(flags, 'relative-paths'),
-          allowNoRawXml: flagBool(flags, 'allow-no-raw-xml'),
-          integrityCheck: flagBool(flags, 'integrity-check'),
-          workDir: flagString(flags, 'work-dir'),
-          progress: flagString(flags, 'progress'),
-          stopOnStdinClose: flagBool(flags, 'stop-on-stdin-close'),
-        }),
-      };
+      return { code: await doctorCommand(process.env) };
     }
     case 'index-status': {
       const { indexStatusCommand } = await import('./cli/index-status-command.js');
@@ -149,7 +103,6 @@ export async function run(argv: string[]): Promise<CliResult> {
         code: await indexStatusCommand({
           packagesDir: flagString(flags, 'packages-dir'),
           dbPath: flagString(flags, 'db-path'),
-          server: flagString(flags, 'server'),
           json: flagBool(flags, 'json'),
           list: flagString(flags, 'list'),
         }),

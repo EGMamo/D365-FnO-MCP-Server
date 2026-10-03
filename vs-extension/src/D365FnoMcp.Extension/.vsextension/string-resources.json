@@ -1,8 +1,5 @@
 {
   "D365FnoMcp.Menu.DisplayName": "D365 F&O MCP",
   "D365FnoMcp.ConfigureConnection.DisplayName": "Configure Connection...",
-  "D365FnoMcp.TestConnection.DisplayName": "Test Connection",
-  "D365FnoMcp.IndexAndUpload.DisplayName": "Index and Upload...",
-  "D365FnoMcp.CheckIndexFreshness.DisplayName": "Check Index Freshness",
-  "D365FnoMcp.UpdateIndex.DisplayName": "Update Index"
+  "D365FnoMcp.TestConnection.DisplayName": "Test Connection"
 }

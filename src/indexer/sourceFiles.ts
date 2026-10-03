@@ -4,21 +4,20 @@ import fs from 'node:fs';
  * Reads an indexed object's source file when the index holds no raw XML.
  *
  * `file_path` comes from the index, so it is only as trustworthy as the index.
- * A local index was built on this machine from its own packages folder, but a
- * published or uploaded one was built elsewhere: its paths mean nothing here
- * and a crafted index could name any file the server can read (for example
+ * An index built elsewhere contains paths that mean nothing on this host, and
+ * a crafted index could name any file the server can read (for example
  * `/proc/self/environ`, which holds the API keys). The server turns reads off
- * whenever it serves such an index, and only `.xml` files are ever read.
+ * when no local packages tree is configured, and only `.xml` files are read.
  */
 
 let sourceReadsAllowed = true;
 
-/** Allow or forbid reading source files named by the index; the server forbids it for transferred indexes. */
+/** Allow or forbid reading source files named by the index. */
 export function setSourceFileReads(allowed: boolean): void {
   sourceReadsAllowed = allowed;
 }
 
-/** False while the server serves an index built elsewhere. */
+/** False when the server has no local packages tree. */
 export function sourceFileReadsAllowed(): boolean {
   return sourceReadsAllowed;
 }

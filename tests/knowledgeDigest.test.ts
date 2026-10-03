@@ -196,6 +196,16 @@ describe('knowledge digest: digestKnowledge end-to-end', () => {
     expect(report.issues.some((i) => i.level === 'error')).toBe(false);
   });
 
+  it('allocates a different prefix while another writer holds a number reservation', () => {
+    fs.writeFileSync(path.join(kbDir, '.digest-01.lock'), 'another writer\n', { flag: 'wx' });
+
+    const report = digestKnowledge({ content: GOOD_ARTICLE, kbDir });
+
+    expect(report.written).toBe(true);
+    expect(report.slug).toBe('02-widget-batch-export-pattern');
+    expect(fs.existsSync(path.join(kbDir, '.digest-02.lock'))).toBe(false);
+  });
+
   it('refuses to write when sensitive content is present, even with force', () => {
     const dirty = `# Leaky Article\n\n## Pattern\nPassword=SuperSecret123 in the config.\n\n${'x'.repeat(120)}`;
     const report = digestKnowledge({ content: dirty, kbDir, force: true });
