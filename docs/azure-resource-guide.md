@@ -314,6 +314,26 @@ powershell -ExecutionPolicy Bypass -File .\scripts\verify-windows-xpp.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\verify-windows-xpp.ps1 -ExecuteCompiler
 ```
 
+The Dev Tools client-metadata endpoint used by the UDE tooling is not a
+documented public API. For the proof only, `scripts/acquire-ude-assets.ps1`
+resolves `finopsvsix22`, `finopsvsix`, and `crossreference` with a dedicated
+Dataverse application identity. It validates that every returned URL is an
+HTTPS Azure Blob URL and records no bearer token or SAS URL. Resolve metadata
+before downloading the multi-gigabyte assets:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\acquire-ude-assets.ps1 `
+  -TenantId "<tenant-id>" `
+  -ApplicationId "<application-id>" `
+  -DataverseEnvironmentUri "https://<org>.crm<N>.dynamics.com/" `
+  -AppVersion "<four-part-version>" `
+  -MetadataOnly
+```
+
+Do not treat this reverse-engineered endpoint as a production dependency until
+Microsoft confirms it is supported for unattended acquisition. Keep the
+client-metadata response and its short-lived SAS URL out of logs and reports.
+
 Do not attempt to substitute a Linux container merely because `pac auth`
 works there. Only reconsider Linux if Microsoft documents a supported X++
 installer and the complete acquisition/build flow passes on that platform.
