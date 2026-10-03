@@ -333,6 +333,10 @@ powershell -ExecutionPolicy Bypass -File .\scripts\acquire-ude-assets.ps1 `
 Do not treat this reverse-engineered endpoint as a production dependency until
 Microsoft confirms it is supported for unattended acquisition. Keep the
 client-metadata response and its short-lived SAS URL out of logs and reports.
+When AzCopy is present on `PATH`, the script uses its parallel Blob transfer
+engine and keeps its logs and job plans in a temporary directory that is
+removed after each asset. Otherwise it uses the built-in single-stream
+downloader.
 
 Do not attempt to substitute a Linux container merely because `pac auth`
 works there. Only reconsider Linux if Microsoft documents a supported X++

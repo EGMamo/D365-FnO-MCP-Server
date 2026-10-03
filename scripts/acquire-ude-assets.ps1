@@ -21,6 +21,8 @@ param(
 
     [string]$OutputDirectory = "$env:USERPROFILE\Documents\D365SdkProof\UdeAssets",
 
+    [string]$AzCopyPath,
+
     [Security.SecureString]$ClientSecret,
 
     [switch]$MetadataOnly
@@ -173,8 +175,76 @@ function Save-Asset {
         [string]$AssetName,
 
         [Parameter(Mandatory = $true)]
-        [string]$DestinationRoot
+        [string]$DestinationRoot,
+
+        [string]$AzCopyExecutable
     )
+
+    if (-not [string]::IsNullOrWhiteSpace($AzCopyExecutable)) {
+        $metadata = Get-AssetMetadata -Client $Client -AssetUri $AssetUri -AssetName $AssetName
+        $assetDirectory = Join-Path $DestinationRoot $AssetName
+        New-Item -ItemType Directory -Force -Path $assetDirectory | Out-Null
+
+        $destinationPath = Join-Path $assetDirectory $metadata.FileName
+        if (Test-Path -LiteralPath $destinationPath) {
+            throw "Destination already exists for '$AssetName': $destinationPath"
+        }
+
+        $stagingDirectory = Join-Path $assetDirectory ".azcopy-$PID"
+        New-Item -ItemType Directory -Path $stagingDirectory | Out-Null
+        $previousLogLocation = $env:AZCOPY_LOG_LOCATION
+        $previousPlanLocation = $env:AZCOPY_JOB_PLAN_LOCATION
+        $env:AZCOPY_LOG_LOCATION = Join-Path $stagingDirectory "logs"
+        $env:AZCOPY_JOB_PLAN_LOCATION = Join-Path $stagingDirectory "plans"
+
+        try {
+            Write-Host "Downloading $AssetName with AzCopy..."
+            $azCopyOutput = & $AzCopyExecutable copy $AssetUri.AbsoluteUri $stagingDirectory `
+                --from-to=BlobLocal --overwrite=false --check-length=true `
+                --output-type=json --output-level=essential --log-level=ERROR 2>&1
+            if ($LASTEXITCODE -ne 0) {
+                throw "AzCopy failed for '$AssetName' with exit code $LASTEXITCODE."
+            }
+            $azCopyOutput = $null
+
+            $downloadedFiles = @(
+                Get-ChildItem -LiteralPath $stagingDirectory -File -Recurse |
+                    Where-Object {
+                        $_.FullName -notlike "$($env:AZCOPY_LOG_LOCATION)\*" -and
+                        $_.FullName -notlike "$($env:AZCOPY_JOB_PLAN_LOCATION)\*"
+                    }
+            )
+            if ($downloadedFiles.Count -ne 1) {
+                throw "AzCopy produced $($downloadedFiles.Count) files for '$AssetName'; expected one."
+            }
+
+            $downloadedPath = $downloadedFiles[0].FullName
+            $actualLength = $downloadedFiles[0].Length
+            if ($null -ne $metadata.ContentLength -and
+                $actualLength -ne $metadata.ContentLength) {
+                throw "Length mismatch for '$AssetName': expected $($metadata.ContentLength), " +
+                    "got $actualLength."
+            }
+            Move-Item -LiteralPath $downloadedPath -Destination $destinationPath
+        }
+        finally {
+            $env:AZCOPY_LOG_LOCATION = $previousLogLocation
+            $env:AZCOPY_JOB_PLAN_LOCATION = $previousPlanLocation
+            Remove-Item -LiteralPath $stagingDirectory -Recurse -Force `
+                -ErrorAction SilentlyContinue
+        }
+
+        $hash = (Get-FileHash -LiteralPath $destinationPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        return [pscustomobject]@{
+            ResourceName = $AssetName
+            FileName = $metadata.FileName
+            ContentLength = $actualLength
+            ContentType = $metadata.ContentType
+            Downloaded = $true
+            Path = $destinationPath
+            Sha256 = $hash
+        }
+    }
 
     $response = $Client.GetAsync(
         $AssetUri,
@@ -279,6 +349,20 @@ if ([string]::IsNullOrWhiteSpace([string]$tokenResponse.access_token)) {
 }
 
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
+$resolvedAzCopyPath = $null
+if (-not [string]::IsNullOrWhiteSpace($AzCopyPath)) {
+    $resolvedAzCopyPath = (Get-Item -LiteralPath $AzCopyPath -ErrorAction Stop).FullName
+}
+else {
+    $azCopyCommand = Get-Command azcopy -CommandType Application -ErrorAction SilentlyContinue
+    if ($null -ne $azCopyCommand) {
+        $resolvedAzCopyPath = $azCopyCommand.Source
+    }
+}
+if ($null -ne $resolvedAzCopyPath) {
+    Write-Host "Using AzCopy: $resolvedAzCopyPath"
+}
+
 $httpClient = [Net.Http.HttpClient]::new()
 $httpClient.Timeout = [Threading.Timeout]::InfiniteTimeSpan
 
@@ -292,7 +376,7 @@ try {
         }
         else {
             Save-Asset -Client $httpClient -AssetUri $assetUri -AssetName $assetName `
-                -DestinationRoot $OutputDirectory
+                -DestinationRoot $OutputDirectory -AzCopyExecutable $resolvedAzCopyPath
         }
     }
 }
