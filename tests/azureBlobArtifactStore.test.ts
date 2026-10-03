@@ -274,7 +274,12 @@ describe('Azure Blob artifact adapter', () => {
       localStoreRoot: path.join(root, 'downloaded'),
       policy,
     });
+    const materializedAgain = await store.materializeBundle(bundle.manifest.bundleId, {
+      localStoreRoot: path.join(root, 'downloaded'),
+      policy,
+    });
     expect(materialized.manifest.bundleId).toBe(bundle.manifest.bundleId);
+    expect(materializedAgain.directory).toBe(materialized.directory);
   });
 
   it('promotes and rolls back with ETag conditions while retaining active and previous bundles', async () => {

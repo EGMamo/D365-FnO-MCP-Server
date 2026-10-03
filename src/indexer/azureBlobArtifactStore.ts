@@ -17,6 +17,7 @@ import {
 } from './artifactContract.js';
 import {
   artifactBundleDirectory,
+  publishStagedArtifactDirectory,
   type ValidatedArtifactBundle,
   validateArtifactBundle,
 } from './artifactBundle.js';
@@ -195,12 +196,7 @@ export class AzureBlobArtifactStore {
       );
 
       const finalDirectory = artifactBundleDirectory(root, bundleId);
-      try {
-        fs.renameSync(staging, finalDirectory);
-      } catch (error) {
-        if (!['EEXIST', 'ENOTEMPTY'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
-        fs.rmSync(staging, { recursive: true, force: true });
-      }
+      publishStagedArtifactDirectory(staging, finalDirectory);
       return validateArtifactBundle(finalDirectory, options.policy);
     } catch (error) {
       fs.rmSync(staging, { recursive: true, force: true });

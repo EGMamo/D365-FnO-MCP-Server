@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -116,6 +116,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   fs.rmSync(root, { recursive: true, force: true });
 });
 
@@ -178,10 +179,21 @@ describe('Azure artifact contract', () => {
 
   it('treats creating the same content-addressed bundle as idempotent', () => {
     const first = createBundle();
+    vi.spyOn(fs, 'renameSync').mockImplementation(() => {
+      throw Object.assign(new Error('Windows directory collision'), { code: 'EPERM' });
+    });
     const second = createBundle();
 
     expect(second.manifest.bundleId).toBe(first.manifest.bundleId);
     expect(second.directory).toBe(first.directory);
+  });
+
+  it('does not hide EPERM when the destination bundle does not exist', () => {
+    vi.spyOn(fs, 'renameSync').mockImplementation(() => {
+      throw Object.assign(new Error('Access denied'), { code: 'EPERM' });
+    });
+
+    expect(() => createBundle()).toThrow(/Access denied/);
   });
 
   it('rejects incomplete and server-incompatible bundles', () => {

@@ -56,6 +56,25 @@ function writeCanonicalJson(file: string, value: unknown): void {
   fs.writeFileSync(file, canonicalJson(value), { encoding: 'utf8', flag: 'wx', mode: 0o600 });
 }
 
+function isExistingDirectoryCollision(error: unknown, destination: string): boolean {
+  const code = (error as NodeJS.ErrnoException).code;
+  if (!['EEXIST', 'ENOTEMPTY', 'EPERM'].includes(code ?? '')) return false;
+  try {
+    return fs.lstatSync(destination).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+export function publishStagedArtifactDirectory(staging: string, destination: string): void {
+  try {
+    fs.renameSync(staging, destination);
+  } catch (error) {
+    if (!isExistingDirectoryCollision(error, destination)) throw error;
+    fs.rmSync(staging, { recursive: true, force: true });
+  }
+}
+
 function assertIsoDate(value: string, label: string): void {
   if (!Number.isFinite(Date.parse(value))) throw new Error(`${label} must be an ISO timestamp.`);
 }
@@ -194,12 +213,7 @@ export function createArtifactBundle(
     writeCanonicalJson(manifestFile, checkedManifest);
 
     const finalDirectory = artifactBundleDirectory(storeRoot, checkedManifest.bundleId);
-    try {
-      fs.renameSync(staging, finalDirectory);
-    } catch (error) {
-      if (!['EEXIST', 'ENOTEMPTY'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
-      fs.rmSync(staging, { recursive: true, force: true });
-    }
+    publishStagedArtifactDirectory(staging, finalDirectory);
     return validateArtifactBundle(finalDirectory, {
       serverVersion: options.generatorVersion,
       minimumIndexSchemaVersion: snapshot.schemaVersion,
