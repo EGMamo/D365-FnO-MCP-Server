@@ -2,8 +2,8 @@
 
 This guide separates **developer workflows** from **server operations**. These
 are responsibilities, not server-enforced user and administrator roles: an
-authenticated HTTP key can call the same MCP tools and read `/admin/index`.
-Index uploads require a key named in `D365_INDEX_UPLOAD_KEYS`. Metadata write
+authenticated HTTP key can call the same MCP tools and read index status.
+Metadata write
 tools, when enabled, use server-wide configuration and an explicit model
 allowlist; do not treat an ordinary API key as a read-only credential.
 
@@ -89,10 +89,10 @@ Visual Studio state. See the [write tool reference](../README.md#mcp-tools).
 | --- | --- | --- |
 | Local stdio | `MCP_TRANSPORT=stdio`, local index, client starts `serve` | No HTTP key required; use an absolute `D365_INDEX_DB_PATH` in clients with varying working directories. |
 | Local HTTP | `MCP_TRANSPORT=http`, `MCP_HOST=127.0.0.1`, `MCP_API_KEYS` | Bind locally unless you provide a trusted TLS reverse proxy and network controls. |
-| Hosted | `D365_INDEX_URL` points to a published manifest, with named HTTP keys | Read-only: `D365_INDEX_ON_START=0` and `D365_ENABLE_WRITE_TOOLS=0`. |
-| Hybrid | `pull-index --url <manifest-url>` to a local DB; configure local writes separately | The local metadata target still needs a valid workspace, unlocked model, and allowlist. |
+| Hosted | Azure worker promotes a validated index; API uses named HTTP keys | Read-only runtime; only the private worker may build or promote production indexes. |
+| Visual Studio gateway | Extension loopback gateway plus hosted API | Hosted metadata and local workspace tools share one MCP connection; hosted credentials stay in Credential Manager. |
 
-Run `doctor` for local setup or `doctor --hosted` for a hosted deployment.
+Run `doctor` for local setup.
 See the [configuration reference](../README.md#configuration) and
 [hosted deployment](hosted-deployment.md) for complete environment variables,
 client setup, capacity planning, and Azure operations.
@@ -100,18 +100,14 @@ client setup, capacity planning, and Azure operations.
 ### Maintain the index
 
 For a local source, run `index` against `PackagesLocalDirectory`; optionally
-run `index-xref` against `DynamicsXrefDB`. `D365_INDEX_ON_START=1` enables
-incremental background indexing on startup when there is no published index.
-`index-status` compares a local package tree with its index and optionally
-with a server's current index.
+run `index-xref` against `DynamicsXrefDB`. Runtime startup does not index local
+packages. `index-status` compares a local package tree with its index and
+its local index.
 
-For hosted use, schedule `scripts/publish-index.ps1` on a machine with the
-source packages: it builds the index, optionally imports XRef when
-`D365_XREF_CONNECTION_STRING` is configured, publishes a versioned package,
-uploads it, and restarts the App Service. Alternatively,
-`upload-index` sends a local index in verified chunks to the running HTTP
-server. Set `D365_INDEX_PUBLISH_URL` to persist uploads across restarts;
-without it, an uploaded index is served locally until the server restarts.
+For hosted use, schedule the private Azure acquisition worker. It downloads the
+approved SDK, builds a sibling candidate, validates it and atomically promotes
+it while retaining the previous active index. The public API neither downloads
+manifests nor accepts direct uploads.
 Keep raw XML in a hosted index if you need `get_element_xml` or generator
 checks, because the host has no source files. Details and rollback guidance
 are in [hosted deployment](hosted-deployment.md#operations).
@@ -122,10 +118,9 @@ are in [hosted deployment](hosted-deployment.md#operations).
   automation a separate named entry in `MCP_API_KEYS`; only names are logged,
   and an MCP session is bound to the key that opened it. Revocation or
   rotation requires changing the server configuration and restarting it.
-- Every valid HTTP key can use MCP tools and `GET /admin/index`. Only keys
-  named in `D365_INDEX_UPLOAD_KEYS` can upload or cancel an upload. Rate
-  limiting is by client IP, not by key. Protect the endpoint and keys
-  accordingly; `TRUST_PROXY_HOPS` must reflect only trusted proxies.
+- Every valid HTTP key can use MCP tools and read index status. Rate limiting
+  is by client IP, not by key. Protect the endpoint and keys accordingly;
+  `TRUST_PROXY_HOPS` must reflect only trusted proxies.
 - `D365_ENABLE_WRITE_TOOLS=1` registers preview/apply tools for all clients,
   not for a special administrator identity. `D365_WRITABLE_MODELS` authorizes
   literal `Package/Model` targets; an empty list rejects writes. Configure
@@ -141,8 +136,8 @@ are in [hosted deployment](hosted-deployment.md#operations).
 | Client tools missing or unauthorized | Client MCP configuration and `X-API-Key`; Visual Studio may require enabling tools in Agent mode. |
 | Object or usage result missing | `get_index_stats`, `get_index_staleness`, `get_usage_snapshot_status`, then `index-status` or `index-xref`. |
 | Write tool missing or target rejected | `D365_ENABLE_WRITE_TOOLS`, model descriptor and `D365_WRITABLE_MODELS`; run `doctor`. |
-| Hosted server will not start | `doctor --hosted`, manifest reachability and published-index/write-tool configuration. |
-| Upload denied | Named key in `D365_INDEX_UPLOAD_KEYS`; inspect `GET /admin/index` for the key's upload allowance. |
+| Hosted server will not start | Verify the active database exists and passes candidate validation; inspect worker and API health logs. |
+| Hosted index stale or unavailable | Check the published manifest URL, artifact integrity, and server startup logs. |
 | Too many sessions or requests | `MAX_CONCURRENT_SESSIONS`, `RATE_LIMIT_MAX_REQUESTS`, `RATE_LIMIT_WINDOW_MS`, and proxy settings. |
 
 See [Visual Studio troubleshooting](visual-studio-extension.md#troubleshooting)

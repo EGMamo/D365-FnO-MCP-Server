@@ -12,6 +12,11 @@ export type Database = DatabaseSync;
 const require = createRequire(import.meta.url);
 const { DatabaseSync: NodeDatabaseSync } = require('node:sqlite') as typeof import('node:sqlite');
 
+/** Opens a finalized deployment index without creating or migrating any schema. */
+export function openDbReadOnly(dbPath: string): Database {
+  return new NodeDatabaseSync(dbPath, { readOnly: true });
+}
+
 function transaction<Args extends unknown[], Result>(
   db: Database,
   fn: (...args: Args) => Result
@@ -226,6 +231,13 @@ export const META_KEYS = {
   packagesDirBasename: 'packages_dir_basename',
   packagesDirHash: 'packages_dir_sha256',
   storeRawXml: 'store_raw_xml',
+  /**
+   * Four-part D365 application version the index was built from, when it could
+   * be determined. Sessions are warned when their own SDK differs from it.
+   */
+  appVersion: 'd365_app_version',
+  /** How `appVersion` was obtained, e.g. `packages-dir` or `configured`. */
+  appVersionSource: 'd365_app_version_source',
   indexDurationMs: 'index_duration_ms',
   schemaVersion: 'schema_version',
   /** Set while a run may have changed objects or labels without rebuilding the FTS tables yet. */

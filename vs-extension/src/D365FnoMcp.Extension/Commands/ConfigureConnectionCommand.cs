@@ -7,8 +7,8 @@ using Microsoft.VisualStudio.ProjectSystem.Query;
 namespace D365FnoMcp.Extension.Commands;
 
 /// <summary>
-/// Asks for the server URL and API key, tests them, and writes the server into
-/// a .mcp.json so Copilot (or any MCP client in Visual Studio) can use it.
+/// Asks for the hosted server URL and API key, tests them, then writes only the
+/// extension-owned loopback gateway into .mcp.json.
 /// Prompts only: no custom UI.
 /// </summary>
 [VisualStudioContribution]
@@ -83,6 +83,21 @@ internal sealed class ConfigureConnectionCommand : Command
         }
 
         string? solutionDirectory = await this.GetSolutionDirectoryAsync(cancellationToken);
+        settings.ServerUrl = serverUrl;
+        this.services.Settings.Save(settings);
+        this.services.Secrets.Write(SecretNames.ApiKey(serverUrl), apiKey);
+
+        McpGateway gateway;
+        try
+        {
+            gateway = await this.services.RestartGatewayAsync(serverUrl, apiKey, cancellationToken);
+        }
+        catch (Exception ex) when (ex is IOException or HttpRequestException or InvalidOperationException)
+        {
+            await shell.ShowPromptAsync($"Could not start the local MCP gateway: {ex.Message}", PromptOptions.ErrorConfirm, cancellationToken);
+            return;
+        }
+
         var choices = new PromptOptions<TargetChoice>
         {
             Title = "Where should Visual Studio find the server?",
@@ -91,36 +106,29 @@ internal sealed class ConfigureConnectionCommand : Command
         };
         if (solutionDirectory is not null)
         {
-            choices.Choices.Add("This solution (.mcp.json next to the .sln, key asked by VS)", TargetChoice.Solution);
+            choices.Choices.Add("This solution (.mcp.json next to the .sln)", TargetChoice.Solution);
         }
 
-        choices.Choices.Add("My user profile (key asked by VS)", TargetChoice.UserPrompt);
-        choices.Choices.Add("My user profile (key saved in the file)", TargetChoice.UserKeyInFile);
+        choices.Choices.Add("My user profile", TargetChoice.UserPrompt);
         TargetChoice choice = await shell.ShowPromptAsync(
-            $"Write the '{settings.McpServerName}' server into which .mcp.json?{Environment.NewLine}{Environment.NewLine}" +
-            "A solution file can be committed and never contains the key. Choose 'key saved in the file' if Visual Studio does not pass a prompted key to the server.",
+            $"Write the local '{settings.McpServerName}' gateway into which .mcp.json?{Environment.NewLine}{Environment.NewLine}" +
+            "The hosted API key stays in Windows Credential Manager. The file contains only an ephemeral loopback bearer token.",
             choices,
             cancellationToken);
-        McpJsonTarget target;
         switch (choice)
         {
             case TargetChoice.Solution:
-                target = McpJsonTarget.SolutionPromptForKey;
                 break;
             case TargetChoice.UserPrompt:
-                target = McpJsonTarget.UserPromptForKey;
-                break;
-            case TargetChoice.UserKeyInFile:
-                target = McpJsonTarget.UserKeyInFile;
                 break;
             default:
                 return;
         }
 
-        string path = target == McpJsonTarget.SolutionPromptForKey ? McpJsonFile.SolutionFilePath(solutionDirectory!) : McpJsonFile.UserFilePath();
+        string path = choice == TargetChoice.Solution ? McpJsonFile.SolutionFilePath(solutionDirectory!) : McpJsonFile.UserFilePath();
         try
         {
-            McpJsonFile.Write(path, settings.McpServerName, serverUrl, target, apiKey);
+            McpJsonFile.Write(path, settings.McpServerName, gateway.Endpoint!, gateway.BearerToken);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or FormatException or System.Text.Json.JsonException)
         {
@@ -128,19 +136,14 @@ internal sealed class ConfigureConnectionCommand : Command
             return;
         }
 
-        settings.ServerUrl = serverUrl;
+        settings.McpConfigurationPath = path;
         this.services.Settings.Save(settings);
-        this.services.Secrets.Write(SecretNames.ApiKey(serverUrl), apiKey);
 
-        string next = target == McpJsonTarget.UserKeyInFile
-            ? "Visual Studio uses the key from the file."
-            : "Visual Studio asks for the API key the first time it starts the server.";
         await this.services.WriteOutputAsync(
-            $"Wrote '{settings.McpServerName}' to {path}. {next}{Environment.NewLine}" +
-            $"Claude Code: claude mcp add --transport http {settings.McpServerName} {ServerUrl.McpEndpoint(serverUrl)} --header \"X-API-Key: <key>\"",
+            $"Wrote local gateway '{settings.McpServerName}' to {path}. Hosted credentials remain in Windows Credential Manager.",
             cancellationToken);
         await shell.ShowPromptAsync(
-            $"Saved. '{settings.McpServerName}' was written to{Environment.NewLine}{path}{Environment.NewLine}{Environment.NewLine}{next} " +
+            $"Saved. The local '{settings.McpServerName}' gateway was written to{Environment.NewLine}{path}{Environment.NewLine}{Environment.NewLine}" +
             "In Copilot Chat, switch to Agent mode, open Tools and enable the d365-fno tools.",
             PromptOptions.InformationConfirm,
             cancellationToken);
@@ -152,7 +155,6 @@ internal sealed class ConfigureConnectionCommand : Command
         Cancel,
         Solution,
         UserPrompt,
-        UserKeyInFile,
     }
 
     private async Task<string?> GetSolutionDirectoryAsync(CancellationToken cancellationToken)

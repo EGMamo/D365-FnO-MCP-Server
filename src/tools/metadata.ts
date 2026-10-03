@@ -6,8 +6,6 @@ import { getIndexStats } from '../indexer/buildIndex.js';
 import { loadObjectXml, sourceFileReadsAllowed } from '../indexer/sourceFiles.js';
 import { findUsageRefs, getUsageSnapshotStatus } from '../indexer/xrefUsage.js';
 
-/** Provenance of a snapshot index (published or uploaded) the server serves without source files. */
-
 /** Every object type the indexer stores, for tools that accept any indexed type. */
 export const INDEXED_OBJECT_TYPES = [
   'Table',
@@ -26,21 +24,9 @@ export const INDEXED_OBJECT_TYPES = [
   'MenuItemAction',
   'MenuItemOutput',
 ] as const;
-export interface PublishedIndexInfo {
-  /** `manifest`: pulled from a published manifest; `upload`: uploaded to this server. */
-  source?: 'manifest' | 'upload';
-  /** Manifest URL with any query string (SAS token) removed; null for an upload. */
-  manifestUrl: string | null;
-  /** Name of the API key that uploaded the index. */
-  uploadedBy?: string;
-  syncedAt: string | null;
-  builtAt: string | null;
-  version: string | null;
-}
-
 export interface MetadataToolOptions {
-  /** Set when the server serves a published index rather than a locally built one. */
-  published?: PublishedIndexInfo;
+  /** False when the deployed index has no corresponding source tree on this host. */
+  sourceFilesAvailable?: boolean;
 }
 
 export function registerMetadataTools(server: McpServer, db: Database, options: MetadataToolOptions = {}) {
@@ -311,18 +297,18 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
 
   server.tool(
     'get_index_staleness',
-    'List indexed objects whose source file changed on disk or no longer exists (examines up to 1000 rows). A server that serves a published index has no source files and reports the snapshot build time instead.',
+    'List indexed objects whose source file changed on disk or no longer exists (examines up to 1000 rows). A server without source files reports the snapshot build time instead.',
     {
       limit: z.number().int().min(1).max(100).default(100),
       maxScan: z.number().int().min(1).max(5000).default(1000),
     },
     async ({ limit, maxScan }) => {
-      if (options.published) {
+      if (options.sourceFilesAvailable === false) {
         const report = {
-          mode: 'published',
-          ...options.published,
+          mode: 'snapshot',
+          builtAt: dbUtils.getMeta(db, dbUtils.META_KEYS.builtAt),
           message:
-            'This server serves a published index snapshot; source files are not present, so per-file staleness cannot be checked. Compare builtAt with your local PackagesLocalDirectory.',
+            'Source files are not present on this server, so per-file staleness cannot be checked.',
         };
         return { content: [{ type: 'text', text: JSON.stringify(report, null, 2) }] };
       }

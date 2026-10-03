@@ -4,7 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { buildIndex } from '../src/indexer/buildIndex.js';
 import { getMeta, META_KEYS, openDb, setMeta } from '../src/indexer/db.js';
-import { checkIndexStatus, servedIndexFromInfo, type ServedIndex } from '../src/indexer/indexStatus.js';
+import { checkIndexStatus } from '../src/indexer/indexStatus.js';
 import { indexStatusCommand } from '../src/cli/index-status-command.js';
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
@@ -27,10 +27,6 @@ function place(model: string, typeDir: string, fixture: string, name: string): s
 function touchLater(file: string, seconds = 60): void {
   const later = new Date(Date.now() + seconds * 1000);
   fs.utimesSync(file, later, later);
-}
-
-function served(overrides: Partial<ServedIndex> = {}): ServedIndex {
-  return { builtAt, version: 'v1', source: 'upload', objects: 3, xrefImportedAt: null, ...overrides };
 }
 
 beforeEach(async () => {
@@ -61,14 +57,8 @@ describe('checkIndexStatus', () => {
     const file = path.join(packagesDir, 'TestPackage', 'ModelA', 'AxClass', 'SampleClass.xml');
     const earlier = new Date(Date.now() - 3600 * 1000);
     fs.utimesSync(file, earlier, earlier);
-    const status = await checkIndexStatus({ packagesDir, dbPath, server: served() });
+    const status = await checkIndexStatus({ packagesDir, dbPath });
     expect(status.changed).toBe(1);
-  });
-
-  it('reports an XRef import the server does not have', async () => {
-    const status = await checkIndexStatus({ packagesDir, dbPath, server: served({ xrefImportedAt: '2026-01-01T00:00:00.000Z' }) });
-    expect(status.upToDate).toBe(false);
-    expect(status.reasons).toEqual([expect.stringContaining('different XRef usage import')]);
   });
 
   it('reports a local index built by an older schema as out of date', async () => {
@@ -78,7 +68,7 @@ describe('checkIndexStatus', () => {
     } finally {
       db.close();
     }
-    const status = await checkIndexStatus({ packagesDir, dbPath, server: served() });
+    const status = await checkIndexStatus({ packagesDir, dbPath });
     expect(status.upToDate).toBe(false);
     expect(status.local?.schemaVersion).toBe(2);
     expect(status.reasons).toEqual([expect.stringContaining('built by an older version (schema 2')]);
@@ -86,14 +76,13 @@ describe('checkIndexStatus', () => {
 
   it('attributes a removed label file to its model', async () => {
     fs.rmSync(path.join(packagesDir, 'TestPackage', 'ModelB', 'AxLabelFile', 'LabelResources', 'en-US', 'SampleLabels.en-US.label.txt'));
-    const status = await checkIndexStatus({ packagesDir, dbPath, server: served() });
+    const status = await checkIndexStatus({ packagesDir, dbPath });
     expect(status.removed).toBe(1);
     expect(status.models).toEqual([{ model: 'ModelB', files: 1 }]);
   });
 
   it('reports an unchanged folder as up to date against the local index', async () => {
-    const status = await checkIndexStatus({ packagesDir, dbPath, server: served() });
-    expect(status.basis).toBe('local-index');
+    const status = await checkIndexStatus({ packagesDir, dbPath });
     expect(status.upToDate).toBe(true);
     expect(status.reasons).toEqual([]);
     expect(status.scannedFiles).toBe(4);
@@ -107,7 +96,7 @@ describe('checkIndexStatus', () => {
     fs.rmSync(path.join(packagesDir, 'TestPackage', 'ModelB', 'AxEnum', 'SampleEnum.xml'));
     touchLater(path.join(packagesDir, 'TestPackage', 'ModelB', 'AxLabelFile', 'LabelResources', 'en-US', 'SampleLabels.en-US.label.txt'));
 
-    const status = await checkIndexStatus({ packagesDir, dbPath, server: served() });
+    const status = await checkIndexStatus({ packagesDir, dbPath });
     expect(status.upToDate).toBe(false);
     expect({ added: status.added, changed: status.changed, removed: status.removed }).toEqual({ added: 1, changed: 2, removed: 1 });
     expect(status.models).toEqual([
@@ -125,60 +114,13 @@ describe('checkIndexStatus', () => {
 
   it('ignores a second file that loses a name collision, as the indexer does', async () => {
     place('ModelC', 'AxClass', 'AxClassSample.xml', 'SampleClass');
-    const status = await checkIndexStatus({ packagesDir, dbPath, server: served() });
+    const status = await checkIndexStatus({ packagesDir, dbPath });
     expect(status.added).toBe(0);
     expect(status.upToDate).toBe(true);
   });
 
-  it('asks for an upload when the local index is newer than the served one', async () => {
-    const older = new Date(Date.parse(builtAt) - 86_400_000).toISOString();
-    const status = await checkIndexStatus({ packagesDir, dbPath, server: served({ builtAt: older }) });
-    expect(status.basis).toBe('local-index');
-    expect(status.localNewerThanServer).toBe(true);
-    expect(status.upToDate).toBe(false);
-    expect(status.reasons).toEqual(['The local index is newer than the one the server serves and has not been uploaded.']);
-  });
-
-  it('falls back to the server build time without a usable local index', async () => {
-    const serverBuilt = new Date(Date.now() - 3_600_000).toISOString();
-    const hourAgo = new Date(Date.now() - 7_200_000);
-    for (const file of ['AxTable/SampleTable.xml', 'AxClass/SampleClass.xml']) {
-      fs.utimesSync(path.join(packagesDir, 'TestPackage', 'ModelA', file), hourAgo, hourAgo);
-    }
-    fs.utimesSync(path.join(packagesDir, 'TestPackage', 'ModelB', 'AxEnum', 'SampleEnum.xml'), hourAgo, hourAgo);
-    fs.utimesSync(path.join(packagesDir, 'TestPackage', 'ModelB', 'AxLabelFile', 'LabelResources', 'en-US', 'SampleLabels.en-US.label.txt'), hourAgo, hourAgo);
-    touchLater(path.join(packagesDir, 'TestPackage', 'ModelA', 'AxClass', 'SampleClass.xml'), 0);
-
-    const status = await checkIndexStatus({ packagesDir, dbPath: path.join(root, 'missing.db'), server: served({ builtAt: serverBuilt }) });
-    expect(status.basis).toBe('timestamp');
-    expect(status.local).toBeNull();
-    expect(status.changed).toBe(1);
-    expect(status.removed).toBeNull();
-    expect(status.models).toEqual([{ model: 'ModelA', files: 1 }]);
-    expect(status.upToDate).toBe(false);
-  });
-
-  it('uses the server build time when someone else uploaded a newer index', async () => {
-    const newer = new Date(Date.now() + 3_600_000).toISOString();
-    const status = await checkIndexStatus({ packagesDir, dbPath, server: served({ builtAt: newer }) });
-    expect(status.basis).toBe('timestamp');
-    expect(status.upToDate).toBe(true);
-  });
-
-  it('refuses to guess with nothing to compare with', async () => {
-    await expect(checkIndexStatus({ packagesDir, dbPath: path.join(root, 'missing.db'), server: null })).rejects.toThrow(/no local index and no server/);
-    await expect(checkIndexStatus({ packagesDir, dbPath: path.join(root, 'missing.db'), server: served({ builtAt: null }) })).rejects.toThrow(
-      /did not report when its index was built/
-    );
-  });
-
-  it('reads the served index from GET /admin/index', () => {
-    expect(
-      servedIndexFromInfo({
-        index: { builtAt: '2026-09-01T00:00:00.000Z', version: 'v9', source: 'manifest', objects: 12, usageSnapshot: { status: 'imported', importedAt: '2026-09-02T00:00:00.000Z' } },
-      })
-    ).toEqual({ builtAt: '2026-09-01T00:00:00.000Z', version: 'v9', source: 'manifest', objects: 12, xrefImportedAt: '2026-09-02T00:00:00.000Z' });
-    expect(servedIndexFromInfo({})).toEqual({ builtAt: null, version: null, source: null, objects: null, xrefImportedAt: null });
+  it('requires a local index', async () => {
+    await expect(checkIndexStatus({ packagesDir, dbPath: path.join(root, 'missing.db') })).rejects.toThrow(/no local index/);
   });
 });
 
@@ -192,41 +134,34 @@ describe('index-status command', () => {
     return { lines: () => chunks.join('').split('\n').filter(Boolean), restore: () => spy.mockRestore() };
   }
 
-  it('asks the server with the API key and prints one JSON object', async () => {
-    const requests: { url: string; key: string | null }[] = [];
-    const fetchImpl = (async (url: string, init?: RequestInit) => {
-      requests.push({ url, key: new Headers(init?.headers).get('x-api-key') });
-      return new Response(JSON.stringify({ index: { builtAt, source: 'upload', objects: 3 } }), { status: 200, headers: { 'content-type': 'application/json' } });
-    }) as unknown as typeof fetch;
-
+  it('prints one JSON object for the local index', async () => {
     const out = captureStdout();
     let code: number;
     try {
       code = await indexStatusCommand(
-        { packagesDir, dbPath, server: 'https://mcp.example.com/', json: true, fetchImpl },
-        { D365_MCP_API_KEY: 'secret-key' }
+        { packagesDir, dbPath, json: true },
+        {}
       );
     } finally {
       out.restore();
     }
     expect(code).toBe(0);
-    expect(requests).toEqual([{ url: 'https://mcp.example.com/admin/index', key: 'secret-key' }]);
     const lines = out.lines();
     expect(lines).toHaveLength(1);
     const status = JSON.parse(lines[0]);
     expect(status.upToDate).toBe(true);
-    expect(status.server.builtAt).toBe(builtAt);
+    expect(status.local.builtAt).toBe(builtAt);
   });
 
-  it('reports errors as JSON and never sends a request without a key', async () => {
+  it('reports a missing local index as JSON', async () => {
     const out = captureStdout();
     let code: number;
     try {
-      code = await indexStatusCommand({ packagesDir, dbPath, server: 'https://mcp.example.com', json: true }, {});
+      code = await indexStatusCommand({ packagesDir, dbPath: path.join(root, 'missing.db'), json: true }, {});
     } finally {
       out.restore();
     }
     expect(code).toBe(1);
-    expect(JSON.parse(out.lines()[0]).error).toMatch(/D365_MCP_API_KEY/);
+    expect(JSON.parse(out.lines()[0]).error).toMatch(/no local index/i);
   });
 });

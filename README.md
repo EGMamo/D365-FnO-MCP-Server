@@ -13,11 +13,10 @@ A Model Context Protocol (MCP) server that gives AI coding assistants first-clas
 - **Label lookup** — resolve label IDs and full-text search label files across packages.
 - **X++ generators with grounding** — Chain of Command extensions, table/class extensions, plain classes, RunBase batch jobs, and SysOperation classes. Generators validate their inputs against the index and fail closed rather than emit code for objects that do not exist.
 - **Dual MCP transport** — Streamable HTTP (API-key protected) for remote/shared use, and stdio for local clients such as Claude Desktop, Claude Code, or VS Code.
-- **SQLite index** — a local, incrementally updated index of `PackagesLocalDirectory`, so lookups are fast and offline.
-- **CLI** — `setup`, `doctor`, `index` and `serve` for onboarding, plus import commands for compiler cross-references, Trace Parser data, best-practice logs and release plans, and `publish-index`, `pull-index`, `upload-index` and `index-status` for sharing an index (see the [CLI reference](#cli-reference)).
-- **Hosted mode** — run the server read-only on Azure App Service. It downloads a published index at start-up (`D365_INDEX_URL`), so developers connect over HTTPS with a personal API key and install nothing locally. See [docs/hosted-deployment.md](docs/hosted-deployment.md).
-- **Index uploads** — `upload-index` sends a freshly built index to a running server, compressed (gzip, Brotli or none) and in parallel chunks, each carrying its own SHA-256. The server checks the whole package and the decompressed database before it switches over (`D365_INDEX_UPLOAD_KEYS`).
-- **Visual Studio extension** — sets up the MCP connection for Copilot in Visual Studio 2022/2026 (`.mcp.json` plus a connection test), and indexes `PackagesLocalDirectory` and the XRef database and uploads the result from inside the IDE. See [docs/visual-studio-extension.md](docs/visual-studio-extension.md).
+- **SQLite index** — an incrementally built D365 SDK index; production candidates are built, validated and atomically promoted by Azure automation.
+- **CLI** — `setup`, `doctor`, `index`, `index-status` and `serve`, plus import commands for compiler cross-references, Trace Parser data, best-practice logs and release plans (see the [CLI reference](#cli-reference)).
+- **Hosted mode** — a read-only Azure API serves the active Azure-built index. Developer machines never build, upload or activate production indexes. See [docs/hosted-deployment.md](docs/hosted-deployment.md).
+- **Visual Studio extension** — exposes one loopback MCP gateway for Copilot, proxies the hosted tools, keeps the Azure key in Windows Credential Manager, reports the installed SDK version and adds local workspace tools. See [docs/visual-studio-extension.md](docs/visual-studio-extension.md).
 - **User and operator guide** — [docs/user-and-admin-guide.md](docs/user-and-admin-guide.md) separates developer workflows from server configuration, index maintenance, and access controls.
 
 ## Prerequisites
@@ -73,15 +72,10 @@ Configuration comes from environment variables (a `.env` file in the working dir
 | `MCP_HOST` | _(all interfaces)_ | Interface to bind, e.g. `127.0.0.1` to keep a local server off the network. |
 | `MCP_API_KEYS` | _(empty)_ | Named API keys for HTTP authentication: `name=key,name=key` (commas or newlines), each key **at least 32 characters**. Only the name is logged, and a session can only be used with the key that opened it. |
 | `MCP_API_KEY` | _(empty)_ | Single legacy key, reported under the name `default`. The HTTP transport needs at least one key from either variable; stdio needs none. |
-| `D365_PACKAGES_DIR` | _(empty)_ | Path to `PackagesLocalDirectory`. Required by `index`, `doctor` and `D365_INDEX_ON_START=1`; a server that serves a published index does not need it. |
+| `D365_PACKAGES_DIR` | _(empty)_ | Path to `PackagesLocalDirectory`. Required by `index`, `index-status` and local `doctor`; the hosted API receives an Azure-built database instead. |
+| `D365_APP_VERSION` | _(empty)_ | Four-part D365 application version of this host's `PackagesLocalDirectory`, e.g. `10.0.2645.136`. Only needed when the packages path does not name the version — Unified Developer Experience paths (`…\Dynamics365\<version>\PackagesLocalDirectory`) are detected automatically. See [SDK version warnings](#sdk-version-warnings). |
 | `D365_INDEX_DB_PATH` | `./d365_index.db` | Location of the SQLite index file. |
-| `D365_INDEX_URL` | _(empty)_ | Manifest URL of a published index (see [Hosted mode](#hosted-mode-azure-app-service)). When set, `serve` downloads and verifies the index before listening; `D365_INDEX_ON_START=1` and write tools are refused. |
-| `D365_INDEX_UPLOAD_KEYS` | _(empty)_ | Comma-separated key names from `MCP_API_KEYS` that may upload a new index to `/admin/index/uploads` (HTTP transport only). Empty disables uploads. See [docs/visual-studio-extension.md](docs/visual-studio-extension.md#server-setup). |
-| `D365_INDEX_UPLOAD_MAX_GB` | `50` | Largest upload package accepted. |
-| `D365_INDEX_UPLOAD_MAX_CHUNK_MB` | `256` | Largest upload chunk accepted. |
-| `D365_INDEX_UPLOAD_DIR` | `<index folder>/.uploads` | Upload scratch folder; must be on the same volume as `D365_INDEX_DB_PATH`. |
-| `D365_INDEX_PUBLISH_URL` | _(empty)_ | Blob container URL with a create+write SAS. Verified uploads are published there (`<version>/` then `latest/manifest.json`) so a restarted hosted server serves them again. |
-| `D365_INDEX_ON_START` | `0` | Set to `1` to run a background indexing pass on startup (also enables indexing on start in stdio mode). |
+| `D365_ARTIFACT_STORE_PATH` | _(empty)_ | Hosted mode only: immutable artifact-store root containing `deployment-pointers.json` and `bundles/`. Startup validates the active bundle into `D365_INDEX_DB_PATH` and opens the local snapshot read-only. |
 | `D365_INDEX_STORE_RAW_XML` | `1` | Set to `0` to keep full AOT XML out of `ax_objects.raw_xml` and reduce DB size. `get_element_xml` then reads the source XML from `file_path` on demand, so source files must remain available. |
 | `D365_ENABLE_WRITE_TOOLS` | `0` | Set to `1` to register metadata preview/apply tools. Model writes also require `D365_WRITABLE_MODELS`. |
 | `D365_CUSTOM_METADATA_DIR` | _(empty)_ | The **Folder for your own custom metadata** configured in the Finance Operations Visual Studio extension. Required for write tools. |
@@ -107,8 +101,6 @@ CLI commands also read these; the server ignores them:
 | --- | --- | --- |
 | `D365_XREF_CONNECTION_STRING` | `index-xref` | SQL Server connection string for `DynamicsXrefDB` (read-only login). |
 | `D365_TRACE_CONNECTION_STRING` | `index-trace` | SQL Server connection string for the Trace Parser `AxTrace` database. |
-| `D365_MCP_SERVER_URL` | `upload-index`, `index-status` | Base URL of the server to upload to or compare with. |
-| `D365_MCP_API_KEY` | `upload-index`, `index-status` | API key sent to that server. |
 
 Prefer these variables to `--connection-string` on the command line, where other users of the
 machine can see it in the process list.
@@ -148,42 +140,12 @@ Commands:
       --products <a,b>       Product names to keep (default: Finance, SCM, Commerce, Project Operations, HR, cross-app)
       --all-products         Keep every product in the feed
       --db-path <path>       SQLite index path (default D365_INDEX_DB_PATH or ./d365_index.db)
-  doctor [--hosted]         Validate environment and report issues (exit 1 on failure)
-                            --hosted checks a published-index deployment (implied by D365_INDEX_URL)
-  pull-index                Download the published index instead of building one
-      --url <manifest-url>  Manifest URL (default D365_INDEX_URL), e.g. .../indexes/latest/manifest.json?<sas>
-      --db-path <path>      Destination SQLite path (default D365_INDEX_DB_PATH or ./d365_index.db)
-      --force               Re-download even when the local copy already matches
-  publish-index             Package the index for the hosted server: <out>/<version>/ + <out>/latest/manifest.json
-      --db-path <path>      Source SQLite index (default D365_INDEX_DB_PATH or ./d365_index.db)
-      --out <dir>           Output directory (default ./publish)
-      --db-url-prefix <url> Absolute URL prefix for the database blob (default: relative ../<version>/)
-      --allow-no-raw-xml    Publish even if raw XML was not stored (get_element_xml then fails on the host)
-      --integrity-check     Run PRAGMA integrity_check instead of quick_check (slow on large indexes)
-      --relative-paths      Rewrite indexed file paths relative to D365_PACKAGES_DIR in the published copy
-      --compression <c>     gzip (default), brotli or none
-      --level <l>           fastest, balanced (default) or smallest
-  upload-index              Package the local index and upload it to a running server (API key in D365_MCP_API_KEY)
-      --server <url>        Server base URL (default D365_MCP_SERVER_URL), e.g. https://<app>.azurewebsites.net
-      --db-path <path>      Source SQLite index (default D365_INDEX_DB_PATH or ./d365_index.db)
-      --compression <c>     gzip (default), brotli or none
-      --level <l>           fastest, balanced (default) or smallest
-      --chunk-size <MiB>    Chunk size in MiB (default 32); each chunk carries its own SHA-256
-      --no-chunks           Send the whole package in a single request
-      --parallel <n>        Chunks in flight at once (default 4)
-      --retries <n>         Retries per chunk (default 4)
-      --relative-paths      Rewrite indexed file paths relative to D365_PACKAGES_DIR in the uploaded copy
-      --allow-no-raw-xml    Upload even if raw XML was not stored
-      --integrity-check     Run PRAGMA integrity_check on the copy instead of quick_check
-      --work-dir <dir>      Where to stage the package (default: the system temp folder)
-      --progress json       One JSON event per line on stdout (used by the Visual Studio extension)
-      --stop-on-stdin-close Cancel cleanly (abort the server upload, delete the staging copy) when stdin closes
-  index-status              Report whether the served index is current for the local packages folder
+  doctor                    Validate environment and report issues (exit 1 on failure)
+  index-status              Report whether the local index is current for the packages folder
       --packages-dir <dir>  PackagesLocalDirectory to check (default D365_PACKAGES_DIR)
       --db-path <path>      Local SQLite index (default D365_INDEX_DB_PATH or ./d365_index.db)
-      --server <url>        Compare with the index this server serves (API key in D365_MCP_API_KEY)
       --list <n>            Changed files to list (default 20)
-      --json                Print one JSON object on stdout (used by the Visual Studio extension)
+      --json                Print one JSON object on stdout
   digest --file <path>      Validate a draft knowledge base article and add it if it passes
       --slug <slug>          Filename slug override (kebab-case, no number prefix)
       --dry-run              Validate only, do not write the file
@@ -221,10 +183,10 @@ The digester checks:
 - **Structure** — a `# Title` and a `## Pattern` section are required (missing either always
   blocks the write, even with `--force`); `When to use this`, `Gotchas / notes`, and `Related`
   are recommended.
-- **Sanitization** — flags likely un-redacted emails, connection-string secrets, API keys, and
-  company-prefixed object names (e.g. `ABCSalesTable`); these always block the write, even with
-  `--force`. IPv4-shaped strings (which also match D365 version numbers like `10.0.39.0`) are
-  reported as a warning only, since they're not reliably distinguishable from a real IP.
+- **Sanitization** — likely un-redacted emails, connection-string secrets, and API keys always
+  block the write, even with `--force`. Probable company-prefixed object names (for example,
+  `ABCSalesTable`) and IPv4-shaped strings (which also match D365 version numbers such as
+  `10.0.39.0`) are warnings only because those heuristics are prone to false positives.
 - **Duplicates** — compares the draft against every existing topic with bag-of-words similarity;
   near-duplicates (≥80% similar) block by default and require `--force` to add anyway.
 - **Feasibility** — cross-checks PascalCase identifiers mentioned in the draft against the
@@ -308,30 +270,24 @@ Microsoft setup references:
 - [Create and build Finance Operations projects](https://learn.microsoft.com/training/modules/customize-visual-studio-finance-operations/2-projects)
 - [Manage metadata with Application Explorer](https://learn.microsoft.com/training/modules/customize-visual-studio-finance-operations/3-metadata)
 
-## Hosted mode (Azure App Service)
+## Hosted mode
 
-Instead of every developer indexing locally, one scheduled job builds the index and the server
-runs on Azure, read-only, with no `PackagesLocalDirectory` of its own:
+Production indexing is an Azure responsibility:
 
-1. On a machine that has `PackagesLocalDirectory`, `scripts/publish-index.ps1` runs `index`,
-   `index-xref` (against a `DynamicsXrefDB` copy in Azure SQL) and `publish-index`, uploads the
-   result to Blob Storage and restarts the web app.
-2. The web app starts with `D365_INDEX_URL` pointing at `.../indexes/latest/manifest.json?<sas>`.
-   `serve` fetches the manifest, streams the gzip database through a SHA-256 check into local disk,
-   verifies it, and only then listens. A stale local copy is served when the download fails.
-3. Developers add the HTTPS endpoint and their `X-API-Key` to Visual Studio 2022/2026, Claude Code
-   or VS Code. Nothing is installed locally.
+1. A scheduled Azure worker authenticates noninteractively, downloads the D365 SDK assets, builds a
+   sibling SQLite candidate, imports approved supporting data and validates its schema, integrity,
+   counts and SDK version.
+2. The worker emits an immutable validated bundle and atomically updates one revisioned
+   active/previous pointer document. Rollback swaps pointers; it never mutates a bundle.
+3. The read-only MCP API validates the selected bundle, copies SQLite to local disk, atomically
+   activates that local snapshot and opens it read-only. It has no upload route.
+4. The Visual Studio extension connects Copilot to a local loopback gateway. The gateway forwards
+   hosted tools with the installed SDK version and adds local workspace capabilities.
 
-`doctor --hosted` validates such a deployment (manifest reachable, keys configured, write tools off,
-`TRUST_PROXY_HOPS=1` behind the App Service front end). The Bicep template, runbook and client
-configuration live in [`infra/`](infra/README.md) and [`docs/hosted-deployment.md`](docs/hosted-deployment.md);
-`Dockerfile` builds the image. Write tools stay disabled on the host; generators still return code
-and XML for Visual Studio to apply.
-
-A hosted server can also take an index directly: with `D365_INDEX_UPLOAD_KEYS` set, `upload-index`
-(or the Visual Studio extension's **Index and Upload** window) sends a new index over HTTPS in
-verified chunks. With `D365_INDEX_PUBLISH_URL` set, the server also publishes it to Blob Storage so
-it survives restarts. See [docs/visual-studio-extension.md](docs/visual-studio-extension.md).
+The Azure acquisition worker is intentionally separate from the public API and is the only
+production component allowed to build or promote an index. See
+[`docs/hosted-deployment.md`](docs/hosted-deployment.md) and the guided
+[`Azure resource plan`](docs/azure-resource-guide.md).
 
 ## Transport modes
 
@@ -356,8 +312,6 @@ Health check (no auth): `GET http://localhost:3000/health` → `{ "status": "ok"
 | --- | --- | --- |
 | `GET /health` | none | Liveness and server version. |
 | `POST`, `GET`, `DELETE /mcp` | API key | MCP Streamable HTTP endpoint. |
-| `GET /admin/index` | API key | The index being served and whether the caller's key may upload. |
-| `/admin/index/uploads[/<id>[/chunks/<n>\|/complete]]` | key in `D365_INDEX_UPLOAD_KEYS` | Chunked index upload used by `upload-index` and the Visual Studio extension. |
 
 ### stdio (`MCP_TRANSPORT=stdio`)
 
@@ -379,8 +333,9 @@ For local MCP clients such as Claude Desktop, Claude Code, or VS Code. Logs are 
 }
 ```
 
-In stdio mode no API key is needed, background indexing is skipped unless `D365_INDEX_ON_START=1`, and
-`D365_INDEX_DB_PATH` should be absolute because the client decides the working directory.
+In stdio mode no API key is needed. The server serves the existing SQLite index; build or refresh it
+with the offline `index` command before starting the server. `D365_INDEX_DB_PATH` should be absolute
+because the client decides the working directory.
 
 ## Indexing
 
@@ -391,11 +346,43 @@ In stdio mode no API key is needed, background indexing is skipped unless `D365_
 - **Raw XML storage** — full element XML is stored by default for backward compatibility. Set `D365_INDEX_STORE_RAW_XML=0` to shrink the database; raw XML requests will fall back to reading the original source file from disk.
 - **Search index rebuilds** — FTS indexes are rebuilt only when objects or labels changed during the run.
 - **`--force`** — ignores mtimes and re-parses every file without deleting the database or its independently imported compiler usage snapshot. It is *not* required after upgrading the server. For a corrupt SQLite file, first back it up/move it explicitly; `--force` will not destroy it.
-- **Upgrading an existing index** — schema changes are additive, so an existing `d365_index.db` keeps working; just run `npm run index` again without `--force`. Unchanged AOT objects stay skipped, and any `raw_xml` already stored is preserved even if you set `D365_INDEX_STORE_RAW_XML=0` (the flag only stops writing new raw XML). The first upgraded run re-reads every label file once (indexes older than schema 3 stored labels under different ids), after which labels are skipped like every other file. `index-status` and the Visual Studio **Check Index Freshness** command report an index built by an older schema as out of date.
+- **Upgrading an existing index** — schema changes are additive, so an existing `d365_index.db` keeps working; just run `npm run index` again without `--force`. Unchanged AOT objects stay skipped, and any `raw_xml` already stored is preserved even if you set `D365_INDEX_STORE_RAW_XML=0` (the flag only stops writing new raw XML). The first upgraded run re-reads every label file once (indexes older than schema 3 stored labels under different ids), after which labels are skipped like every other file. `index-status` reports an index built by an older schema as out of date.
 - **Pruning** — entries whose source files no longer exist (deleted or renamed objects) are removed at the end of a full pass, along with their cross-references and labels.
 - **Collisions** — when two files declare the same object name, the collision is counted and reported so duplicate/overlayed metadata is visible rather than silently overwritten.
 
 Index statistics are also available at runtime through the `get_index_stats` tool.
+
+## SDK version warnings
+
+A server answers from one indexed SDK snapshot. When a client's own `PackagesLocalDirectory` is a
+different build, the tools can describe objects, fields, methods and labels that do not exist on the
+client's side, so every session is told which application version it is talking to.
+
+The server records the application version at index time: Unified Developer Experience paths
+(`…\Dynamics365\10.0.2645.136\PackagesLocalDirectory`) name it, and layouts that do not — such as the
+classic `K:\AosService\PackagesLocalDirectory` — take it from `D365_APP_VERSION`. The version travels
+inside the index file, so a downloaded or uploaded index keeps it.
+
+A client declares its own version in one of two ways:
+
+| Transport | How to declare |
+| --- | --- |
+| stdio | `D365_APP_VERSION` in the server's environment (the client and server share a host). |
+| HTTP | The `X-D365-Client-Sdk-Version` request header on `initialize`, e.g. `X-D365-Client-Sdk-Version: 10.0.2645.136`. |
+
+The result is sent as the MCP `instructions` at session start:
+
+| Case | Message |
+| --- | --- |
+| Versions match | States the indexed version; no warning. |
+| Client is an **older build** (`10.0.2541.21` vs `10.0.2645.136`) | **Warning.** Different release waves add and remove objects, so answers may not apply. Also logged server-side. |
+| Client is an older **revision** of the same build | Notice only. Hotfix drift is constant and rarely changes metadata shape. |
+| Client is **newer** than the index | Notice that the index is behind. |
+| Client declared nothing, or the value is unparseable | States the indexed version and how to declare one. |
+
+Nothing is ever blocked: exploring newer metadata while planning an upgrade is a legitimate use.
+Versions must be four-part (`major.minor.build.revision`); a three-part marketing version such as
+`10.0.39` is reported as undeclared rather than guessed at.
 
 ## MCP tools
 
@@ -522,8 +509,8 @@ the previous data. The N+1 (more than 100 calls, under 5 ms average) and slow SQ
 defaults come from the FastTrack Trace Parser Agent (MIT License, Copyright (c) Microsoft
 Corporation), and each tool accepts its own thresholds.
 
-Traces contain user names and SQL text. They stay in the local index: `publish-index` and
-`upload-index` remove every trace table from the copy they produce.
+Traces contain user names and SQL text. They stay in the local index unless the private Azure
+worker explicitly includes the import in a production candidate.
 
 ## Telemetry queries (KQL)
 
@@ -565,7 +552,8 @@ d365-fno-mcp-server index-release-plans --db-path ./d365_index.db
 The feed returns 100 features per page, so a full download reads about 13 pages and takes around a
 minute. Each import replaces the previous one in one transaction; a failed import keeps the old data.
 Without internet access, save the feed JSON elsewhere (one page, an array of pages, or an array of
-features) and import it with `--from-json`. Release plans are public, so `publish-index` keeps them.
+features) and import it with `--from-json`. Release plans are public and may be included in an
+Azure-built production candidate.
 
 `check_feature_impact` is a name-based heuristic: it turns the feature name into AOT prefixes
 (vendor → `Vend`, warehouse → `WHS`, …) or uses the `terms` you pass, and with `packages` lists

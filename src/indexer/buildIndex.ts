@@ -8,6 +8,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { createHash } from 'crypto';
 import { logger } from '../utils/logger.js';
+import { detectAppVersionFromPackagesDir } from './appVersion.js';
 import { VERSION } from '../version.js';
 
 /** Above this share of failed parses the scan is treated as untrustworthy and pruning is skipped. */
@@ -468,8 +469,8 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
 }
 
 /**
- * Records what this run produced so a copy of the index (for example one
- * published to a hosted server) can report its own provenance. The packages
+ * Records what this run produced so a deployed copy of the index can report
+ * its own provenance. The packages
  * directory is stored as a basename plus a short hash: the full path names the
  * build user's profile folder and every reader of the index can see meta.
  */
@@ -484,6 +485,13 @@ function recordBuildMeta(db: Database, packagesDir: string, storeRawXml: boolean
     dbUtils.setMeta(db, dbUtils.META_KEYS.packagesDirBasename, path.basename(resolved));
     dbUtils.setMeta(db, dbUtils.META_KEYS.packagesDirHash, hash);
     dbUtils.setMeta(db, dbUtils.META_KEYS.storeRawXml, storeRawXml ? '1' : '0');
+    // UDE extracts the SDK under a version-named folder, so the path names the
+    // application version. Classic AOS layouts do not, and record nothing.
+    const appVersion = detectAppVersionFromPackagesDir(resolved);
+    if (appVersion) {
+      dbUtils.setMeta(db, dbUtils.META_KEYS.appVersion, appVersion);
+      dbUtils.setMeta(db, dbUtils.META_KEYS.appVersionSource, 'packages-dir');
+    }
     dbUtils.setMeta(db, dbUtils.META_KEYS.indexDurationMs, String(durationMs));
     dbUtils.setMeta(db, dbUtils.META_KEYS.schemaVersion, String(dbUtils.INDEX_SCHEMA_VERSION));
     db.exec('COMMIT');

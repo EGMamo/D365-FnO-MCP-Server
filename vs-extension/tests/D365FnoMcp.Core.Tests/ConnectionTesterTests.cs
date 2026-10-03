@@ -14,8 +14,6 @@ public class ConnectionTesterTests
 
         public bool SseReplies { get; init; }
 
-        public HttpStatusCode AdminStatus { get; init; } = HttpStatusCode.OK;
-
         public List<string> Requests { get; } = new();
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -57,13 +55,6 @@ public class ConnectionTesterTests
                 return new HttpResponseMessage(HttpStatusCode.OK);
             }
 
-            if (path == "/admin/index")
-            {
-                return this.AdminStatus != HttpStatusCode.OK
-                    ? new HttpResponseMessage(this.AdminStatus)
-                    : Json("""{"apiKey":"alice","index":{"source":"upload","builtAt":"2026-09-26T08:00:00.000Z","objects":184320},"upload":{"enabled":true,"allowed":true}}""");
-            }
-
             return new HttpResponseMessage(HttpStatusCode.NotFound);
         }
 
@@ -88,9 +79,6 @@ public class ConnectionTesterTests
 
         Assert.True(report.Succeeded, report.Summary());
         Assert.Equal(3, report.ToolCount);
-        Assert.True(report.CanUpload);
-        Assert.Contains("184,320 objects", report.Summary());
-        Assert.Contains("key 'alice' may upload", report.Summary());
         // The MCP session opened for the test is closed again.
         Assert.Contains(server.Requests, r => r.StartsWith("DELETE /mcp", StringComparison.Ordinal));
     }
@@ -110,15 +98,6 @@ public class ConnectionTesterTests
         ConnectionReport report = await Test(new FakeServer(), "wrong");
         Assert.False(report.Succeeded);
         Assert.Contains("rejected the API key", report.Summary());
-    }
-
-    [Fact]
-    public async Task WarnsWhenTheServerCannotReportItsIndex()
-    {
-        ConnectionReport report = await Test(new FakeServer { AdminStatus = HttpStatusCode.NotFound });
-        Assert.True(report.Succeeded);
-        Assert.Null(report.CanUpload);
-        Assert.Contains("WARN Index", report.Summary());
     }
 
     [Fact]

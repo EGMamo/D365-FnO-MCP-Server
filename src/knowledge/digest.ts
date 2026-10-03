@@ -319,16 +319,37 @@ export function slugify(text: string): string {
   );
 }
 
-/** Finds the next 2+ digit numeric prefix to use, based on existing `NN-*.md` files. */
+const NUMBER_RESERVATION_RE = /^\.digest-(\d+)\.lock$/;
+
+/** Finds the next 2+ digit numeric prefix after existing articles and in-flight reservations. */
 export function nextSlugNumber(kbDir: string): string {
   let max = 0;
   if (fs.existsSync(kbDir)) {
     for (const file of fs.readdirSync(kbDir)) {
-      const match = /^(\d+)-/.exec(file);
+      const match = /^(\d+)-/.exec(file) ?? NUMBER_RESERVATION_RE.exec(file);
       if (match) max = Math.max(max, parseInt(match[1], 10));
     }
   }
   return String(max + 1).padStart(2, '0');
+}
+
+function reserveNextSlugNumber(kbDir: string): { number: string; reservationPath: string } {
+  fs.mkdirSync(kbDir, { recursive: true });
+
+  const MAX_ATTEMPTS = 20;
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    const number = nextSlugNumber(kbDir);
+    const reservationPath = path.join(kbDir, `.digest-${number}.lock`);
+    try {
+      fs.writeFileSync(reservationPath, `${process.pid}\n`, { encoding: 'utf8', flag: 'wx' });
+      return { number, reservationPath };
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code === 'EEXIST') continue;
+      throw err;
+    }
+  }
+
+  throw new Error(`Could not reserve a knowledge-base number after ${MAX_ATTEMPTS} attempts`);
 }
 
 /**
@@ -394,33 +415,37 @@ export function digestKnowledge(options: DigestOptions): DigestReport {
   let slug = '';
   let filePath = '';
   if (written) {
-    // Slug-number allocation + wx-write is a non-atomic check-then-act; retry a bounded number
-    // of times if a concurrent digest call already claimed the number we picked.
-    const MAX_ATTEMPTS = 5;
-    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-      const number = nextSlugNumber(kbDir);
-      const candidateSlug = `${number}-${slugBase}`;
-      const candidatePath = path.join(kbDir, `${candidateSlug}.md`);
-      try {
-        fs.mkdirSync(kbDir, { recursive: true });
-        fs.writeFileSync(candidatePath, content.endsWith('\n') ? content : `${content}\n`, {
-          encoding: 'utf8',
-          flag: 'wx',
-        });
-        slug = candidateSlug;
-        filePath = candidatePath;
-        actuallyWritten = true;
-        break;
-      } catch (err) {
-        const isExist = (err as NodeJS.ErrnoException)?.code === 'EEXIST';
-        if (isExist && attempt < MAX_ATTEMPTS - 1) continue;
-        slug = candidateSlug;
-        filePath = candidatePath;
-        issues.push({
-          level: 'error',
-          message: `Write failed: ${err instanceof Error ? err.message : String(err)}`,
-        });
-        break;
+    let reservationPath = '';
+    try {
+      const reservation = reserveNextSlugNumber(kbDir);
+      reservationPath = reservation.reservationPath;
+      slug = `${reservation.number}-${slugBase}`;
+      filePath = path.join(kbDir, `${slug}.md`);
+      fs.writeFileSync(filePath, content.endsWith('\n') ? content : `${content}\n`, {
+        encoding: 'utf8',
+        flag: 'wx',
+      });
+      actuallyWritten = true;
+    } catch (err) {
+      if (!slug) {
+        const number = nextSlugNumber(kbDir);
+        slug = `${number}-${slugBase}`;
+        filePath = path.join(kbDir, `${slug}.md`);
+      }
+      issues.push({
+        level: 'error',
+        message: `Write failed: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    } finally {
+      if (reservationPath) {
+        try {
+          fs.rmSync(reservationPath, { force: true });
+        } catch (err) {
+          issues.push({
+            level: 'warning',
+            message: `Reservation cleanup failed: ${err instanceof Error ? err.message : String(err)}`,
+          });
+        }
       }
     }
   } else {

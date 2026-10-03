@@ -22,9 +22,6 @@ public sealed class ConnectionReport
     /// <summary>True when the server answered and accepted the key; warnings are allowed.</summary>
     public bool Succeeded => this.Checks.Count > 0 && this.Checks.All(check => check.Status != CheckStatus.Failed);
 
-    /// <summary>Whether the key may upload indexes (null when the server did not say).</summary>
-    public bool? CanUpload { get; set; }
-
     public int? ToolCount { get; set; }
 
     public string Summary()
@@ -47,8 +44,7 @@ public sealed class ConnectionReport
 
 /// <summary>
 /// Checks a server the way an MCP client would use it: the unauthenticated
-/// health endpoint, an MCP initialize + tools/list with the API key, and the
-/// admin endpoint that reports the served index and upload permission.
+/// health endpoint and an MCP initialize + tools/list with the API key.
 /// </summary>
 public sealed class ConnectionTester
 {
@@ -95,7 +91,6 @@ public sealed class ConnectionTester
             return report;
         }
 
-        await this.CheckIndexAsync(baseUrl, apiKey, report, cancellationToken);
         return report;
     }
 
@@ -193,47 +188,6 @@ public sealed class ConnectionTester
                     // The server closes idle sessions itself; a timeout here must not replace the report.
                 }
             }
-        }
-    }
-
-    private async Task CheckIndexAsync(string baseUrl, string apiKey, ConnectionReport report, CancellationToken cancellationToken)
-    {
-        try
-        {
-            using var request = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}/admin/index");
-            request.Headers.Add("X-API-Key", apiKey);
-            using HttpResponseMessage response = await this.http.SendAsync(request, cancellationToken);
-            if (response.StatusCode == HttpStatusCode.NotFound)
-            {
-                report.Checks.Add(new("Index", CheckStatus.Warning, "This server version does not report its index or accept uploads; update it."));
-                return;
-            }
-
-            if (!response.IsSuccessStatusCode)
-            {
-                report.Checks.Add(new("Index", CheckStatus.Warning, $"/admin/index answered HTTP {(int)response.StatusCode}"));
-                return;
-            }
-
-            JsonNode? body = JsonNode.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
-            JsonNode? index = body?["index"];
-            string source = (string?)index?["source"] ?? "unknown";
-            string builtAt = (string?)index?["builtAt"] ?? "unknown";
-            long objects = index?["objects"]?.GetValue<long>() ?? 0;
-            report.Checks.Add(new("Index", CheckStatus.Passed, $"{objects:N0} objects, built {builtAt} ({source})"));
-
-            bool enabled = body?["upload"]?["enabled"]?.GetValue<bool>() ?? false;
-            bool allowed = body?["upload"]?["allowed"]?.GetValue<bool>() ?? false;
-            report.CanUpload = enabled && allowed;
-            string keyName = (string?)body?["apiKey"] ?? "this key";
-            report.Checks.Add(new(
-                "Upload",
-                CheckStatus.Passed,
-                !enabled ? "uploads are disabled on the server" : allowed ? $"key '{keyName}' may upload indexes" : $"key '{keyName}' may not upload (not in D365_INDEX_UPLOAD_KEYS)"));
-        }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or InvalidOperationException or FormatException)
-        {
-            report.Checks.Add(new("Index", CheckStatus.Warning, ex.Message));
         }
     }
 

@@ -6,9 +6,8 @@ using Microsoft.VisualStudio.Extensibility.Commands;
 namespace D365FnoMcp.Extension;
 
 /// <summary>
-/// D365 F&amp;O MCP for Visual Studio: connects Copilot (and any other MCP client
-/// in Visual Studio) to the D365 F&amp;O MCP server, and builds and uploads a new
-/// metadata index to it.
+/// D365 F&amp;O MCP for Visual Studio: exposes one workspace-aware MCP gateway
+/// that combines the hosted D365 metadata service with guarded local tools.
 /// </summary>
 [VisualStudioContribution]
 internal sealed class ExtensionEntrypoint : Microsoft.VisualStudio.Extensibility.Extension
@@ -20,7 +19,7 @@ internal sealed class ExtensionEntrypoint : Microsoft.VisualStudio.Extensibility
             version: this.ExtensionAssemblyVersion,
             publisherName: "D365 FnO MCP Server contributors",
             displayName: "D365 F&O MCP",
-            description: "Connects Visual Studio's MCP clients to a D365 F&O MCP server, and indexes PackagesLocalDirectory and the XRef database and uploads the index to it."),
+            description: "Connects Visual Studio's MCP clients to hosted D365 metadata and guarded local workspace tools through one MCP gateway."),
     };
 
     [VisualStudioContribution]
@@ -31,10 +30,6 @@ internal sealed class ExtensionEntrypoint : Microsoft.VisualStudio.Extensibility
         [
             MenuChild.Command<ConfigureConnectionCommand>(),
             MenuChild.Command<TestConnectionCommand>(),
-            MenuChild.Separator,
-            MenuChild.Command<IndexAndUploadCommand>(),
-            MenuChild.Command<CheckIndexFreshnessCommand>(),
-            MenuChild.Command<UpdateIndexCommand>(),
         ],
     };
 

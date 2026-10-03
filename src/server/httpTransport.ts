@@ -5,9 +5,19 @@ import rateLimit from 'express-rate-limit';
 import { createHash, randomUUID, timingSafeEqual } from 'crypto';
 import type { Server } from 'http';
 import { logger } from '../utils/logger.js';
+import { readDeclaredClientVersion } from '../indexer/appVersion.js';
 import type { ApiKeyEntry } from './apiKeys.js';
 
-export type ServerFactory = () => McpServer;
+export type ServerFactory = (context?: SessionContext) => McpServer;
+
+/** Per-session facts the transport knows and the server needs at `initialize`. */
+export interface SessionContext {
+  /**
+   * D365 application version the client declared for its own
+   * PackagesLocalDirectory, used to warn about SDK drift at session start.
+   */
+  clientSdkVersion?: string | null;
+}
 
 export interface HttpTransportOptions {
   port: number;
@@ -24,25 +34,13 @@ export interface HttpTransportOptions {
   maxConcurrentSessions?: number;
   sessionIdleTimeoutMs?: number;
   sessionSweepIntervalMs?: number;
-  /** Routes mounted at `/admin` after authentication (index info and uploads). */
+  /** Routes mounted at `/admin` after authentication. */
   admin?: AdminRoutes;
 }
 
 export interface AdminRoutes {
   router: Router;
-  /**
-   * Requests per rate-limit window for `/admin/index/uploads`. Chunked uploads
-   * send many requests, so they have their own, larger budget.
-   */
-  uploadRateLimitMaxRequests?: number;
-  /**
-   * Node's per-request timeout for the listener (0 disables it). A single-request
-   * upload of a large index takes longer than Node's 5-minute default.
-   */
-  requestTimeoutMs?: number;
 }
-
-const UPLOAD_PATH = '/admin/index/uploads';
 
 interface JsonRpcErrorBody {
   jsonrpc: '2.0';
@@ -135,7 +133,7 @@ export function createHttpApp(createMcpServer: ServerFactory, options: HttpTrans
       max: options.rateLimitMaxRequests,
       standardHeaders: true,
       legacyHeaders: false,
-      skip: (req) => req.path === '/health' || (options.admin !== undefined && req.path.startsWith(UPLOAD_PATH)),
+      skip: (req) => req.path === '/health',
       // Key on the client IP alone. The rate limiter runs before authentication,
       // so a client-controlled credential header must not be part of the bucket key;
       // a per-key throttle would belong behind verified auth.
@@ -147,24 +145,6 @@ export function createHttpApp(createMcpServer: ServerFactory, options: HttpTrans
     }),
   );
 
-  if (options.admin) {
-    // Still keyed on the IP and still ahead of authentication, so upload
-    // paths are no way around brute-force throttling; only the budget differs.
-    app.use(
-      UPLOAD_PATH,
-      rateLimit({
-        windowMs: options.rateLimitWindowMs,
-        max: options.admin.uploadRateLimitMaxRequests ?? options.rateLimitMaxRequests * 20,
-        standardHeaders: true,
-        legacyHeaders: false,
-        keyGenerator: (req: Request) => clientIp(req),
-        handler: (req, res) => {
-          logger.warn('Upload rate limit exceeded', { ip: clientIp(req), path: req.path });
-          res.status(429).json({ error: 'Too many upload requests' });
-        },
-      }),
-    );
-  }
 
   // ── Health check (unauthenticated) ────────────────────────────────────────
   app.get('/health', (_req: Request, res: Response) => {
@@ -186,9 +166,7 @@ export function createHttpApp(createMcpServer: ServerFactory, options: HttpTrans
     next();
   });
 
-  // ── Admin routes (index info, uploads) ────────────────────────────────────
-  // Mounted before the JSON-RPC checks and the MCP response timeout: upload
-  // bodies are raw bytes and a chunk may take longer than a tool call.
+  // ── Admin routes ──────────────────────────────────────────────────────────
   if (options.admin) app.use('/admin', options.admin.router);
 
   // ── JSON-RPC envelope validation ──────────────────────────────────────────
@@ -337,7 +315,7 @@ export function createHttpApp(createMcpServer: ServerFactory, options: HttpTrans
         },
       });
 
-      const mcpServer = createMcpServer();
+      const mcpServer = createMcpServer({ clientSdkVersion: readDeclaredClientVersion(req.headers) });
       const entry: SessionEntry = {
         transport,
         server: mcpServer,
@@ -442,7 +420,6 @@ export function startHttpServer(
     ? app.listen(options.port, options.host, onListening)
     : app.listen(options.port, onListening);
 
-  if (options.admin) httpServer.requestTimeout = options.admin.requestTimeoutMs ?? 0;
 
   httpServer.on('close', () => {
     clearInterval(app.locals.sessionSweep as NodeJS.Timeout);

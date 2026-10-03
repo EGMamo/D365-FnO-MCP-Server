@@ -32,7 +32,6 @@ function renderEnv(values: {
     `MCP_API_KEY=${values.apiKey}`,
     `D365_PACKAGES_DIR=${values.packagesDir}`,
     `D365_INDEX_DB_PATH=${values.dbPath}`,
-    'D365_INDEX_ON_START=0',
     '',
   ].join('\n');
 }

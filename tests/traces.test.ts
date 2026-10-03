@@ -13,7 +13,7 @@ import {
 } from '../src/indexer/traceSql.js';
 import { registerTraceTools, resolveTraceMethod } from '../src/tools/traces.js';
 import { defaultTraceSource, indexTraceCommand } from '../src/cli/index-trace-command.js';
-import { snapshotIndex } from '../src/indexer/publishIndex.js';
+import { snapshotIndex } from '../src/indexer/indexSnapshot.js';
 import type { ToolResult } from './helpers/toolHarness.js';
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));

@@ -88,42 +88,12 @@ Commands:
       --products <a,b>       Product names to keep (default: Finance, SCM, Commerce, Project Operations, HR, cross-app)
       --all-products         Keep every product in the feed
       --db-path <path>       SQLite index path (default D365_INDEX_DB_PATH or ./d365_index.db)
-  doctor [--hosted]         Validate environment and report issues (exit 1 on failure)
-                            --hosted checks a published-index deployment (implied by D365_INDEX_URL)
-  pull-index                Download the published index instead of building one
-      --url <manifest-url>  Manifest URL (default D365_INDEX_URL), e.g. .../indexes/latest/manifest.json?<sas>
-      --db-path <path>      Destination SQLite path (default D365_INDEX_DB_PATH or ./d365_index.db)
-      --force               Re-download even when the local copy already matches
-  publish-index             Package the index for the hosted server: <out>/<version>/ + <out>/latest/manifest.json
-      --db-path <path>      Source SQLite index (default D365_INDEX_DB_PATH or ./d365_index.db)
-      --out <dir>           Output directory (default ./publish)
-      --db-url-prefix <url> Absolute URL prefix for the database blob (default: relative ../<version>/)
-      --allow-no-raw-xml    Publish even if raw XML was not stored (get_element_xml then fails on the host)
-      --integrity-check     Run PRAGMA integrity_check instead of quick_check (slow on large indexes)
-      --relative-paths      Rewrite indexed file paths relative to D365_PACKAGES_DIR in the published copy
-      --compression <c>     gzip (default), brotli or none
-      --level <l>           fastest, balanced (default) or smallest
-  upload-index              Package the local index and upload it to a running server (API key in D365_MCP_API_KEY)
-      --server <url>        Server base URL (default D365_MCP_SERVER_URL), e.g. https://<app>.azurewebsites.net
-      --db-path <path>      Source SQLite index (default D365_INDEX_DB_PATH or ./d365_index.db)
-      --compression <c>     gzip (default), brotli or none
-      --level <l>           fastest, balanced (default) or smallest
-      --chunk-size <MiB>    Chunk size in MiB (default 32); each chunk carries its own SHA-256
-      --no-chunks           Send the whole package in a single request
-      --parallel <n>        Chunks in flight at once (default 4)
-      --retries <n>         Retries per chunk (default 4)
-      --relative-paths      Rewrite indexed file paths relative to D365_PACKAGES_DIR in the uploaded copy
-      --allow-no-raw-xml    Upload even if raw XML was not stored
-      --integrity-check     Run PRAGMA integrity_check on the copy instead of quick_check
-      --work-dir <dir>      Where to stage the package (default: the system temp folder)
-      --progress json       One JSON event per line on stdout (used by the Visual Studio extension)
-      --stop-on-stdin-close Cancel cleanly (abort the server upload, delete the staging copy) when stdin closes
-  index-status              Report whether the served index is current for the local packages folder
+  doctor                    Validate environment and report issues (exit 1 on failure)
+  index-status              Report whether the local index is current for the packages folder
       --packages-dir <dir>  PackagesLocalDirectory to check (default D365_PACKAGES_DIR)
       --db-path <path>      Local SQLite index (default D365_INDEX_DB_PATH or ./d365_index.db)
-      --server <url>        Compare with the index this server serves (API key in D365_MCP_API_KEY)
       --list <n>            Changed files to list (default 20)
-      --json                Print one JSON object on stdout (used by the Visual Studio extension)
+      --json                Print one JSON object on stdout
   digest --file <path>      Validate a draft knowledge base article and add it if it passes
       --slug <slug>          Filename slug override (kebab-case, no number prefix)
       --dry-run              Validate only, do not write the file

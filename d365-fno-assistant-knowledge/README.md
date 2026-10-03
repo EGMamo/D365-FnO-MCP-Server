@@ -45,6 +45,7 @@ concerns one topic.
 | `resources/21-exposing-fno-to-agents.md` | OData, virtual tables, the ERP MCP server; OData readiness, natural keys, read-only agent roles, OData actions |
 | `resources/22-performance-antipatterns.md` | Trace Parser workflow, N+1 and slow SQL, set-based operations, index checks, caching by table group |
 | `resources/23-batch-and-telemetry.md` | SysOperation vs RunBaseBatch, pack/unpack, BatchRetryable and idempotency, batch telemetry events and KQL |
+| `resources/24-form-patterns-ui-layout.md` | Web client logical/physical split, selecting form patterns and subpatterns, ArrangeMethod/ColumnsMode/sizing, pattern property ownership |
 
 ## Provenance
 
