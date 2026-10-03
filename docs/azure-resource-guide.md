@@ -316,10 +316,12 @@ powershell -ExecutionPolicy Bypass -File .\scripts\verify-windows-xpp.ps1 -Execu
 
 The Dev Tools client-metadata endpoint used by the UDE tooling is not a
 documented public API. For the proof only, `scripts/acquire-ude-assets.ps1`
-resolves `finopsvsix22`, `finopsvsix`, and `crossreference` with a dedicated
-Dataverse application identity. It validates that every returned URL is an
-HTTPS Azure Blob URL and records no bearer token or SAS URL. Resolve metadata
-before downloading the multi-gigabyte assets:
+resolves the current `finopsvsix22` and `crossreference` assets with a
+dedicated Dataverse application identity. The legacy `finopsvsix` resource can
+be requested explicitly for older builds but is unavailable for the verified
+VS2022 environment. The script validates that every returned URL is an HTTPS
+Azure Blob URL and records no bearer token or SAS URL. Resolve metadata before
+downloading the multi-gigabyte assets:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\acquire-ude-assets.ps1 `
@@ -336,7 +338,8 @@ client-metadata response and its short-lived SAS URL out of logs and reports.
 When AzCopy is present on `PATH`, the script uses its parallel Blob transfer
 engine and keeps its logs and job plans in a temporary directory that is
 removed after each asset. Otherwise it uses the built-in single-stream
-downloader.
+downloader. Existing files are reused only when their exact length matches the
+current service metadata; the script then hashes them into the combined proof.
 
 Do not attempt to substitute a Linux container merely because `pac auth`
 works there. Only reconsider Linux if Microsoft documents a supported X++

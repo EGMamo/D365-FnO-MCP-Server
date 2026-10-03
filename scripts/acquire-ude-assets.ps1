@@ -17,7 +17,7 @@ param(
     [string]$AppVersion,
 
     [ValidateSet("finopsvsix22", "finopsvsix", "crossreference")]
-    [string[]]$AssetNames = @("finopsvsix22", "finopsvsix", "crossreference"),
+    [string[]]$AssetNames = @("finopsvsix22", "crossreference"),
 
     [string]$OutputDirectory = "$env:USERPROFILE\Documents\D365SdkProof\UdeAssets",
 
@@ -150,6 +150,7 @@ function Get-AssetMetadata {
                 ContentLength = $response.Content.Headers.ContentLength
                 ContentType = [string]$response.Content.Headers.ContentType
                 Downloaded = $false
+                Reused = $false
                 Path = $null
                 Sha256 = $null
             }
@@ -180,16 +181,39 @@ function Save-Asset {
         [string]$AzCopyExecutable
     )
 
-    if (-not [string]::IsNullOrWhiteSpace($AzCopyExecutable)) {
-        $metadata = Get-AssetMetadata -Client $Client -AssetUri $AssetUri -AssetName $AssetName
-        $assetDirectory = Join-Path $DestinationRoot $AssetName
-        New-Item -ItemType Directory -Force -Path $assetDirectory | Out-Null
+    $metadata = Get-AssetMetadata -Client $Client -AssetUri $AssetUri -AssetName $AssetName
+    if ($null -eq $metadata.ContentLength -or $metadata.ContentLength -le 0) {
+        throw "The service did not report a valid content length for '$AssetName'."
+    }
 
-        $destinationPath = Join-Path $assetDirectory $metadata.FileName
-        if (Test-Path -LiteralPath $destinationPath) {
-            throw "Destination already exists for '$AssetName': $destinationPath"
+    $assetDirectory = Join-Path $DestinationRoot $AssetName
+    New-Item -ItemType Directory -Force -Path $assetDirectory | Out-Null
+    $destinationPath = Join-Path $assetDirectory $metadata.FileName
+
+    if (Test-Path -LiteralPath $destinationPath -PathType Leaf) {
+        $existingLength = (Get-Item -LiteralPath $destinationPath).Length
+        if ($existingLength -ne $metadata.ContentLength) {
+            throw "Existing file length mismatch for '$AssetName': expected " +
+                "$($metadata.ContentLength), got $existingLength."
         }
 
+        Write-Host "Validating existing $AssetName asset..."
+        $existingHash = (
+            Get-FileHash -LiteralPath $destinationPath -Algorithm SHA256
+        ).Hash.ToLowerInvariant()
+        return [pscustomobject]@{
+            ResourceName = $AssetName
+            FileName = $metadata.FileName
+            ContentLength = $existingLength
+            ContentType = $metadata.ContentType
+            Downloaded = $true
+            Reused = $true
+            Path = $destinationPath
+            Sha256 = $existingHash
+        }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($AzCopyExecutable)) {
         $stagingDirectory = Join-Path $assetDirectory ".azcopy-$PID"
         New-Item -ItemType Directory -Path $stagingDirectory | Out-Null
         $previousLogLocation = $env:AZCOPY_LOG_LOCATION
@@ -241,6 +265,7 @@ function Save-Asset {
             ContentLength = $actualLength
             ContentType = $metadata.ContentType
             Downloaded = $true
+            Reused = $false
             Path = $destinationPath
             Sha256 = $hash
         }
@@ -252,17 +277,8 @@ function Save-Asset {
     ).GetAwaiter().GetResult()
     try {
         $response.EnsureSuccessStatusCode() | Out-Null
-        $fileName = Get-ResponseFileName -Response $response -AssetUri $AssetUri `
-            -AssetName $AssetName
-        $assetDirectory = Join-Path $DestinationRoot $AssetName
-        New-Item -ItemType Directory -Force -Path $assetDirectory | Out-Null
-
-        $destinationPath = Join-Path $assetDirectory $fileName
-        if (Test-Path -LiteralPath $destinationPath) {
-            throw "Destination already exists for '$AssetName': $destinationPath"
-        }
         $partialPath = "$destinationPath.partial-$PID"
-        $expectedLength = $response.Content.Headers.ContentLength
+        $expectedLength = $metadata.ContentLength
         $inputStream = $response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
         $outputStream = [IO.File]::Open(
             $partialPath,
@@ -309,10 +325,11 @@ function Save-Asset {
 
         return [pscustomobject]@{
             ResourceName = $AssetName
-            FileName = $fileName
+            FileName = $metadata.FileName
             ContentLength = $actualLength
-            ContentType = [string]$response.Content.Headers.ContentType
+            ContentType = $metadata.ContentType
             Downloaded = $true
+            Reused = $false
             Path = $destinationPath
             Sha256 = $hash
         }
