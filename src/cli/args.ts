@@ -62,6 +62,9 @@ export const HELP_TEXT = `d365-fno-mcp-server <command> [options]
 
 Commands:
   serve                     Start the MCP server (default command)
+  acquire                   Run one private acquisition/build/validation/publication cycle
+      --config <file>       Worker JSON config (default D365_ACQUISITION_CONFIG)
+      --run-id <id>         Stable run identifier for restart idempotency (default UTC timestamp)
   index [--force]           Run a foreground indexing pass
       --packages-dir <dir>  PackagesLocalDirectory to index (default D365_PACKAGES_DIR)
       --db-path <path>      SQLite index path (default D365_INDEX_DB_PATH or ./d365_index.db)
