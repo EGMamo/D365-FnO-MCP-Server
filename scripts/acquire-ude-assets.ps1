@@ -64,8 +64,12 @@ function Get-AssetUri {
     $metadataUri = "https://developertools.powerplatform.microsoft.com/api/clientmetadata/" +
         "$([Uri]::EscapeDataString($AssetName))?version=$([Uri]::EscapeDataString($versionPath))"
     $headers = @{
+        Accept = "application/json"
         Authorization = "Bearer $AccessToken"
+        Correlationid = [guid]::NewGuid().ToString()
         dataverseEnvironmentUri = $EnvironmentUri
+        "OData-MaxVersion" = "4.0"
+        "OData-Version" = "4.0"
     }
 
     $response = Invoke-RestMethod -Method Get -Uri $metadataUri -Headers $headers
@@ -256,13 +260,13 @@ if ($null -eq $ClientSecret) {
 $plainSecret = Get-PlainTextSecret -SecureValue $ClientSecret
 try {
     $tokenResponse = Invoke-RestMethod -Method Post `
-        -Uri "https://login.microsoftonline.com/$TenantId/oauth2/v2.0/token" `
+        -Uri "https://login.microsoftonline.com/$TenantId/oauth2/token" `
         -ContentType "application/x-www-form-urlencoded" `
         -Body @{
             client_id = $ApplicationId
             client_secret = $plainSecret
             grant_type = "client_credentials"
-            scope = "$($environmentUri.TrimEnd('/'))/.default"
+            resource = $environmentUri
         }
 }
 finally {
