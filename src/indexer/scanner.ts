@@ -1,5 +1,4 @@
 import { glob } from 'glob';
-import fs from 'fs/promises';
 
 export interface ScannedFile {
   type: string;
@@ -16,17 +15,13 @@ export async function* scanPackagesDir(dir: string): AsyncGenerator<ScannedFile>
   const files = await glob([
     `${searchDir}/**/Ax{Table,Class,Enum,Form,Query,DataEntityView,Edt,SecurityRole,SecurityRoleExtension,SecurityDuty,SecurityDutyExtension,SecurityPrivilege,MenuItemDisplay,MenuItemAction,MenuItemOutput}/*.xml`,
     `${searchDir}/**/AxLabelFile/LabelResources/*/*.label.txt`
-  ], { windowsPathsNoEscape: true });
+  ], { windowsPathsNoEscape: true, stat: true, withFileTypes: true });
 
-  for (const filePath of files) {
-    let mtime: number;
-    try {
-      mtime = (await fs.stat(filePath)).mtimeMs;
-    } catch (err) {
-      // Deleted between the directory listing and now (a branch switch or a deployment in progress).
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
-      throw err;
-    }
+  for (const file of files) {
+    const filePath = file.fullpath();
+    const mtime = file.mtimeMs;
+    // A match can disappear while glob is walking a packages tree being updated.
+    if (mtime === undefined) continue;
     
     // Extract info from path
     // Format: .../PackagesLocalDirectory/PackageName/ModelName/Type/Name.xml
