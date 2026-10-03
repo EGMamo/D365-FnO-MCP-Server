@@ -44,6 +44,77 @@ endpoint.
    local disk and atomically activates that local file. Existing sessions may finish on the prior
    read-only handle.
 
+## Scheduled acquisition worker
+
+Run one private worker cycle with:
+
+```powershell
+d365-fno-mcp-server acquire --config C:\worker\acquisition.json --run-id scheduled-2026-10-04
+```
+
+The scheduler supplies a stable, unique run ID. Reusing an ID after success is a no-op; reusing one
+after failure removes the incomplete work directory and starts a numbered retry. Each run writes
+`<runsRoot>/<runId>/status.json` with acquire, build, bundle, validate, publish and cleanup phase
+states. The status document is the validation evidence: it includes the immutable bundle ID,
+individual validation checks and the promoted pointer revision. The run's `work` directory is
+removed after success, failure, cancellation or timeout unless `retainWorkDirectory` is explicitly
+enabled for a secured diagnostic environment.
+
+The JSON configuration has this shape:
+
+```json
+{
+  "runsRoot": "C:\\worker\\runs",
+  "sourceDatabase": "candidate\\d365_index.db",
+  "bundleOptionsFile": "bundle-options.json",
+  "timeoutMs": 7200000,
+  "acquire": [
+    {
+      "name": "acquire-ude-assets",
+      "executable": "pwsh.exe",
+      "args": ["-NoProfile", "-File", "C:\\worker\\scripts\\acquire-ude-assets.ps1", "-OutputDirectory", "${WORK_DIR}\\assets"]
+    }
+  ],
+  "build": [
+    {
+      "name": "build-index",
+      "executable": "d365-fno-mcp-server.cmd",
+      "args": ["index", "--force", "--packages-dir", "${WORK_DIR}\\assets\\PackagesLocalDirectory", "--db-path", "${SOURCE_DB}"]
+    },
+    {
+      "name": "import-xref",
+      "executable": "d365-fno-mcp-server.cmd",
+      "args": ["index-xref", "--db-path", "${SOURCE_DB}"]
+    }
+  ],
+  "policy": {
+    "serverVersion": "0.1.0",
+    "minimumIndexSchemaVersion": 3,
+    "maximumIndexSchemaVersion": 3,
+    "requiredCapabilities": ["codeMetadata", "dataModelMetadata", "securityGraphs"]
+  },
+  "destination": {
+    "type": "azure-blob",
+    "accountUrl": "https://example.blob.core.windows.net",
+    "containerName": "d365-artifacts"
+  }
+}
+```
+
+Command placeholders are limited to `${RUN_DIR}`, `${WORK_DIR}`, `${SOURCE_DB}` and
+`${BUNDLE_OPTIONS_FILE}`. The acquisition/build process must write the source database and a
+`CreateArtifactBundleOptions` JSON document at the configured relative paths. Use command
+environment variables for credentials; never put secrets, connection strings, SAS URLs or tokens
+in arguments or the bundle-options document. The worker discards child output and reports only
+step names and exit status, so command output cannot leak credentials into worker logs.
+
+`destination.type` may be `local` with `storeRoot`, or `azure-blob` with `accountUrl`,
+`containerName`, and optional `managedIdentityClientId`. Azure publication obtains the existing
+acquisition lease, uploads and verifies the immutable bundle, then conditionally promotes the
+pointer. Local publication performs the same validate-before-pointer-update sequence. Cancellation
+(`SIGINT`/`SIGTERM`) and the run timeout stop the current child process, skip publication, preserve
+the active pointer and still execute cleanup.
+
 The repository retains reusable `indexSnapshot` and `indexActivation` primitives for candidate
 validation and same-volume atomic replacement. It also implements the local versioned
 [Azure artifact contract](azure-artifact-contract.md), producer/consumer and pointer semantics. The

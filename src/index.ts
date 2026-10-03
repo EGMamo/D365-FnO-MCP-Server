@@ -43,6 +43,15 @@ export async function run(argv: string[]): Promise<CliResult> {
         }),
       };
     }
+    case 'acquire': {
+      const { acquireCommand } = await import('./cli/acquire-command.js');
+      return {
+        code: await acquireCommand({
+          config: flagString(flags, 'config'),
+          runId: flagString(flags, 'run-id'),
+        }),
+      };
+    }
     case 'index-trace': {
       const { indexTraceCommand } = await import('./cli/index-trace-command.js');
       const maxRows = flagString(flags, 'max-rows');

@@ -30,6 +30,7 @@
     "serve": "node dist/src/index.js serve",
     "doctor": "node dist/src/index.js doctor",
     "index": "node dist/src/index.js index",
+    "acquire": "node dist/src/index.js acquire",
     "index-xref": "node dist/src/index.js index-xref",
     "digest": "node dist/src/index.js digest",
     "lint": "eslint src/ tests/",
