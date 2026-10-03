@@ -133,6 +133,19 @@ export async function run(argv: string[]): Promise<CliResult> {
       });
       return { code };
     }
+    case 'artifact': {
+      const { artifactCommand } = await import('./cli/artifact-command.js');
+      return {
+        code: await artifactCommand({
+          action: positionals[0],
+          bundleDir: flagString(flags, 'bundle-dir'),
+          bundleId: flagString(flags, 'bundle-id'),
+          expectedRevision: flagString(flags, 'expected-revision'),
+          json: flagBool(flags, 'json'),
+          verify: flagBool(flags, 'verify'),
+        }),
+      };
+    }
     default:
       console.error(`Unknown command: ${command}\n`);
       console.error(HELP_TEXT);

@@ -89,5 +89,20 @@ Visual Studio workspace tools.
 | Diagnose mismatch | Compare the worker-recorded application version with `X-D365-Client-Sdk-Version` |
 | Diagnose candidate failure | Inspect worker logs and validation report; do not alter the active database |
 
+The operator CLI can publish and control the same immutable Blob artifact store without
+upload keys or SAS URLs:
+
+```bash
+d365-fno-mcp-server artifact publish --bundle-dir ./artifact-store/bundles/<bundle-hash>
+d365-fno-mcp-server artifact status --verify --json
+d365-fno-mcp-server artifact promote --bundle-id sha256:<bundle-hash> --expected-revision <revision>
+d365-fno-mcp-server artifact rollback --expected-revision <revision>
+```
+
+`promote` and `rollback` require the pointer revision read by the operator. A stale revision
+fails closed through both the revision check and Azure Blob conditional ETag write. The CLI uses
+`DefaultAzureCredential`; set `D365_ARTIFACT_MANAGED_IDENTITY_CLIENT_ID` only when a user-assigned
+managed identity is required.
+
 The Azure resource template must be revised together with the acquisition worker. Do not deploy the
 legacy SAS/manifest topology from an older checkout.

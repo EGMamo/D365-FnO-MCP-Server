@@ -15,6 +15,7 @@ A Model Context Protocol (MCP) server that gives AI coding assistants first-clas
 - **Dual MCP transport** — Streamable HTTP (API-key protected) for remote/shared use, and stdio for local clients such as Claude Desktop, Claude Code, or VS Code.
 - **SQLite index** — an incrementally built D365 SDK index; production candidates are built, validated and atomically promoted by Azure automation.
 - **CLI** — `setup`, `doctor`, `index`, `index-status` and `serve`, plus import commands for compiler cross-references, Trace Parser data, best-practice logs and release plans (see the [CLI reference](#cli-reference)).
+- **Artifact operations** — `artifact publish`, `artifact status`, `artifact promote` and `artifact rollback` provide idempotent Azure Blob publication and optimistic-concurrency deployment control.
 - **Hosted mode** — a read-only Azure API serves the active Azure-built index. Developer machines never build, upload or activate production indexes. See [docs/hosted-deployment.md](docs/hosted-deployment.md).
 - **Visual Studio extension** — exposes one loopback MCP gateway for Copilot, proxies the hosted tools, keeps the Azure key in Windows Credential Manager, reports the installed SDK version and adds local workspace tools. See [docs/visual-studio-extension.md](docs/visual-studio-extension.md).
 - **User and operator guide** — [docs/user-and-admin-guide.md](docs/user-and-admin-guide.md) separates developer workflows from server configuration, index maintenance, and access controls.
@@ -107,6 +108,26 @@ machine can see it in the process list.
 
 See `.env.example` for a starting point.
 
+### Artifact operator workflow
+
+Artifact commands use `DefaultAzureCredential`; in Azure automation, prefer a managed identity
+and grant it only Blob Data Contributor access to the artifact container. Configure
+`D365_ARTIFACT_ACCOUNT_URL`, `D365_ARTIFACT_CONTAINER`, and the `D365_ARTIFACT_*` compatibility
+settings shown in `.env.example`. No SAS token or account key is accepted or logged.
+
+```bash
+d365-fno-mcp-server artifact publish --bundle-dir ./artifact-store/bundles/<sha256>
+d365-fno-mcp-server artifact status --verify --json
+d365-fno-mcp-server artifact promote \
+  --bundle-id sha256:<64 lowercase hex characters> \
+  --expected-revision 3 --json
+d365-fno-mcp-server artifact rollback --expected-revision 4 --json
+```
+
+Promotion and rollback fail when the expected pointer revision is stale. Promotion first
+materializes and validates every remote bundle file, while publication uses create-only blob
+conditions and verifies each upload, so retries are safe and incomplete uploads cannot be promoted.
+
 ## CLI reference
 
 ```
@@ -158,6 +179,15 @@ Commands:
       --db-path <path>      SQLite index path (default ./d365_index.db)
       --transport <mode>    http or stdio (default http)
       --force               Replace an existing .env
+  artifact publish         Validate and idempotently upload a local bundle
+      --bundle-dir <dir>   Validated local artifact bundle directory
+  artifact status          Inspect remote deployment pointers
+      --verify              Validate active and previous remote bundles
+  artifact promote         Validate and promote a remote bundle
+      --bundle-id <id>     Immutable sha256 bundle ID
+      --expected-revision <n> Required pointer revision
+  artifact rollback        Validate and activate the previous bundle
+      --expected-revision <n> Required pointer revision
 
 Options:
   -h, --help                Show help
