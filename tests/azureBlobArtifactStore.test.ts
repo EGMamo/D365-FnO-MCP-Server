@@ -345,6 +345,39 @@ describe('Azure Blob artifact adapter', () => {
     expect((await store.readPointers()).pointers.active).toBeNull();
   });
 
+  it('rejects an incomplete remote upload before promotion', async () => {
+    const bundle = createBundle(FIRST_TIME);
+    const validationBlob =
+      `bundles/${bundle.manifest.bundleId.slice('sha256:'.length)}/validation-report.json`;
+
+    await store.withAcquisitionLease(async (writer) => {
+      await writer.uploadBundle(bundle.directory, policy);
+      container.blobs.delete(validationBlob);
+      await expect(writer.promote(bundle.manifest.bundleId, 0, policy, FIRST_TIME)).rejects.toThrow(
+        /404/
+      );
+    });
+
+    expect((await store.readPointers()).pointers.active).toBeNull();
+  });
+
+  it('rejects stale pointer revisions before promotion or rollback', async () => {
+    const first = createBundle(FIRST_TIME);
+    const second = createBundle(SECOND_TIME);
+
+    await store.withAcquisitionLease(async (writer) => {
+      await writer.uploadBundle(first.directory, policy);
+      await writer.uploadBundle(second.directory, policy);
+      await writer.promote(first.manifest.bundleId, 0, policy, FIRST_TIME);
+      await expect(writer.promote(second.manifest.bundleId, 0, policy, SECOND_TIME)).rejects.toThrow(
+        /expected 0, current 1/
+      );
+      await expect(writer.rollback(0, policy, SECOND_TIME)).rejects.toThrow(/expected 0, current 1/);
+    });
+
+    expect((await store.readPointers()).pointers.active?.bundleId).toBe(first.manifest.bundleId);
+  });
+
   it('serializes writers with the acquisition lease and releases it after failures', async () => {
     let releaseFirst!: () => void;
     const holdFirst = new Promise<void>((resolve) => {

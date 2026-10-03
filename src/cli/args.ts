@@ -106,6 +106,16 @@ Commands:
       --db-path <path>      SQLite index path (default ./d365_index.db)
       --transport <mode>    http or stdio (default http)
       --force               Replace an existing .env
+  artifact publish         Validate and idempotently upload a local bundle
+      --bundle-dir <dir>   Validated local artifact bundle directory
+  artifact status          Inspect remote deployment pointers (use --verify to validate bundles)
+      --verify              Materialize and validate active/previous bundles
+  artifact promote         Validate and promote a remotely complete bundle
+      --bundle-id <id>     Immutable sha256 bundle ID
+      --expected-revision <n> Required pointer revision for optimistic concurrency
+  artifact rollback        Validate and activate the previous bundle
+      --expected-revision <n> Required pointer revision for optimistic concurrency
+  artifact commands accept --json and use D365_ARTIFACT_* configuration.
 
 Options:
   -h, --help                Show help
