@@ -6,7 +6,9 @@ import { importXrefSnapshot } from '../src/cli/index-xref-command.js';
 import { openDb } from '../src/indexer/db.js';
 import { findUsageRefs, getUsageSnapshotStatus, usageSnapshotVersion } from '../src/indexer/xrefUsage.js';
 import { seedLegacyUsageRefs } from './helpers/usageRefs.js';
-import { xrefPageQuery, type XrefSqlClient, type XrefTableSchema } from '../src/indexer/xrefSql.js';
+import {
+  xrefPageQuery, xrefStreamQuery, type XrefSqlClient, type XrefTableSchema,
+} from '../src/indexer/xrefSql.js';
 
 let root: string;
 let dbPath: string;
@@ -145,6 +147,16 @@ describe('atomic xref import', () => {
 });
 
 describe('SQL Server query contract', () => {
+  it('streams a keyless References heap without OFFSET pagination', () => {
+    const sql = xrefStreamQuery({ ...references, keys: [] }, names);
+    expect(sql).toContain('FROM [dbo].[References] r');
+    expect(sql).toContain('LEFT JOIN [dbo].[Names]');
+    expect(sql).toContain('AS __source_path');
+    expect(sql).toContain('AS __target_path');
+    expect(sql).not.toContain('ORDER BY');
+    expect(sql).not.toContain('OFFSET');
+  });
+
   it('closes table identifiers, resolves names in SQL and uses the actual unique key', () => {
     const sql = xrefPageQuery(references, names);
     expect(sql).toContain('FROM [dbo].[References] r');
@@ -155,6 +167,9 @@ describe('SQL Server query contract', () => {
   });
 
   it('rejects guessed schemas and unknown tables before replacement', () => {
+    expect(() => xrefStreamQuery({ ...references, name: 'Other' }, names)).toThrow('Unsupported xref table');
+    expect(() => xrefStreamQuery(references, { ...names, keys: [] })).toThrow('must be unique');
+    expect(() => xrefStreamQuery(references)).toThrow('requires dbo.Names');
     expect(() => xrefPageQuery({ ...references, name: 'Other' }, names)).toThrow('Unsupported xref table');
     expect(() => xrefPageQuery({ ...references, keys: [] }, names)).toThrow('unique key');
     expect(() => xrefPageQuery(references, { ...names, keys: [] })).toThrow('must be unique');

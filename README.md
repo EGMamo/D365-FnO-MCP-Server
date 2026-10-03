@@ -451,10 +451,11 @@ Driver 17 or 18 for SQL Server. The connection string is then passed to ODBC, wi
 `Driver={ODBC Driver 17 for SQL Server}` added when it names none. `index-trace` works the same way.
 Keep TLS certificate verification enabled on remote connections.
 
-The importer probes `dbo` columns and unique keys before reading. Modern `References`/`Names`
-tables are joined in SQL and read in bounded pages; `SysXRef*References` variants are accepted only
-when they expose verifiable `SourcePath`/`TargetPath` columns and a unique ordering key. Unrecognized
-schemas fail explicitly, rather than importing guessed or partially resolved rows.
+The importer probes `dbo` columns and uniqueness constraints before reading. Modern
+`References`/`Names` tables are joined in SQL and consumed through one backpressured stream, so the
+`References` heap does not need a synthetic unique paging key. `SysXRef*References` variants are
+accepted only when they expose verifiable `SourcePath`/`TargetPath` columns. Unrecognized schemas
+fail explicitly, rather than importing guessed or partially resolved rows.
 
 Snapshot isolation must be enabled by the database administrator. If unavailable, the explicit
 `--allow-source-locks` option permits a serializable read transaction; this can block compiler writes
@@ -466,9 +467,9 @@ unresolved references, cancellation, or a competing import leave the previous co
 available. An empty source is rejected unless `--allow-empty` is supplied. `--store-raw` retains the
 original SQL rows for diagnosis; it is off by default to avoid unnecessary database growth.
 
-SQL identifiers come from allowlisted tables and inspected columns/keys, and paging values are
-parameterized. The driver is loaded only by this command, so indexing and serving do not require
-SQL Server. Refresh the snapshot after relevant compiler cross-reference updates.
+SQL identifiers come from allowlisted tables and inspected columns. The driver is loaded only by
+this command, so indexing and serving do not require SQL Server. Refresh the snapshot after relevant
+compiler cross-reference updates.
 
 The `find_usages` MCP tool searches these compiler-derived rows by target object and optional method.
 Its results may include source/target methods, reference kind, line/column, and the source table.

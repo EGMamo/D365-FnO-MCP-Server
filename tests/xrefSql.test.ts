@@ -1,3 +1,4 @@
+import { Readable } from 'node:stream';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMssqlClient } from '../src/indexer/xrefSql.js';
 
@@ -5,7 +6,6 @@ const state = vi.hoisted(() => ({
   snapshotEnabled: true,
   failOnPage: false,
   queries: [] as string[],
-  parameters: [] as { name: string; type: string; value: number }[],
   connect: vi.fn(),
   close: vi.fn(),
   rollback: vi.fn(),
@@ -27,15 +27,17 @@ vi.mock('mssql', () => ({
       on() {}
     },
     Request: class {
-      input(name: string, type: string, value: number) { state.parameters.push({ name, type, value }); return this; }
+      readable?: Readable;
+      toReadableStream() {
+        this.readable = new Readable({ objectMode: true, read() {} });
+        return this.readable;
+      }
       cancel() {}
       async query(text: string) {
         state.queries.push(text);
         if (text.includes('sys.databases')) return { recordset: [{ state: state.snapshotEnabled ? 1 : 0 }] };
         if (text.includes('sys.indexes')) return {
           recordset: [
-            { table_name: 'References', index_id: 1, column_name: 'SourceId' },
-            { table_name: 'References', index_id: 1, column_name: 'TargetId' },
             { table_name: 'Names', index_id: 1, column_name: 'Id' },
           ],
         };
@@ -49,8 +51,16 @@ vi.mock('mssql', () => ({
           ],
         };
         if (text.includes('COUNT_BIG')) return { recordset: [{ n: '1' }] };
-        if (state.failOnPage) throw new Error('read failed');
-        return { recordset: [{ __source_path: '/Classes/A', __target_path: '/Classes/B' }] };
+        if (state.failOnPage) {
+          const error = new Error('read failed');
+          queueMicrotask(() => this.readable?.destroy(error));
+          throw error;
+        }
+        queueMicrotask(() => {
+          this.readable?.push({ __source_path: '/Classes/A', __target_path: '/Classes/B' });
+          this.readable?.push(null);
+        });
+        return { recordset: [] };
       }
     },
   },
@@ -61,11 +71,10 @@ beforeEach(() => {
   state.snapshotEnabled = true;
   state.failOnPage = false;
   state.queries = [];
-  state.parameters = [];
 });
 
 describe('mssql source lifecycle and schema probing', () => {
-  it('uses snapshot isolation and server-side name joins with parameterized pages', async () => {
+  it('uses snapshot isolation and one server-side joined stream for a keyless heap', async () => {
     const client = await createMssqlClient('test-configuration');
     expect(client.source).toMatchObject({ consistency: 'snapshot', expectedRows: 1 });
     const batches = [];
@@ -74,10 +83,8 @@ describe('mssql source lifecycle and schema probing', () => {
     expect(state.begin).toHaveBeenCalledWith(5);
     expect(state.queries.at(-1)).toContain('FROM [dbo].[References] r LEFT JOIN');
     expect(state.queries.some((query) => /^SELECT \* FROM.*Names/.test(query))).toBe(false);
-    expect(state.parameters).toEqual([
-      { name: 'offset', type: 'bigint', value: 0 },
-      { name: 'limit', type: 'int', value: 5000 },
-    ]);
+    expect(state.queries.at(-1)).not.toContain('ORDER BY');
+    expect(state.queries.at(-1)).not.toContain('OFFSET');
     await client.close();
     expect(state.rollback).toHaveBeenCalledTimes(1);
     expect(state.close).toHaveBeenCalledTimes(1);

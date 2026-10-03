@@ -33,14 +33,10 @@ function column(table: XrefTableSchema, name: string): string {
   return actual;
 }
 
-/** Only schemas we can map and page deterministically may replace a usage snapshot. */
-export function xrefPageQuery(table: XrefTableSchema, names?: XrefTableSchema): string {
+function xrefSelect(table: XrefTableSchema, names?: XrefTableSchema): { projection: string; joins: string } {
   if (!XREF_TABLES.some((name) => name === table.name)) {
     throw new Error(`Unsupported xref table: ${table.name}`);
   }
-  const key = table.keys.find((candidate) => candidate.length > 0 &&
-    candidate.every((name) => table.columns.includes(name)));
-  if (!key) throw new Error(`Unsupported xref schema: ${table.name} needs an unfiltered unique key for paging.`);
 
   let projection = 'r.*';
   let joins = '';
@@ -59,6 +55,22 @@ export function xrefPageQuery(table: XrefTableSchema, names?: XrefTableSchema): 
     projection += `, r.${quote(column(table, 'SourcePath'))} AS __source_path,
       r.${quote(column(table, 'TargetPath'))} AS __target_path`;
   }
+  return { projection, joins };
+}
+
+/** Builds a single-pass query; streaming does not require a unique paging key. */
+export function xrefStreamQuery(table: XrefTableSchema, names?: XrefTableSchema): string {
+  const { projection, joins } = xrefSelect(table, names);
+  return `SELECT ${projection} FROM [dbo].${quote(table.name)} r${joins}`;
+}
+
+/** Only schemas we can map and page deterministically may use the legacy paging query. */
+export function xrefPageQuery(table: XrefTableSchema, names?: XrefTableSchema): string {
+  const { projection, joins } = xrefSelect(table, names);
+  const key = table.keys.find((candidate) => candidate.length > 0 &&
+    candidate.every((name) => table.columns.includes(name)));
+  if (!key) throw new Error(`Unsupported xref schema: ${table.name} needs an unfiltered unique key for paging.`);
+
   return `SELECT ${projection} FROM [dbo].${quote(table.name)} r${joins}
     ORDER BY ${key.map((name) => `r.${quote(name)}`).join(', ')}
     OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY`;
@@ -138,13 +150,9 @@ export async function createMssqlClient(
     }
   }
 
-  async function query<T>(text: string, parameters?: { offset: number; limit: number }): Promise<T[]> {
+  async function query<T>(text: string): Promise<T[]> {
     options.signal?.throwIfAborted();
     const request = transaction ? new sql.Request(transaction) : new sql.Request(pool);
-    if (parameters) {
-      request.input('offset', sql.BigInt, parameters.offset);
-      request.input('limit', sql.Int, parameters.limit);
-    }
     const cancel = () => request.cancel();
     options.signal?.addEventListener('abort', cancel, { once: true });
     try {
@@ -168,6 +176,7 @@ export async function createMssqlClient(
     transaction.on('rollback', () => { active = false; });
     await transaction.begin(canSnapshot ? sql.ISOLATION_LEVEL.SNAPSHOT : sql.ISOLATION_LEVEL.SERIALIZABLE);
     active = true;
+    const sourceTransaction = transaction;
 
     const columns = await query<{ table_name: string; column_name: string }>(`
       SELECT t.name AS table_name, c.name AS column_name
@@ -201,7 +210,7 @@ export async function createMssqlClient(
       XREF_TABLES.filter((name) => available.has(name))).map(schema);
     if (tables.length === 0) throw new Error('No supported xref tables found in dbo. Existing SQLite snapshot was not changed.');
     const names = schema('Names');
-    const queries = tables.map((table) => ({ table, sql: xrefPageQuery(table, names) }));
+    const queries = tables.map((table) => ({ table, sql: xrefStreamQuery(table, names) }));
     let expectedRows = 0;
     for (const table of tables) {
       const rows = await query<{ n: number | string }>(`SELECT COUNT_BIG(*) AS n FROM [dbo].${quote(table.name)}`);
@@ -214,11 +223,33 @@ export async function createMssqlClient(
       source: { consistency, tables, expectedRows },
       async *batches() {
         for (const { table, sql: text } of queries) {
-          for (let offset = 0; ; offset += 5000) {
-            const rows = await query<Record<string, unknown>>(text, { offset, limit: 5000 });
-            if (rows.length === 0) break;
-            yield { table: table.name, rows };
-            if (rows.length < 5000) break;
+          options.signal?.throwIfAborted();
+          const request = new sql.Request(sourceTransaction);
+          const stream = request.toReadableStream({ highWaterMark: 5000 });
+          const cancel = () => request.cancel();
+          options.signal?.addEventListener('abort', cancel, { once: true });
+          const completion = request.query<Record<string, unknown>>(text);
+          void completion.catch(() => undefined);
+          let completed = false;
+          try {
+            let rows: Record<string, unknown>[] = [];
+            for await (const row of stream as AsyncIterable<Record<string, unknown>>) {
+              options.signal?.throwIfAborted();
+              rows.push(row);
+              if (rows.length === 5000) {
+                yield { table: table.name, rows };
+                rows = [];
+              }
+            }
+            await completion;
+            completed = true;
+            if (rows.length > 0) yield { table: table.name, rows };
+          } finally {
+            options.signal?.removeEventListener('abort', cancel);
+            if (!completed) {
+              request.cancel();
+              await completion.catch(() => undefined);
+            }
           }
         }
       },
