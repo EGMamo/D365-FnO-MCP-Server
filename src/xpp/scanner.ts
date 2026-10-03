@@ -213,6 +213,8 @@ export interface SelectInfo {
   buffer: string;
 }
 
+const MAX_SELECT_HEAD_LENGTH = 2_048;
+
 /** Parses each `select` statement head: qualifiers, field list presence and target buffer. */
 export function findSelects(code: string): SelectInfo[] {
   const out: SelectInfo[] = [];
@@ -222,7 +224,7 @@ export function findSelects(code: string): SelectInfo[] {
     const before = code.slice(Math.max(0, m.index - 20), m.index);
     // `update_recordset`/`delete_from` have no `select`; `join` targets are handled by the outer select.
     const isWhile = /\bwhile\s*$/i.test(before);
-    const rest = code.slice(m.index + 6);
+    const rest = code.slice(m.index + 6, m.index + 6 + MAX_SELECT_HEAD_LENGTH);
     const stop = rest.search(/\b(where|join|exists|notexists|outer|order|group|index)\b|[{;)]/i);
     const head = (stop === -1 ? rest : rest.slice(0, stop)).replace(/\([^)]*\)/g, ' ');
     const words = head.match(/[A-Za-z_]\w*/g) ?? [];

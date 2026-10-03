@@ -20,10 +20,10 @@ describe('loadConfig', () => {
     ]);
   });
 
-  it('needs no API key for stdio', () => {
-    const config = loadConfig({ MCP_TRANSPORT: 'stdio' });
-    expect(config.apiKeys).toEqual([]);
-    expect(config.packagesDir).toBe('');
+  it('rejects the removed stdio transport', () => {
+    expect(issuesOf({ MCP_TRANSPORT: 'stdio' })).toEqual([
+      expect.stringMatching(/Invalid input/),
+    ]);
   });
 
   it('parses MCP_API_KEYS and the legacy MCP_API_KEY into named entries', () => {
@@ -32,7 +32,7 @@ describe('loadConfig', () => {
   });
 
   it('reports malformed keys in either transport', () => {
-    expect(issuesOf({ MCP_TRANSPORT: 'stdio', MCP_API_KEY: 'short' })).toEqual([
+    expect(issuesOf({ MCP_TRANSPORT: 'http', MCP_API_KEY: 'short' })).toEqual([
       expect.stringMatching(/MCP_API_KEYS: MCP_API_KEY: key for 'default' is 5 characters/),
     ]);
   });
@@ -48,7 +48,8 @@ describe('loadConfig', () => {
 
   it('makes hosted artifact mode read-only', () => {
     expect(issuesOf({
-      MCP_TRANSPORT: 'stdio',
+      MCP_TRANSPORT: 'http',
+      MCP_API_KEY: 'a'.repeat(32),
       D365_ARTIFACT_STORE_PATH: '/artifacts',
       D365_ENABLE_WRITE_TOOLS: '1',
       D365_CUSTOM_METADATA_DIR: '/metadata',
@@ -57,7 +58,8 @@ describe('loadConfig', () => {
     ]);
 
     const config = loadConfig({
-      MCP_TRANSPORT: 'stdio',
+      MCP_TRANSPORT: 'http',
+      MCP_API_KEY: 'a'.repeat(32),
       D365_ARTIFACT_STORE_PATH: ' /artifacts ',
     });
     expect(config.artifactStorePath).toBe('/artifacts');

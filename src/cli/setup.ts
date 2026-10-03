@@ -44,13 +44,11 @@ async function promptValues(defaults: { dbPath: string; transport: string }) {
       await rl.question('MCP API key (>=32 chars, blank to generate): ')
     ).trim();
     const dbPathAnswer = (await rl.question(`Index DB path [${defaults.dbPath}]: `)).trim();
-    const transportAnswer = (await rl.question(`Transport (http|stdio) [${defaults.transport}]: `)).trim();
-
     return {
       packagesDir,
       apiKey: apiKeyAnswer || generateApiKey(),
       dbPath: dbPathAnswer || defaults.dbPath,
-      transport: transportAnswer || defaults.transport,
+      transport: 'http',
     };
   } finally {
     rl.close();
@@ -94,8 +92,8 @@ export async function setupCommand(options: SetupOptions): Promise<number> {
     console.error('API key must be at least 32 characters.');
     return 1;
   }
-  if (values.transport !== 'http' && values.transport !== 'stdio') {
-    console.error(`Unsupported transport "${values.transport}" (expected http or stdio).`);
+  if (values.transport !== 'http') {
+    console.error(`Unsupported transport "${values.transport}" (only http is supported).`);
     return 1;
   }
   if (!fs.existsSync(values.packagesDir)) {

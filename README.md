@@ -12,7 +12,7 @@ A Model Context Protocol (MCP) server that gives AI coding assistants first-clas
 - **Release plan awareness** (optional): imports Microsoft release plans for Finance, SCM, Commerce, Project Operations and HR, searches them offline, and maps a feature to the indexed objects and your packages' customizations that it may affect.
 - **Label lookup** — resolve label IDs and full-text search label files across packages.
 - **X++ generators with grounding** — Chain of Command extensions, table/class extensions, plain classes, RunBase batch jobs, and SysOperation classes. Generators validate their inputs against the index and fail closed rather than emit code for objects that do not exist.
-- **Dual MCP transport** — Streamable HTTP (API-key protected) for remote/shared use, and stdio for local clients such as Claude Desktop, Claude Code, or VS Code.
+- **Hosted MCP transport** — Streamable HTTP protected by named API keys for remote/shared use.
 - **SQLite index** — an incrementally built D365 SDK index; production candidates are built, validated and atomically promoted by Azure automation.
 - **CLI** — `setup`, `doctor`, `index`, `index-status` and `serve`, plus import commands for compiler cross-references, Trace Parser data, best-practice logs and release plans (see the [CLI reference](#cli-reference)).
 - **Artifact operations** — `artifact publish`, `artifact status`, `artifact promote` and `artifact rollback` provide idempotent Azure Blob publication and optimistic-concurrency deployment control.
@@ -68,11 +68,11 @@ Configuration comes from environment variables (a `.env` file in the working dir
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `MCP_TRANSPORT` | `http` | Transport to serve on: `http` or `stdio`. |
+| `MCP_TRANSPORT` | `http` | Must remain `http`; the server exposes Streamable HTTP only. |
 | `MCP_PORT` | `3000` | HTTP listen port (HTTP transport only). |
 | `MCP_HOST` | _(all interfaces)_ | Interface to bind, e.g. `127.0.0.1` to keep a local server off the network. |
 | `MCP_API_KEYS` | _(empty)_ | Named API keys for HTTP authentication: `name=key,name=key` (commas or newlines), each key **at least 32 characters**. Only the name is logged, and a session can only be used with the key that opened it. |
-| `MCP_API_KEY` | _(empty)_ | Single legacy key, reported under the name `default`. The HTTP transport needs at least one key from either variable; stdio needs none. |
+| `MCP_API_KEY` | _(empty)_ | Single legacy key, reported under the name `default`. At least one key is required. |
 | `D365_PACKAGES_DIR` | _(empty)_ | Path to `PackagesLocalDirectory`. Required by `index`, `index-status` and local `doctor`; the hosted API receives an Azure-built database instead. |
 | `D365_APP_VERSION` | _(empty)_ | Four-part D365 application version of this host's `PackagesLocalDirectory`, e.g. `10.0.2645.136`. Only needed when the packages path does not name the version — Unified Developer Experience paths (`…\Dynamics365\<version>\PackagesLocalDirectory`) are detected automatically. See [SDK version warnings](#sdk-version-warnings). |
 | `D365_INDEX_DB_PATH` | `./d365_index.db` | Location of the SQLite index file. |
@@ -177,7 +177,7 @@ Commands:
       --packages-dir <dir>  D365 PackagesLocalDirectory path
       --api-key <key>       MCP API key (>= 32 chars; generated when omitted)
       --db-path <path>      SQLite index path (default ./d365_index.db)
-      --transport <mode>    http or stdio (default http)
+      --transport <mode>    http only (default http)
       --force               Replace an existing .env
   artifact publish         Validate and idempotently upload a local bundle
       --bundle-dir <dir>   Validated local artifact bundle directory
@@ -343,30 +343,6 @@ Health check (no auth): `GET http://localhost:3000/health` → `{ "status": "ok"
 | `GET /health` | none | Liveness and server version. |
 | `POST`, `GET`, `DELETE /mcp` | API key | MCP Streamable HTTP endpoint. |
 
-### stdio (`MCP_TRANSPORT=stdio`)
-
-For local MCP clients such as Claude Desktop, Claude Code, or VS Code. Logs are written to stderr so stdout stays reserved for JSON-RPC framing.
-
-```json
-{
-  "mcpServers": {
-    "d365-fno": {
-      "command": "d365-fno-mcp-server",
-      "args": ["serve"],
-      "env": {
-        "MCP_TRANSPORT": "stdio",
-        "D365_PACKAGES_DIR": "K:/AosService/PackagesLocalDirectory",
-        "D365_INDEX_DB_PATH": "C:/d365-mcp/d365_index.db"
-      }
-    }
-  }
-}
-```
-
-In stdio mode no API key is needed. The server serves the existing SQLite index; build or refresh it
-with the offline `index` command before starting the server. `D365_INDEX_DB_PATH` should be absolute
-because the client decides the working directory.
-
 ## Indexing
 
 `d365-fno-mcp-server index` scans `D365_PACKAGES_DIR` and populates the SQLite index.
@@ -397,7 +373,6 @@ A client declares its own version in one of two ways:
 
 | Transport | How to declare |
 | --- | --- |
-| stdio | `D365_APP_VERSION` in the server's environment (the client and server share a host). |
 | HTTP | The `X-D365-Client-Sdk-Version` request header on `initialize`, e.g. `X-D365-Client-Sdk-Version: 10.0.2645.136`. |
 
 The result is sent as the MCP `instructions` at session start:
@@ -623,7 +598,7 @@ docker build -t d365-fno-mcp-server:local .   # hosted image (needs Docker with 
 ```
 
 Build before running the full suite: compiled-server integration tests launch `dist/src/index.js`
-and use real SDK clients over stdio and HTTP. They cover tool discovery, resources/prompts, disabled
+and use real SDK clients over HTTP. They cover tool discovery, resources/prompts, disabled
 writes, startup indexing flags, and hosted mode (a published index served from a local HTTP fixture
 with named API keys). `.worktrees` are excluded from discovery. CI runs Node 24 on Linux and Windows
 and builds and smoke-tests the container image; these checks do not substitute for a live Finance
@@ -657,7 +632,6 @@ database. Set `D365_RUN_SQL_INTEGRATION=1` and `D365_XREF_CONNECTION_STRING`, th
 | Startup fails with `documentation placeholder` | The key is still the sample value from an old `.env.example`. Generate a real one. |
 | HTTP `403 Session belongs to a different API key` | A client reused another key's `mcp-session-id`. Reconnect so the client starts a new session. |
 | HTTP `404 Session not found` | The session expired (`SESSION_IDLE_TIMEOUT_MS`) or the server restarted or activated an uploaded index. Reconnect. |
-| `get_index_stats` reports 0 objects in a stdio client | The client started the server in another working directory. Make `D365_INDEX_DB_PATH` absolute and run `index` against that path. |
 | `index` logs `Pruning skipped` and deleted objects stay in the index | The scan overlapped less than half of the objects already indexed, usually a wrong or partly mounted `D365_PACKAGES_DIR`. Fix the path; set `D365_BYPASS_PRUNE_GUARD=1` only for an intended large deletion. |
 | `index-xref` says the `mssql` or `msnodesqlv8` driver is missing | Install it where the CLI is installed: `npm install mssql`, and for Windows sign-in also `npm install msnodesqlv8` plus ODBC Driver 17 or 18. |
 | `get_element_xml` cannot read the source file | The index was built with `D365_INDEX_STORE_RAW_XML=0` and the file has moved, or the index is served from a published copy. Rebuild with raw XML stored. |

@@ -17,13 +17,12 @@ const configSchema = z.object({
   MCP_API_KEY: z.string().default(''),
   /** `name=key` entries separated by commas or newlines. */
   MCP_API_KEYS: z.string().default(''),
-  MCP_TRANSPORT: z.enum(['http', 'stdio']).default('http'),
+  MCP_TRANSPORT: z.literal('http').default('http'),
   /** Required only for the offline `index` command. */
   D365_PACKAGES_DIR: z.string().default(''),
   /**
    * Four-part D365 application version for this host's PackagesLocalDirectory.
-   * On the server it labels an index whose path does not name the version; on a
-   * stdio client it is the version declared when warning about SDK drift.
+   * On the server it labels an index whose path does not name the version.
    */
   D365_APP_VERSION: z.string().default(''),
   D365_INDEX_DB_PATH: z.string().default('./d365_index.db'),

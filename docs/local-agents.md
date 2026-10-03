@@ -22,8 +22,8 @@ None of the agents can use `write_table_extension` or `apply_table_extension_cha
 
 Follow the [Quick start](../README.md#quick-start) on the machine that has the
 PackagesLocalDirectory (usually the development VM): `setup`, `doctor`, `index`. You can also
-connect to the hosted API or use an Azure-promoted index. You don't need to run `serve`: the clients below
-start the server themselves over stdio.
+connect to the hosted API or use an Azure-promoted index. The clients connect to the authenticated
+Streamable HTTP endpoint; they do not launch a local server process.
 
 ## 2. Register the two MCP servers
 
@@ -39,14 +39,9 @@ solution, same shape.
 {
   "servers": {
     "d365-fno": {
-      "type": "stdio",
-      "command": "d365-fno-mcp-server",
-      "args": ["serve"],
-      "env": {
-        "MCP_TRANSPORT": "stdio",
-        "D365_PACKAGES_DIR": "K:/AosService/PackagesLocalDirectory",
-        "D365_INDEX_DB_PATH": "C:/d365-mcp/d365_index.db"
-      }
+      "type": "http",
+      "url": "https://<app>.azurewebsites.net/mcp",
+      "headers": { "X-API-Key": "${input:d365-mcp-api-key}" }
     },
     "microsoft-learn": {
       "type": "http",
@@ -62,14 +57,9 @@ solution, same shape.
 {
   "mcpServers": {
     "d365-fno": {
-      "type": "local",
-      "command": "d365-fno-mcp-server",
-      "args": ["serve"],
-      "env": {
-        "MCP_TRANSPORT": "stdio",
-        "D365_PACKAGES_DIR": "K:/AosService/PackagesLocalDirectory",
-        "D365_INDEX_DB_PATH": "C:/d365-mcp/d365_index.db"
-      },
+      "type": "http",
+      "url": "https://<app>.azurewebsites.net/mcp",
+      "headers": { "X-API-Key": "${D365_MCP_API_KEY}" },
       "tools": ["*"]
     },
     "microsoft-learn": { "type": "http", "url": "https://learn.microsoft.com/api/mcp", "tools": ["*"] }
@@ -84,14 +74,9 @@ solution, same shape.
 {
   "mcpServers": {
     "d365-fno": {
-      "type": "stdio",
-      "command": "d365-fno-mcp-server",
-      "args": ["serve"],
-      "env": {
-        "MCP_TRANSPORT": "stdio",
-        "D365_PACKAGES_DIR": "K:/AosService/PackagesLocalDirectory",
-        "D365_INDEX_DB_PATH": "C:/d365-mcp/d365_index.db"
-      }
+      "type": "http",
+      "url": "https://<app>.azurewebsites.net/mcp",
+      "headers": { "X-API-Key": "${D365_MCP_API_KEY}" }
     },
     "microsoft-learn": { "type": "http", "url": "https://learn.microsoft.com/api/mcp" }
   }

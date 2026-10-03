@@ -29,8 +29,7 @@ one) receives security fixes.
   `D365_CUSTOM_METADATA_DIR`, and are always off in hosted mode.
 - **Secrets**: SQL connection strings and SAS URLs are read from the
   environment and never logged with their query strings.
-- **stdio transport** has no authentication; it trusts the local process that
-  launched it.
+- **HTTP transport** requires a configured API key on every MCP request.
 
 ## Operating a server safely
 

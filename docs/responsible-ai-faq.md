@@ -68,7 +68,7 @@ published index refuses to enable them, so a hosted deployment is always read-on
 - **HTTP mode** (default): every request needs an API key (`X-API-Key` or `Authorization: Bearer`)
   of at least 32 characters from `MCP_API_KEYS` or `MCP_API_KEY`. Each MCP session is tied to the key that opened it. The
   server has rate limits, request timeouts, and a session limit.
-- **stdio mode**: only the local process that started it.
+- **HTTP mode**: only callers presenting a configured API key.
 
 Anyone with a key can read everything in the index. Give keys only to people allowed to see the
 code base, give each person, pipeline, or agent its own key name, and rotate keys like any other

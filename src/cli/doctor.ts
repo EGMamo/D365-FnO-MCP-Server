@@ -229,15 +229,11 @@ export function checkVisualStudioIntegration(env: NodeJS.ProcessEnv): CheckResul
   return results;
 }
 
-function configuredTransport(env: NodeJS.ProcessEnv): 'http' | 'stdio' {
-  return env.MCP_TRANSPORT === 'stdio' ? 'stdio' : 'http';
-}
-
 /**
  * Invalid API key configuration is always a failure. Missing keys are only
- * tolerated on stdio, which does not authenticate HTTP requests.
+ * tolerated nowhere because the server is HTTP-only.
  */
-function checkApiKeys(env: NodeJS.ProcessEnv, transport: 'http' | 'stdio'): CheckResult {
+function checkApiKeys(env: NodeJS.ProcessEnv): CheckResult {
   const parsed = parseApiKeys(env.MCP_API_KEYS, env.MCP_API_KEY);
   if (parsed.errors.length > 0) {
     return { name: 'api-keys', status: 'fail', message: parsed.errors.join(' ') };
@@ -245,10 +241,8 @@ function checkApiKeys(env: NodeJS.ProcessEnv, transport: 'http' | 'stdio'): Chec
   if (parsed.keys.length === 0) {
     return {
       name: 'api-keys',
-      status: transport === 'http' ? 'fail' : 'warn',
-      message: transport === 'http'
-        ? 'No API key configured (MCP_API_KEYS or MCP_API_KEY). Required for the HTTP transport.'
-        : 'No API key configured (MCP_API_KEYS or MCP_API_KEY). Fine for stdio; required if you switch to HTTP.',
+      status: 'fail',
+      message: 'No API key configured (MCP_API_KEYS or MCP_API_KEY). Required for the HTTP transport.',
     };
   }
   return {
@@ -261,7 +255,6 @@ function checkApiKeys(env: NodeJS.ProcessEnv, transport: 'http' | 'stdio'): Chec
 export async function runChecks(
   env: NodeJS.ProcessEnv = process.env
 ): Promise<CheckResult[]> {
-  const transport = configuredTransport(env);
   const dbPath = env.D365_INDEX_DB_PATH ?? './d365_index.db';
   const results: CheckResult[] = [checkNode()];
 
@@ -273,7 +266,7 @@ export async function runChecks(
     results.push(...(await checkDbOpen(dbPath)));
   }
 
-  results.push(checkApiKeys(env, transport));
+  results.push(checkApiKeys(env));
   results.push(...checkVisualStudioIntegration(env));
   return results;
 }

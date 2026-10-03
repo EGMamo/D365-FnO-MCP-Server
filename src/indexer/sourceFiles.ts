@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import path from 'node:path';
 
 /**
  * Reads an indexed object's source file when the index holds no raw XML.
@@ -10,28 +11,48 @@ import fs from 'node:fs';
  * when no local packages tree is configured, and only `.xml` files are read.
  */
 
-let sourceReadsAllowed = true;
+let sourceRoot: string | null = null;
 
-/** Allow or forbid reading source files named by the index. */
-export function setSourceFileReads(allowed: boolean): void {
-  sourceReadsAllowed = allowed;
+/** Allow reads only from the real configured packages tree. */
+export function setSourceFileReads(allowed: boolean, packagesRoot?: string): void {
+  sourceRoot = null;
+  if (!allowed || !packagesRoot) return;
+  try {
+    const realRoot = fs.realpathSync(packagesRoot);
+    if (fs.statSync(realRoot).isDirectory()) sourceRoot = realRoot;
+  } catch {
+    sourceRoot = null;
+  }
 }
 
 /** False when the server has no local packages tree. */
 export function sourceFileReadsAllowed(): boolean {
-  return sourceReadsAllowed;
+  return sourceRoot !== null;
 }
 
-function readable(filePath: string | null | undefined): filePath is string {
-  return sourceReadsAllowed && typeof filePath === 'string' && /\.xml$/i.test(filePath);
+function readablePath(filePath: string | null | undefined): string | null {
+  if (sourceRoot === null || typeof filePath !== 'string' || !/\.xml$/i.test(filePath)) return null;
+  try {
+    const realFile = fs.realpathSync(filePath);
+    const relative = path.relative(sourceRoot, realFile);
+    return relative !== '' &&
+      relative !== '..' &&
+      !relative.startsWith(`..${path.sep}`) &&
+      !path.isAbsolute(relative)
+      ? realFile
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Stored XML, else the source file, else null. */
 export async function loadObjectXml(obj: { raw_xml?: string | null; file_path?: string | null }): Promise<string | null> {
-  if (obj.raw_xml) return obj.raw_xml;
-  if (!readable(obj.file_path)) return null;
+  if (obj.raw_xml !== null && obj.raw_xml !== undefined) return obj.raw_xml;
+  const filePath = readablePath(obj.file_path);
+  if (!filePath) return null;
   try {
-    return await fs.promises.readFile(obj.file_path, 'utf-8');
+    return await fs.promises.readFile(filePath, 'utf-8');
   } catch {
     return null;
   }
@@ -39,10 +60,11 @@ export async function loadObjectXml(obj: { raw_xml?: string | null; file_path?: 
 
 /** Synchronous `loadObjectXml` for callers that cannot await; '' when unavailable. */
 export function loadObjectXmlSync(obj: { raw_xml?: string | null; file_path?: string | null }): string {
-  if (obj.raw_xml) return obj.raw_xml;
-  if (!readable(obj.file_path)) return '';
+  if (obj.raw_xml !== null && obj.raw_xml !== undefined) return obj.raw_xml;
+  const filePath = readablePath(obj.file_path);
+  if (!filePath) return '';
   try {
-    return fs.readFileSync(obj.file_path, 'utf-8');
+    return fs.readFileSync(filePath, 'utf-8');
   } catch {
     return '';
   }

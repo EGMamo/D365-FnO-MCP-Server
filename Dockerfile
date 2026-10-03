@@ -2,10 +2,10 @@
 #
 # Hosted (read-only) D365 FnO MCP server.
 #
-# The image carries no index. At start-up `serve` downloads the published
-# index named by D365_INDEX_URL into D365_INDEX_DB_PATH (container-local disk,
-# not /home, which App Service mounts as a network share where SQLite cannot
-# lock), then listens on MCP_PORT. Write tools stay disabled.
+# The image carries no index. The platform must mount or synchronize a complete
+# immutable artifact store at D365_ARTIFACT_STORE_PATH. At startup `serve`
+# validates its active bundle, stages the database on container-local disk and
+# opens it read-only. Missing or invalid artifacts fail startup closed.
 
 # Builds behind a private registry or a TLS-inspecting proxy can pass an .npmrc
 # (registry, auth token, cafile) as a BuildKit secret without baking it in:
@@ -30,8 +30,8 @@ ENV NODE_ENV=production \
     MCP_TRANSPORT=http \
     MCP_PORT=8080 \
     D365_INDEX_DB_PATH=/data/d365_index.db \
-    D365_ENABLE_WRITE_TOOLS=0 \
-    D365_INDEX_ON_START=0
+    D365_ARTIFACT_STORE_PATH=/artifacts \
+    D365_ENABLE_WRITE_TOOLS=0
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN --mount=type=secret,id=npmrc,target=/root/.npmrc \
@@ -44,8 +44,8 @@ COPY README.md LICENSE ./
 RUN mkdir -p /data && chown -R node:node /data
 USER node
 EXPOSE 8080
-# start-period covers the index download, which happens before the server listens.
-HEALTHCHECK --interval=30s --timeout=5s --start-period=900s --retries=3 \
+# Allow validation and local staging of a large mounted bundle before listening.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=300s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:' + process.env.MCP_PORT + '/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
 ENTRYPOINT ["node", "dist/src/index.js"]
 CMD ["serve"]

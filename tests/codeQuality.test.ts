@@ -7,7 +7,7 @@ import type { Database } from '../src/indexer/db.js';
 import { openDb } from '../src/indexer/db.js';
 import { buildIndex } from '../src/indexer/buildIndex.js';
 import { checkXppMethods, extensionTarget } from '../src/xpp/bestPractices.js';
-import { extractMethodSources, findLoops, maskXpp } from '../src/xpp/scanner.js';
+import { extractMethodSources, findLoops, findSelects, maskXpp } from '../src/xpp/scanner.js';
 import { findFieldAccess } from '../src/xpp/fieldAccess.js';
 import { parseBpLog, parseBpPath, modelFromFileName, publishBpFindings } from '../src/indexer/bpFindings.js';
 import { registerCodeQualityTools } from '../src/tools/codeQuality.js';
@@ -72,6 +72,13 @@ describe('X++ scanning of hostile input', () => {
   it('extracts methods from XML full of unterminated methods quickly', () => {
     const started = Date.now();
     expect(extractMethodSources('<Method><Name>a</Name><Source><![CDATA['.repeat(20_000))).toEqual([]);
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
+  it('scans 500 KB of repeated selects in linear time', () => {
+    const source = 'select firstonly custTable;\n'.repeat(18_000);
+    const started = Date.now();
+    expect(findSelects(source)).toHaveLength(18_000);
     expect(Date.now() - started).toBeLessThan(5_000);
   });
 });

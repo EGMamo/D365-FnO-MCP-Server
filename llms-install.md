@@ -36,7 +36,7 @@ Then check the setup:
 D365_PACKAGES_DIR="<PackagesLocalDirectory>" D365_INDEX_DB_PATH="<absolute path>/d365_index.db" d365-fno-mcp-server doctor
 ```
 
-## 3. Register the server (stdio)
+## 3. Register the hosted HTTP server
 
 Add this to the client's MCP settings file:
 
@@ -48,41 +48,26 @@ Add this to the client's MCP settings file:
 {
   "mcpServers": {
     "d365-fno": {
-      "command": "d365-fno-mcp-server",
-      "args": ["serve"],
-      "env": {
-        "MCP_TRANSPORT": "stdio",
-        "D365_PACKAGES_DIR": "<PackagesLocalDirectory>",
-        "D365_INDEX_DB_PATH": "<absolute path>/d365_index.db"
-      }
+      "type": "http",
+      "url": "https://<app>.azurewebsites.net/mcp",
+      "headers": { "X-API-Key": "<MCP_API_KEY>" }
     }
   }
 }
 ```
 
-VS Code uses a `servers` key and needs `"type": "stdio"`:
+VS Code uses a `servers` key:
 
 ```json
 {
   "servers": {
     "d365-fno": {
-      "type": "stdio",
-      "command": "d365-fno-mcp-server",
-      "args": ["serve"],
-      "env": {
-        "MCP_TRANSPORT": "stdio",
-        "D365_PACKAGES_DIR": "<PackagesLocalDirectory>",
-        "D365_INDEX_DB_PATH": "<absolute path>/d365_index.db"
-      }
+      "type": "http",
+      "url": "https://<app>.azurewebsites.net/mcp",
+      "headers": { "X-API-Key": "<MCP_API_KEY>" }
     }
   }
 }
-```
-
-For Claude Code you can register it from the command line instead:
-
-```bash
-claude mcp add d365-fno --env MCP_TRANSPORT=stdio --env D365_INDEX_DB_PATH="<absolute path>/d365_index.db" -- d365-fno-mcp-server serve
 ```
 
 ## 4. Verify

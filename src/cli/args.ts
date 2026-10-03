@@ -107,7 +107,7 @@ Commands:
       --packages-dir <dir>  D365 PackagesLocalDirectory path
       --api-key <key>       MCP API key (>= 32 chars; generated when omitted)
       --db-path <path>      SQLite index path (default ./d365_index.db)
-      --transport <mode>    http or stdio (default http)
+      --transport <mode>    http only (default http)
       --force               Replace an existing .env
   artifact publish         Validate and idempotently upload a local bundle
       --bundle-dir <dir>   Validated local artifact bundle directory

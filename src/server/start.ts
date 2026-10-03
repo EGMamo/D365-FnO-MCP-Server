@@ -7,7 +7,6 @@ import { buildSessionInstructions } from '../indexer/appVersion.js';
 import { prepareArtifactBackedIndex } from './artifactStartup.js';
 import { setSourceFileReads } from '../indexer/sourceFiles.js';
 import { startHttpServer, type SessionContext } from './httpTransport.js';
-import { startStdioServer } from './stdioTransport.js';
 import { logger } from '../utils/logger.js';
 import { registerMetadataTools } from '../tools/metadata.js';
 import { registerLabelsTools } from '../tools/labels.js';
@@ -25,11 +24,11 @@ import { registerWorkspaceTools } from '../tools/workspace.js';
 /** How long a graceful shutdown may take before the process exits regardless. */
 const SHUTDOWN_TIMEOUT_MS = 10_000;
 
-/** Boots the MCP server on the configured transport. */
+/** Boots the MCP server over authenticated HTTP. */
 export async function startServer(): Promise<void> {
   logger.info('Starting D365 FnO MCP Server', {
     version: VERSION,
-    transport: config.transport,
+    transport: 'http',
   });
 
   if (config.indexDbPath !== ':memory:') {
@@ -50,11 +49,14 @@ export async function startServer(): Promise<void> {
   }
   let sourceFilesAvailable = false;
   try {
-    sourceFilesAvailable = config.packagesDir.trim().length > 0 && fsSync.statSync(config.packagesDir).isDirectory();
+    sourceFilesAvailable =
+      !config.artifactStorePath &&
+      config.packagesDir.trim().length > 0 &&
+      fsSync.statSync(config.packagesDir).isDirectory();
   } catch {
     sourceFilesAvailable = false;
   }
-  setSourceFileReads(sourceFilesAvailable);
+  setSourceFileReads(sourceFilesAvailable, config.packagesDir);
 
   // Open the shared SQLite index database.
   const db = config.artifactStorePath ? openDbReadOnly(config.indexDbPath) : openDb(config.indexDbPath);
@@ -132,14 +134,6 @@ export async function startServer(): Promise<void> {
     registerKnowledgeDigestTool(server, db, { enableWriteTools: config.enableWriteTools });
 
     return server;
-  }
-
-  if (config.transport === 'stdio') {
-    await startStdioServer(createMcpServer, {
-      version: VERSION,
-      onShutdown: () => db.close(),
-    });
-    return;
   }
 
   if (config.enableWriteTools) {

@@ -12,7 +12,7 @@ captures and Microsoft release plans.
 
 ## Tech Stack
 - **Runtime**: Node.js 24+, TypeScript (ESNext modules, strict mode)
-- **MCP Transports**: Streamable HTTP (`MCP_TRANSPORT=http`, default, `/mcp`) or stdio
+- **MCP Transport**: Streamable HTTP (`MCP_TRANSPORT=http`, `/mcp`)
 - **MCP SDK**: `@modelcontextprotocol/sdk`
 - **Indexing**: AOT XML -> `fast-xml-parser` -> SQLite via Node's built-in `node:sqlite`
 - **Auth (HTTP)**: API keys (`X-API-Key` or `Authorization: Bearer`), named keys in `MCP_API_KEYS`, >= 32 chars, sessions bound to the key
@@ -47,7 +47,7 @@ src/
                           #   index-status, publish-index, pull-index, upload-index, digest, doctor, setup)
   config.ts, configLoader.ts  # Zod env validation
   cli/                    # One module per command
-  server/                 # start.ts (tool registration), httpTransport.ts, stdioTransport.ts, apiKeys.ts, indexUpload.ts
+  server/                 # start.ts (tool registration), httpTransport.ts, apiKeys.ts, indexUpload.ts
   indexer/                # scanner, parser, db schema, buildIndex, xref/trace/release-plan importers, publish/pull/upload
   tools/                  # MCP tool handlers (see above)
   security/model.ts       # Role/duty/privilege flattening
@@ -74,7 +74,7 @@ PackagesLocalDirectory/
 
 ## Main Environment Variables (.env)
 ```
-MCP_TRANSPORT=http            # or stdio
+MCP_TRANSPORT=http
 MCP_HOST= / MCP_PORT=3000
 MCP_API_KEYS=name=<32+ chars>,other=<32+ chars>
 D365_PACKAGES_DIR=K:\\AosService\\PackagesLocalDirectory

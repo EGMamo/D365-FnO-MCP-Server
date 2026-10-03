@@ -7,6 +7,7 @@ import { fileURLToPath } from 'url';
 import type { Database } from '../src/indexer/db.js';
 import { openDb, getObjectByName, searchSymbols, resolveLabelByLanguage, setMeta, getMeta, META_KEYS, type Xref } from '../src/indexer/db.js';
 import { buildIndex, getIndexStats } from '../src/indexer/buildIndex.js';
+import { setSourceFileReads } from '../src/indexer/sourceFiles.js';
 import { logger } from '../src/utils/logger.js';
 import { collectMetadataTools } from './helpers/toolHarness.js';
 import { validateCoCTarget } from '../src/validation/grounding.js';
@@ -145,12 +146,14 @@ describe('buildIndex with fixtures', () => {
   beforeAll(async () => {
     root = fs.mkdtempSync(path.join(testDir, '.tmp-packages-'));
     stagePackages(root);
+    setSourceFileReads(true, root);
     db = openDb(':memory:');
     await buildIndex(db, root, true);
   });
 
   afterAll(() => {
     db.close();
+    setSourceFileReads(false);
     fs.rmSync(root, { recursive: true, force: true });
   });
 
@@ -617,6 +620,7 @@ describe('raw XML storage options', () => {
     process.env.D365_INDEX_STORE_RAW_XML = '0';
     root = fs.mkdtempSync(path.join(testDir, '.tmp-rawxml-'));
     stagePackages(root);
+    setSourceFileReads(true, root);
     db = openDb(':memory:');
     await buildIndex(db, root, true);
   });
@@ -628,6 +632,7 @@ describe('raw XML storage options', () => {
       process.env.D365_INDEX_STORE_RAW_XML = previousStoreRawXml;
     }
     db.close();
+    setSourceFileReads(false);
     fs.rmSync(root, { recursive: true, force: true });
   });
 

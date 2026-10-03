@@ -12,7 +12,7 @@ allowlist; do not treat an ordinary API key as a read-only credential.
 ### Connect
 
 For a hosted server, ask its operator for the HTTPS `/mcp` URL and a personal
-API key. A local stdio client launches the server itself and needs no HTTP key.
+API key. All clients use the authenticated HTTP endpoint.
 Visual Studio users can use the D365 F&O MCP extension's **Configure
 Connection** command or add `.mcp.json` beside their solution:
 
@@ -87,7 +87,6 @@ Visual Studio state. See the [write tool reference](../README.md#mcp-tools).
 
 | Pattern | Setup | Main constraint |
 | --- | --- | --- |
-| Local stdio | `MCP_TRANSPORT=stdio`, local index, client starts `serve` | No HTTP key required; use an absolute `D365_INDEX_DB_PATH` in clients with varying working directories. |
 | Local HTTP | `MCP_TRANSPORT=http`, `MCP_HOST=127.0.0.1`, `MCP_API_KEYS` | Bind locally unless you provide a trusted TLS reverse proxy and network controls. |
 | Hosted | Azure worker promotes a validated index; API uses named HTTP keys | Read-only runtime; only the private worker may build or promote production indexes. |
 | Visual Studio gateway | Extension loopback gateway plus hosted API | Hosted metadata and local workspace tools share one MCP connection; hosted credentials stay in Credential Manager. |

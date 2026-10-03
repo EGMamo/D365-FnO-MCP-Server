@@ -3,7 +3,7 @@ import path from 'path';
 
 /**
  * Foreground indexing pass. Reads configuration straight from the environment
- * so `index` works without an MCP_API_KEY (which only the HTTP transport needs).
+ * so `index` works without an MCP_API_KEY.
  */
 export async function indexCommand(
   options: { force: boolean; packagesDir?: string; dbPath?: string },

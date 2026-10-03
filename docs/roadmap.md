@@ -61,7 +61,6 @@ Inspired by: Batch Framework Telemetry Agent (App Insights, 10.0.45+), Store Mon
 Shipped: `generate_kql_query` (15 scenarios across Application Insights and Log Analytics), `analyze_batch_class` and knowledge topic `23-batch-and-telemetry`. SQL maintenance guidance is deferred, and form-run telemetry is left out because its event names are not verified.
 
 ## Phase 6 — Packaging & integration — ✅ done
-- Local agents (GitHub Copilot custom agents and Claude Code subagents) that use this server over stdio — mirrors Trace Parser's "dual MCP" (domain MCP + Microsoft Learn MCP).
 - Add a Responsible-AI / security FAQ section (pattern from Compliance Advisor).
 - Ship agent instructions ("X++ dev assistant" and reviewers) that combine this server + Microsoft Learn MCP.
 
@@ -101,7 +100,7 @@ Shipped as `src/xpp/` (scanner, rules, field access), `src/indexer/bpFindings.ts
 | Agent | What it does | Reuse value |
 |---|---|---|
 | **Trace Parser Agent** | N+1, slow SQL, blocking, exceptions from F&O traces; 6–8 h → 5–10 min | ★★★ Views/SP logic to port into Phase 3; you can beat it by linking to AOT source |
-| **Release Planner Helper** | TS MCP over public release plans; creates ADO/Jira items | ★★ Same stack as yours (TS, Zod, stdio+HTTP); Phase 4 |
+| **Release Planner Helper** | TS MCP over public release plans; creates ADO/Jira items | ★★ Same stack as yours (TS, Zod, HTTP); Phase 4 |
 
 ### Caveats
 - All are sample/reference code, not supported products; Copilot Studio agents need credits.

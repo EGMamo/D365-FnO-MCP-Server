@@ -10,7 +10,7 @@ function threshold(): number {
 
 /**
  * Structured logger. Always writes to stderr so that stdout stays reserved for
- * JSON-RPC framing when the server runs under the stdio transport.
+ * JSON-RPC framing used by MCP requests.
  */
 function emit(level: LogLevel, message: string, meta?: Record<string, unknown>) {
   if (LEVELS[level] < threshold()) return;
