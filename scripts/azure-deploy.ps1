@@ -9,7 +9,8 @@
     is derived by the template from -WorkloadName and -EnvironmentName.
 
     It runs these steps:
-      1. Signs in to -TenantId if needed, selects the subscription and shows the context.
+      1. Signs in to -TenantId if needed (in a browser, or with -UseDeviceCode a device code),
+         selects the subscription and shows the context.
       2. Registers the resource providers the template uses (needed on a new subscription).
       3. Creates the resource group if it does not exist.
       4. Writes infra/main.<environment>.local.bicepparam (git-ignored, no secret values). On a
@@ -26,6 +27,9 @@
 
 .EXAMPLE
     ./scripts/azure-deploy.ps1 -TenantId <tenant-id> -SubscriptionId <subscription-id> -ResourceGroup rg-d365mcp-prod -Location westeurope -EnvironmentName prod -AlertEmail ops@example.com
+
+.EXAMPLE
+    ./scripts/azure-deploy.ps1 -TenantId <tenant-id> -SubscriptionId <subscription-id> -ResourceGroup rg-d365mcp-prod -EnvironmentName prod -UseDeviceCode
 
 .EXAMPLE
     ./scripts/azure-deploy.ps1 -ResourceGroup rg-d365mcp-prod -EnvironmentName prod -WhatIfOnly
@@ -73,6 +77,9 @@ param(
     # Use this parameter file instead of generating one. It must read the worker password with
     # readEnvironmentVariable('D365_WORKER_ADMIN_PASSWORD').
     [string]$ParameterFile,
+
+    # Sign in with a device code (az login --use-device-code) instead of opening a browser.
+    [switch]$UseDeviceCode,
 
     # Run what-if and stop.
     [switch]$WhatIfOnly,
@@ -138,8 +145,12 @@ $account = $null
 $current = & az account show -o json 2>$null
 if ($LASTEXITCODE -eq 0) { $account = $current | ConvertFrom-Json }
 if (-not $account -or ($TenantId -and $account.tenantId -ne $TenantId)) {
-    if ($TenantId) { Invoke-Az login --tenant $TenantId --output none | Out-Null }
-    else { Invoke-Az login --output none | Out-Null }
+    $loginArgs = @('login', '--output', 'none')
+    if ($TenantId) { $loginArgs += @('--tenant', $TenantId) }
+    if ($UseDeviceCode) { $loginArgs += '--use-device-code' }
+    # Not piped, so the device code and sign-in URL reach the console.
+    & az @loginArgs
+    if ($LASTEXITCODE -ne 0) { throw "az login failed (exit $LASTEXITCODE)." }
 }
 if ($SubscriptionId) {
     $visible = Invoke-Az account list --query "[?id=='$SubscriptionId'] | length(@)" -o tsv

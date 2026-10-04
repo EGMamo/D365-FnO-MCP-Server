@@ -21,7 +21,9 @@ a tenant, subscription or resource name: they take them from parameters or the A
 `azure-deploy.ps1` writes `infra/main.<env>.local.bicepparam` (git-ignored, no secret values), keeps
 the running API image on redeploys, prompts for the worker VM password without echo unless
 `D365_WORKER_ADMIN_PASSWORD` is set, and asks before deploying. `-WhatIfOnly` stops after the
-what-if; `-PostDeploy` continues straight into `azure-post-deploy.ps1`. Both scripts document their
+what-if; `-PostDeploy` continues straight into `azure-post-deploy.ps1`. Add `-UseDeviceCode` to sign
+in with a device code (`az login --use-device-code`) instead of a browser, for example over SSH or
+when the browser sign-in is blocked. Both scripts document their
 parameters in `Get-Help`.
 
 To deploy by hand instead, run a what-if first and review it:
