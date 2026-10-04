@@ -41,6 +41,9 @@ param artifactContainerName string = 'd365-artifacts'
 param sourceContainerName string = 'd365-sources'
 param operationsContainerName string = 'd365-operations'
 
+@description('Public IP addresses or CIDR ranges allowed in the storage firewall. Only takes effect when enablePrivateNetworking is false.')
+param storageAllowedIpRanges array = []
+
 @minValue(7)
 param versionRetentionDays int = 30
 @minValue(1)
@@ -152,6 +155,8 @@ module storage 'modules/storage.bicep' = {
     runReportRetentionDays: runReportRetentionDays
     sourceRetentionDays: sourceRetentionDays
     enablePrivateNetworking: enablePrivateNetworking
+    allowedSubnetIds: [network.outputs.workerSubnetId, network.outputs.appSubnetId]
+    allowedIpRanges: storageAllowedIpRanges
     privateEndpointSubnetId: privateEndpointSubnetId
     blobDnsZoneId: enablePrivateNetworking ? network.outputs.blobDnsZoneId : ''
     workspaceId: monitoring.outputs.workspaceId
@@ -168,6 +173,7 @@ module apiVault 'modules/keyVault.bicep' = {
     name: take('kv-api-${environmentName}-${suffix}', 24)
     secretReaderPrincipalIds: [identities.outputs.apiPrincipalId]
     enablePrivateNetworking: enablePrivateNetworking
+    allowedSubnetIds: [network.outputs.appSubnetId]
     privateEndpointSubnetId: privateEndpointSubnetId
     vaultDnsZoneId: enablePrivateNetworking ? network.outputs.vaultDnsZoneId : ''
     workspaceId: monitoring.outputs.workspaceId
@@ -182,6 +188,7 @@ module workerVault 'modules/keyVault.bicep' = {
     name: take('kv-wrk-${environmentName}-${suffix}', 24)
     secretReaderPrincipalIds: [identities.outputs.workerPrincipalId]
     enablePrivateNetworking: enablePrivateNetworking
+    allowedSubnetIds: [network.outputs.workerSubnetId]
     privateEndpointSubnetId: privateEndpointSubnetId
     vaultDnsZoneId: enablePrivateNetworking ? network.outputs.vaultDnsZoneId : ''
     workspaceId: monitoring.outputs.workspaceId

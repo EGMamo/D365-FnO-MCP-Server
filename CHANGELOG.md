@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Storage and Key Vault firewalls list the app and worker subnets (with service endpoints) next
+  to their private endpoints, so deployments pass "require VNet ACLs" policies.
+  `azure-deploy.ps1` prints denied resources and failed operations when a deployment fails.
 - PowerShell deployment scripts that work in any tenant and subscription:
   `scripts/azure-deploy.ps1` (sign-in, provider registration, resource group, generated parameter
   file without secrets, what-if, deploy) and `scripts/azure-post-deploy.ps1` (API keys, worker

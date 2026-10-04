@@ -43,6 +43,7 @@ param(
     [string]$ResourceGroup,
 
     # Subscription holding the resource group. Defaults to the Azure CLI's current subscription.
+    [ValidatePattern('^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$', ErrorMessage = '{0} is not a valid subscription ID (expected a GUID like 00000000-0000-0000-0000-000000000000). Run az account list -o table to see yours.')]
     [string]$SubscriptionId,
 
     # Name of the infra/main.bicep deployment. Defaults to the newest successful one in the group.
@@ -176,7 +177,11 @@ function Set-ClipboardForSaving([string]$Label, [string]$Value) {
 }
 
 function Resolve-Environment {
-    if ($SubscriptionId) { Invoke-Az account set --subscription $SubscriptionId | Out-Null }
+    if ($SubscriptionId) {
+        $visible = Invoke-Az account list --query "[?id=='$SubscriptionId'] | length(@)" -o tsv
+        if ($visible -ne '1') { throw "Subscription $SubscriptionId is not visible to the signed-in account. Check the ID with az account list -o table." }
+        Invoke-Az account set --subscription $SubscriptionId | Out-Null
+    }
     $account = Invoke-Az account show -o json | ConvertFrom-Json
     $script:SubscriptionId = $account.id
     $script:TenantId = $account.tenantId

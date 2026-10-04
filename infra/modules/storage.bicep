@@ -31,6 +31,12 @@ param runReportRetentionDays int
 param sourceRetentionDays int
 
 param enablePrivateNetworking bool
+
+@description('Subnets (with the Microsoft.Storage service endpoint) allowed in the account firewall. Kept alongside the private endpoint because policies such as "storage accounts require VNet ACLs" deny accounts without them.')
+param allowedSubnetIds array
+
+@description('Public IP addresses or CIDR ranges allowed in the account firewall. Only takes effect when public network access is enabled.')
+param allowedIpRanges array
 param privateEndpointSubnetId string
 param blobDnsZoneId string
 param workspaceId string
@@ -56,6 +62,8 @@ resource account 'Microsoft.Storage/storageAccounts@2023-05-01' = {
     networkAcls: {
       defaultAction: enablePrivateNetworking ? 'Deny' : 'Allow'
       bypass: 'AzureServices'
+      virtualNetworkRules: [for subnetId in allowedSubnetIds: { id: subnetId, action: 'Allow' }]
+      ipRules: [for range in allowedIpRanges: { value: range, action: 'Allow' }]
     }
   }
 }
