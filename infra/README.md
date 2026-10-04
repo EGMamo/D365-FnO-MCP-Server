@@ -2,8 +2,29 @@
 
 `main.bicep` provisions one environment of the hosted service into an existing resource group,
 following the [Azure resource guide](../docs/azure-resource-guide.md) and the
-[Azure artifact contract](../docs/azure-artifact-contract.md). It has not been deployed yet. Run a
-what-if first and review it:
+[Azure artifact contract](../docs/azure-artifact-contract.md).
+
+## Deploy with the scripts
+
+Two PowerShell 7 scripts deploy an environment into any tenant and subscription. Neither contains
+a tenant, subscription or resource name: they take them from parameters or the Azure CLI context.
+
+```powershell
+# Infrastructure: sign-in, providers, resource group, generated parameters, what-if, deploy.
+./scripts/azure-deploy.ps1 -TenantId <tenant-id> -SubscriptionId <subscription-id> `
+  -ResourceGroup <resource-group> -Location <region> -EnvironmentName <env> -AlertEmail <address>
+
+# Operator steps after the first deployment (see below). Reads every name from the deployment outputs.
+./scripts/azure-post-deploy.ps1 -ResourceGroup <resource-group>
+```
+
+`azure-deploy.ps1` writes `infra/main.<env>.local.bicepparam` (git-ignored, no secret values), keeps
+the running API image on redeploys, prompts for the worker VM password without echo unless
+`D365_WORKER_ADMIN_PASSWORD` is set, and asks before deploying. `-WhatIfOnly` stops after the
+what-if; `-PostDeploy` continues straight into `azure-post-deploy.ps1`. Both scripts document their
+parameters in `Get-Help`.
+
+To deploy by hand instead, run a what-if first and review it:
 
 ```bash
 export D365_WORKER_ADMIN_PASSWORD='<from your secret store>'
@@ -102,7 +123,8 @@ worker's Blob acquisition lease remains the guard against overlapping runs.
 
 ## Operator steps outside the template
 
-These are deliberately not automated and must not be done implicitly:
+These are deliberately not automated and must not be done implicitly by the template. `scripts/azure-post-deploy.ps1 -ResourceGroup <group>` runs them from an
+operator machine, reading every name from this deployment's outputs (`Get-Help` lists its steps):
 
 1. Create the `mcp-api-keys` secret in the API vault and the Power Platform credential in the
    worker vault. Never put secret values in parameter files, source control, logs or chat.

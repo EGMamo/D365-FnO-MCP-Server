@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- PowerShell deployment scripts that work in any tenant and subscription:
+  `scripts/azure-deploy.ps1` (sign-in, provider registration, resource group, generated parameter
+  file without secrets, what-if, deploy) and `scripts/azure-post-deploy.ps1` (API keys, worker
+  secret and setup, first acquisition, GitHub environment and API deploy), which reads every
+  resource name from the deployment outputs.
 - Azure infrastructure as code (`infra/main.bicep`, not yet deployed): App Service API with a
   staging slot and startup Blob materialization settings, a deallocated-by-default Windows
   acquisition VM run on schedule by a Logic App through Run Command, a Shared-Key-free artifact
