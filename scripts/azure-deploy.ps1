@@ -139,6 +139,7 @@ function Test-VmPassword([string]$Value) {
 # failed operations of it and its nested module deployments.
 function Write-DeploymentFailure([string]$Name) {
     Write-Host "`nDeployment '$Name' failed:" -ForegroundColor Red
+    $seenText = [Text.StringBuilder]::new()
     $errorJson = & az deployment group show -g $ResourceGroup -n $Name --query properties.error -o json 2>$null
     if ($LASTEXITCODE -ne 0 -or -not $errorJson -or $errorJson -eq 'null') {
         Write-Host "No error details recorded; run: az deployment group show -g $ResourceGroup -n $Name"
@@ -154,6 +155,7 @@ function Write-DeploymentFailure([string]$Name) {
         foreach ($leaf in $leaves) {
             $target = $leaf.PSObject.Properties['target']?.Value
             Write-Host "- $($leaf.code)$(if ($target) { " on $target" }): $($leaf.message)"
+            [void]$seenText.AppendLine("$($leaf.code) $target $($leaf.message)")
         }
     }
 
@@ -170,8 +172,26 @@ function Write-DeploymentFailure([string]$Name) {
         foreach ($op in @($opsJson | ConvertFrom-Json)) {
             if ($op.type -eq 'Microsoft.Resources/deployments') { $pending.Enqueue($op.name); continue }
             Write-Host "- $($op.type) '$($op.name)': $($op.code): $($op.message)"
+            [void]$seenText.AppendLine("$($op.type) $($op.name) $($op.code) $($op.message)")
         }
     }
+
+    # Known failure classes and what to do about them.
+    $text = $seenText.ToString()
+    $hints = @()
+    if ($text -match 'BlobAlreadyExists') {
+        $hints += 'Key Vault returned an internal 409 conflict (BlobAlreadyExists). This is transient on the Key Vault side, typically when vaults are created at the same moment; rerun the script. Do not delete the vault: purge protection would block its name for 90 days.'
+    }
+    if ($text -match '(?i)soft.?delete|deleted state|VaultAlreadyExists|already in use') {
+        $hints += "A vault with this name exists or is soft-deleted. List soft-deleted vaults with: az keyvault list-deleted --query `"[].name`" -o tsv. Recover one with: az keyvault recover -n <name>. Purge protection prevents purging it, so recover it or use another -EnvironmentName."
+    }
+    if ($text -match 'RequestDisallowedByPolicy') {
+        $hints += "An Azure Policy assignment denied a resource. The message above names the policy; see 'Organization policies' in infra/README.md for the parameter that changes the setting, or ask for an exemption."
+    }
+    if ($text -match 'AuthorizationFailed' -and $text -match 'roleAssignments') {
+        $hints += 'You may not create role assignments here. You need Owner, or User Access Administrator, on the resource group.'
+    }
+    foreach ($hint in $hints) { Write-Host "`nWhat to do: $hint" -ForegroundColor Yellow }
 }
 
 # -- 1. Tools and context ------------------------------------------------------------------------

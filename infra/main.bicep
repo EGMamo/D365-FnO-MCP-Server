@@ -180,8 +180,11 @@ module apiVault 'modules/keyVault.bicep' = {
   }
 }
 
+// Created after the API vault: Key Vault can fail one of two vaults created at the same moment
+// with an internal 409 BlobAlreadyExists conflict.
 module workerVault 'modules/keyVault.bicep' = {
   name: 'kv-worker'
+  dependsOn: [apiVault]
   params: {
     location: location
     tags: allTags

@@ -44,7 +44,7 @@ Do not restore or deploy the old `D365_INDEX_URL`, `D365_INDEX_UPLOAD_KEYS` or
 | `network` | VNet with app-integration, private-endpoint and worker subnets; NAT gateway for egress; deny-all inbound NSGs; private DNS zones for Blob, Key Vault and ACR |
 | `identities` | User-assigned identities for the API, the worker and the GitHub deploy workflow (OIDC federated credential, no secret) |
 | `storage` | StorageV2 account with Shared Key and public blob access disabled; `d365-artifacts`, `d365-sources` and `d365-operations` containers; versioning and soft delete; lifecycle rules that never touch bundles |
-| `keyVault` (x2) | One RBAC vault for API secrets and one for worker secrets, purge protection on |
+| `keyVault` (x2) | One RBAC vault for API secrets and one for worker secrets, purge protection on. Separate vaults keep the internet-facing API's identity away from the worker's Power Platform credential; vaults have no fixed cost |
 | `registry` | ACR with admin user and anonymous pull disabled (Premium when private networking is on) |
 | `apiApp` | Linux App Service plan, the web app and a `staging` slot running the API container |
 | `worker` | Windows Server VM (no public IP, Trusted Launch, platform patching), Azure Monitor Agent, and a Logic App that runs `acquire` on schedule |
