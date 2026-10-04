@@ -27,18 +27,87 @@ const numberValue = (row: Record<string, unknown>, names: string[]): number | un
   return Number(v);
 };
 
+const PATH_TYPES: Record<string, string> = {
+  classes: 'Class',
+  tables: 'Table',
+  tableextensions: 'TableExtension',
+  maps: 'Map',
+  mapextensions: 'MapExtension',
+  views: 'View',
+  viewextensions: 'ViewExtension',
+  forms: 'Form',
+  formextensions: 'FormExtension',
+  queries: 'Query',
+  queryextensions: 'QueryExtension',
+  dataentities: 'DataEntity',
+  dataentity: 'DataEntity',
+  dataentityviews: 'DataEntity',
+  dataentityviewextensions: 'DataEntityExtension',
+  enums: 'Enum',
+  enumextensions: 'EnumExtension',
+  edts: 'Edt',
+  extendeddatatypes: 'Edt',
+  extendeddatatypeextensions: 'EdtExtension',
+  reports: 'Report',
+  ssrsreports: 'SSRSReport',
+  menus: 'Menu',
+  menuitems: 'MenuItem',
+  menuitemdisplay: 'MenuItemDisplay',
+  menuitemdisplays: 'MenuItemDisplay',
+  menuitemoutput: 'MenuItemOutput',
+  menuitemoutputs: 'MenuItemOutput',
+  menuitemaction: 'MenuItemAction',
+  menuitemactions: 'MenuItemAction',
+  jobs: 'Job',
+  services: 'Service',
+  servicegroups: 'ServiceGroup',
+  cues: 'Cue',
+  cuegroups: 'CueGroup',
+  infoparts: 'InfoPart',
+  formparts: 'FormPart',
+  privileges: 'Privilege',
+  duties: 'Duty',
+  roles: 'Role',
+  securityprivileges: 'SecurityPrivilege',
+  securityduties: 'SecurityDuty',
+  securityroles: 'SecurityRole',
+  policies: 'Policy',
+  securitykeys: 'SecurityKey',
+  labels: 'Label',
+};
+
+// dbo.References.Kind is the compiler CrossReferenceKind enum, not the
+// Dynamics.AX.Application.xRefKind metadata enum.
+const REFERENCE_KIND_NAMES: Record<string, string> = {
+  '0': 'Any',
+  '1': 'MethodCall',
+  '2': 'TypeReference',
+  '3': 'InterfaceImplementation',
+  '4': 'ClassExtended',
+  '5': 'TestCall',
+  '6': 'Property',
+  '7': 'Attribute',
+  '8': 'TestHelperCall',
+  '9': 'Tag',
+  '10': 'MethodOverride',
+};
+
 function parsePath(path: string): { type: string; name: string; method?: string } {
   const parts = path.split(/[\\/]/).filter(Boolean);
-  const typeIndex = parts.findIndex((p) => /^(classes|tables|forms|queries|dataentities|enums|edts)$/i.test(p));
+  const typeIndex = parts.findIndex((p) => Object.hasOwn(PATH_TYPES, p.toLowerCase()));
   if (typeIndex === -1 || !parts[typeIndex + 1]) return { type: '', name: path };
-  const rawType = parts[typeIndex].toLowerCase();
-  const type = rawType === 'classes' ? 'Class' : rawType === 'tables' ? 'Table' :
-    rawType === 'forms' ? 'Form' : rawType === 'queries' ? 'Query' :
-    rawType === 'dataentities' ? 'DataEntity' : rawType === 'enums' ? 'Enum' :
-    rawType === 'edts' ? 'Edt' : '';
+  const type = PATH_TYPES[parts[typeIndex].toLowerCase()];
   const name = parts[typeIndex + 1];
-  const methodIndex = parts.findIndex((p) => /^methods?$/i.test(p));
+  const methodIndex = parts.findIndex((p, index) => index > typeIndex + 1 && /^methods?$/i.test(p));
   return { type, name, method: methodIndex >= 0 ? parts[methodIndex + 1] : undefined };
+}
+
+function normalizeReferenceKind(value: string, sourceTable: string): string {
+  const normalized = value.trim();
+  if (!normalized) return sourceTable;
+  const kind = REFERENCE_KIND_NAMES[normalized];
+  if (kind) return kind;
+  return /^\d+$/.test(normalized) ? `Unknown(${normalized})` : normalized;
 }
 
 /** Normalizes one compiler-xref row. Unknown vendor columns are retained in raw. */
@@ -64,7 +133,7 @@ export function normalizeUsageRow(
     targetType: target.type || value(row, ['targettype', 'totype', 'reftype']) || undefined,
     targetName,
     targetMethod: target.method || value(row, ['targetmethod', 'tomethod', 'refmethod']) || undefined,
-    referenceKind: value(row, ['kind', 'referencekind', 'reftype', 'type']) || sourceTable,
+    referenceKind: normalizeReferenceKind(value(row, ['kind', 'referencekind', 'reftype', 'type']), sourceTable),
     sourceLine: numberValue(row, ['line', 'sourceline']),
     sourceColumn: numberValue(row, ['column', 'sourcecolumn']),
     occurrenceCount: numberValue(row, ['count', 'occurrencecount']),

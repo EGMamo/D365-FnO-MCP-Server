@@ -478,7 +478,10 @@ this command, so indexing and serving do not require SQL Server. Refresh the sna
 compiler cross-reference updates.
 
 The `find_usages` MCP tool searches these compiler-derived rows by target object and optional method.
-Its results may include source/target methods, reference kind, line/column, and the source table.
+Its results may include source/target methods, decoded compiler reference kinds such as
+`MethodCall`, `TypeReference`, and `MethodOverride`, line/column, and the source table. Numeric kinds
+not present in the compiler `CrossReferenceKind` enum are retained as `Unknown(<value>)` instead of
+being silently mislabeled.
 Check `get_usage_snapshot_status` before interpreting an empty result: no import, legacy rows without
 recorded provenance, and an intentionally empty successful snapshot are distinct states. The import
 timestamp does not prove that the compiler database itself is current. `find_references` remains the
