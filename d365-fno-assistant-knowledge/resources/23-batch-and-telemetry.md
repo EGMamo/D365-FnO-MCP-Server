@@ -1,3 +1,10 @@
+---
+appliesTo:
+  tools: [analyze_batch_class, generate_kql_query]
+match:
+  tools: [analyze_batch_class]
+note: "Use SysOperation for new batch work and make retryable batches idempotent before setting BatchRetryable. Batch telemetry events can be queried with KQL."
+---
 # Batch Framework Best Practices and Telemetry
 
 > How to write batch classes that are safe to schedule and retry, and how to watch them with

@@ -59,8 +59,8 @@ return **previews** as text. Writing files takes two steps and needs
 `D365_ENABLE_WRITE_TOOLS=1` on a local server: `write_table_extension` prepares a preview and a
 short-lived change ID, and `apply_table_extension_change` then writes the new table extension
 into an existing model (and optionally adds it to the Visual Studio project). It refuses to
-overwrite existing files. With write tools on, `digest_knowledge` can also add articles to the
-knowledge base that every client of the server reads. A server running from a
+overwrite existing files. No tool can add or change knowledge base topics; only the server owner
+changes them in the repository. A server running from a
 published index refuses to enable them, so a hosted deployment is always read-only.
 
 ## Who can access it?

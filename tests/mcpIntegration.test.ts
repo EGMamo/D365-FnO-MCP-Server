@@ -149,6 +149,22 @@ describe('compiled MCP server over http', () => {
     })).toMatchObject({ isError: true });
   }, 30_000);
 
+  it('passes index tool results through the knowledge filter', async () => {
+    const client = await connect('http');
+    const result = await client.callTool({ name: 'get_bp_findings', arguments: {} });
+    if (!Array.isArray(result.content)) throw new Error('Expected content.');
+    const knowledge = JSON.parse((result.content.at(-1) as { text: string }).text) as {
+      knowledge: { notes: Array<{ topic: string }> };
+    };
+    expect(knowledge.knowledge.notes.map((note) => note.topic)).toEqual(
+      expect.arrayContaining(['d365kb://07-label-files', 'd365kb://11-best-practice-warnings'])
+    );
+
+    const raw = await connect('http', { ...environment, D365_KNOWLEDGE_FILTER: '0' });
+    const unfiltered = await raw.callTool({ name: 'get_bp_findings', arguments: {} });
+    expect(unfiltered.content).toHaveLength(1);
+  }, 30_000);
+
   it('previews and applies a synthetic supported offline project through the real protocol', async () => {
     const workspace = path.join(root, 'workspace');
     const metadata = path.join(root, 'metadata');

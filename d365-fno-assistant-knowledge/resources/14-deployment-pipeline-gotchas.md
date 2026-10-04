@@ -1,3 +1,10 @@
+---
+appliesTo:
+  tools: [get_index_staleness]
+match:
+  names: ['*BuildXpp*', '*CreatePackage*']
+note: "Keep PlatformVersion and ApplicationVersion in sync with packages.config, and use a modern NuGetToolInstaller for the unified package path."
+---
 # Deployment Pipeline Gotchas (Azure DevOps X++ Build Tasks)
 
 > Version-sync requirements, NuGet tooling, and the cloud-package zip/license steps that are easy

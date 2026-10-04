@@ -1,3 +1,8 @@
+---
+appliesTo:
+  tools: [get_index_staleness, get_index_stats, list_packages, list_models]
+note: "Local dotnet msbuild cannot run F&O targets. Verify standard table and field names against the AxTable XML in PackagesLocalDirectory, not OData names or recalled APIs."
+---
 # Build & Tooling Notes
 
 > Local build limitations and how to verify facts offline instead of relying on recalled API

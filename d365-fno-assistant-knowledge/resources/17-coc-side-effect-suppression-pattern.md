@@ -1,3 +1,8 @@
+---
+appliesTo:
+  tools: [get_method_signature, find_usages, get_class_hierarchy]
+note: "To skip a CoC side effect on one call path, use a static context class with push/pop state scoped to the call, not a global boolean."
+---
 # Context-Scoped Chain-of-Command Side-Effect Suppression Pattern
 
 > The general answer to "a business-logic side effect on write fires even for writes that
