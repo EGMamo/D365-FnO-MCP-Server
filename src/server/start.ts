@@ -2,9 +2,9 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import fsSync from 'fs';
 import path from 'path';
 import { config, VERSION } from '../config.js';
-import { openDb, openDbReadOnly, getMeta, INDEX_SCHEMA_VERSION, META_KEYS } from '../indexer/db.js';
+import { openDb, openDbReadOnly, getMeta, INDEX_SCHEMA_VERSION, META_KEYS, type Database } from '../indexer/db.js';
 import { buildSessionInstructions } from '../indexer/appVersion.js';
-import { prepareArtifactBackedIndex } from './artifactStartup.js';
+import { materializeAzureArtifactIndex, prepareArtifactBackedIndex } from './artifactStartup.js';
 import { setSourceFileReads } from '../indexer/sourceFiles.js';
 import { startHttpServer, type SessionContext } from './httpTransport.js';
 import { logger } from '../utils/logger.js';
@@ -34,23 +34,11 @@ export async function startServer(): Promise<void> {
   if (config.indexDbPath !== ':memory:') {
     fsSync.mkdirSync(path.dirname(path.resolve(config.indexDbPath)), { recursive: true });
   }
-  if (config.artifactStorePath) {
-    const prepared = prepareArtifactBackedIndex({
-      storePath: config.artifactStorePath,
-      indexDbPath: config.indexDbPath,
-      serverVersion: VERSION,
-      indexSchemaVersion: INDEX_SCHEMA_VERSION,
-    });
-    logger.info('Activated validated artifact bundle', {
-      bundleId: prepared.bundle.manifest.bundleId,
-      pointerRevision: prepared.pointerRevision,
-      applicationVersion: prepared.bundle.manifest.d365.applicationVersion,
-    });
-  }
+  const hosted = config.artifactStorePath.length > 0;
   let sourceFilesAvailable = false;
   try {
     sourceFilesAvailable =
-      !config.artifactStorePath &&
+      !hosted &&
       config.packagesDir.trim().length > 0 &&
       fsSync.statSync(config.packagesDir).isDirectory();
   } catch {
@@ -58,12 +46,20 @@ export async function startServer(): Promise<void> {
   }
   setSourceFileReads(sourceFilesAvailable, config.packagesDir);
 
-  // Open the shared SQLite index database.
-  const db = config.artifactStorePath ? openDbReadOnly(config.indexDbPath) : openDb(config.indexDbPath);
-  logger.info('Opened SQLite DB', {
-    path: config.indexDbPath,
-    readOnly: config.artifactStorePath.length > 0,
-  });
+  /** The served index. Hosted mode opens it only after the artifact bundle is activated. */
+  let db: Database | null = null;
+  const openIndex = () => {
+    const opened = hosted ? openDbReadOnly(config.indexDbPath) : openDb(config.indexDbPath);
+    // A representative read proves the activated snapshot is queryable before readiness.
+    if (hosted) opened.prepare('SELECT name FROM ax_objects LIMIT 1').get();
+    db = opened;
+    logger.info('Opened SQLite DB', { path: config.indexDbPath, readOnly: hosted });
+  };
+  const requireDb = (): Database => {
+    if (!db) throw new Error('The index is not open yet.');
+    return db;
+  };
+  if (!hosted) openIndex();
 
   /**
    * Application version the served index describes. A locally built index on a
@@ -71,7 +67,7 @@ export async function startServer(): Promise<void> {
    * configured version, which describes this host's own SDK.
    */
   function resolveIndexAppVersion(): string | null {
-    const recorded = getMeta(db, META_KEYS.appVersion);
+    const recorded = getMeta(requireDb(), META_KEYS.appVersion);
     if (recorded) return recorded;
     return config.appVersion || null;
   }
@@ -82,6 +78,7 @@ export async function startServer(): Promise<void> {
    * connection (Node's built-in SQLite driver is synchronous and safe for shared reads).
    */
   function createMcpServer(context?: SessionContext): McpServer {
+    const db = requireDb();
     const instructions = buildSessionInstructions({
       indexVersion: resolveIndexAppVersion(),
       clientVersion: context?.clientSdkVersion ?? config.appVersion ?? null,
@@ -136,6 +133,45 @@ export async function startServer(): Promise<void> {
     return server;
   }
 
+  async function activateArtifactIndex(): Promise<void> {
+    const options = {
+      storePath: config.artifactStorePath,
+      indexDbPath: config.indexDbPath,
+      serverVersion: VERSION,
+      indexSchemaVersion: INDEX_SCHEMA_VERSION,
+    };
+    if (config.artifactSource === 'azure-blob') {
+      logger.info('Materializing the active artifact bundle from Azure Blob Storage', {
+        accountUrl: config.artifactAccountUrl,
+        container: config.artifactContainer,
+        localStorePath: config.artifactStorePath,
+      });
+      const { createAzureBlobArtifactStore } = await import('../indexer/azureBlobArtifactStoreSdk.js');
+      const store = createAzureBlobArtifactStore({
+        accountUrl: config.artifactAccountUrl,
+        containerName: config.artifactContainer,
+        managedIdentityClientId: config.artifactManagedIdentityClientId || undefined,
+      });
+      const materialized = await materializeAzureArtifactIndex({ ...options, store });
+      logger.info('Activated validated artifact bundle', {
+        source: 'azure-blob',
+        bundleId: materialized.bundle.manifest.bundleId,
+        pointerRevision: materialized.pointerRevision,
+        pointerEtag: materialized.pointerEtag,
+        reusedLocalBundle: materialized.reusedLocalBundle,
+        applicationVersion: materialized.bundle.manifest.d365.applicationVersion,
+      });
+      return;
+    }
+    const prepared = prepareArtifactBackedIndex(options);
+    logger.info('Activated validated artifact bundle', {
+      source: 'local',
+      bundleId: prepared.bundle.manifest.bundleId,
+      pointerRevision: prepared.pointerRevision,
+      applicationVersion: prepared.bundle.manifest.d365.applicationVersion,
+    });
+  }
+
   if (config.enableWriteTools) {
     logger.warn('Write tools are enabled over HTTP: every API key can write metadata and knowledge base articles', {
       keys: config.apiKeys.map((entry) => entry.name).join(', '),
@@ -153,7 +189,26 @@ export async function startServer(): Promise<void> {
     trustProxyHops: config.trustProxyHops,
     maxConcurrentSessions: config.maxConcurrentSessions,
     sessionIdleTimeoutMs: config.sessionIdleTimeoutMs,
+    readiness: { isReady: () => db !== null },
   });
+
+  if (hosted) {
+    // Listen first so the platform sees a live but unready replica while the
+    // bundle is materialized and validated; fail closed if that does not succeed.
+    http.server.once('listening', () => {
+      void activateArtifactIndex()
+        .then(() => {
+          openIndex();
+          logger.info('MCP server ready', { indexDbPath: config.indexDbPath });
+        })
+        .catch((error: unknown) => {
+          logger.fatal('Artifact startup failed; refusing to serve', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+          process.exit(1);
+        });
+    });
+  }
 
   let shuttingDown = false;
   const shutdown = (signal: string) => {
@@ -168,7 +223,7 @@ export async function startServer(): Promise<void> {
 
     http.closeAllSessions();
     http.server.close(() => {
-      db.close();
+      db?.close();
       process.exit(0);
     });
     http.server.closeAllConnections();

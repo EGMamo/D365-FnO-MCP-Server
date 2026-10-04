@@ -218,6 +218,30 @@ describe('compiled MCP server deployment behavior', () => {
     expect(staleness).toMatchObject({ mode: 'snapshot', builtAt: '2026-09-25T20:00:00.000Z' });
   }, 30_000);
 
+  it('listens unready during artifact startup and exits when no bundle can be activated', async () => {
+    const env = {
+      ...environment,
+      D365_ARTIFACT_STORE_PATH: path.join(root, 'empty-artifacts'),
+      D365_INDEX_DB_PATH: path.join(root, 'hosted', 'd365_index.db'),
+    };
+    const child = spawn(process.execPath, [entry, 'serve'], { env, cwd: root, stdio: ['ignore', 'ignore', 'pipe'] });
+    children.push(child);
+    const messages: Array<{ message: string; level?: string; ready?: boolean }> = [];
+    const lines = createInterface({ input: child.stderr! });
+    lines.on('line', (line) => {
+      if (line.startsWith('{')) messages.push(JSON.parse(line) as (typeof messages)[number]);
+    });
+    const [[code]] = (await Promise.all([once(child, 'exit'), once(lines, 'close')])) as [[number | null], unknown];
+
+    expect(code).toBe(1);
+    const listening = messages.findIndex((entry) => entry.message === 'MCP HTTP transport listening');
+    const failed = messages.findIndex((entry) => entry.message === 'Artifact startup failed; refusing to serve');
+    expect(listening).toBeGreaterThanOrEqual(0);
+    expect(messages[listening]?.ready).toBe(false);
+    expect(failed).toBeGreaterThan(listening);
+    expect(JSON.stringify(messages[failed])).toContain('no active validated bundle');
+    expect(fs.existsSync(path.join(root, 'hosted', 'd365_index.db'))).toBe(false);
+  }, 30_000);
 });
 
 describe('compiled MCP server SDK version warning', () => {

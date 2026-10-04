@@ -2,10 +2,13 @@
 #
 # Hosted (read-only) D365 FnO MCP server.
 #
-# The image carries no index. The platform must mount or synchronize a complete
-# immutable artifact store at D365_ARTIFACT_STORE_PATH. At startup `serve`
-# validates its active bundle, stages the database on container-local disk and
-# opens it read-only. Missing or invalid artifacts fail startup closed.
+# The image carries no index. Either mount a complete immutable artifact store at
+# D365_ARTIFACT_STORE_PATH, or set D365_ARTIFACT_SOURCE=azure-blob (plus
+# D365_ARTIFACT_ACCOUNT_URL, D365_ARTIFACT_CONTAINER and a writable local
+# D365_ARTIFACT_STORE_PATH such as /data/artifacts) to pull the active bundle at
+# startup. `serve` listens unready (/health 503), validates and stages the
+# database on container-local disk, opens it read-only and only then reports
+# ready. Missing or invalid artifacts fail startup closed.
 
 # Builds behind a private registry or a TLS-inspecting proxy can pass an .npmrc
 # (registry, auth token, cafile) as a BuildKit secret without baking it in:
@@ -44,7 +47,7 @@ COPY README.md LICENSE ./
 RUN mkdir -p /data && chown -R node:node /data
 USER node
 EXPOSE 8080
-# Allow validation and local staging of a large mounted bundle before listening.
+# /health is readiness; allow download, validation and local staging of a large bundle.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=300s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:' + process.env.MCP_PORT + '/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
 ENTRYPOINT ["node", "dist/src/index.js"]

@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Per-replica startup materialization from Azure Blob (`D365_ARTIFACT_SOURCE=azure-blob`): the
+  replica listens unready, reads the active pointer with managed identity and pins its ETag,
+  checks local disk, downloads the immutable bundle into a staging directory, validates it,
+  atomically publishes and activates it on instance-local disk, and reports ready only after a
+  representative query on the opened index. `/health` is now readiness (`503` while starting) and
+  the new `/live` route reports liveness. Startup failures exit with code 1.
+
 - A fail-closed Azure artifact contract for immutable content-addressed index bundles, including
   source provenance, capability inventory, compatibility bounds, durable validation reports,
   concurrency-safe active/previous promotion, pointer-only rollback and validated local API
