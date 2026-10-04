@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `Release VS extension` workflow: an `extension-v<version>` tag, or a manual run on `master`,
+  builds the Visual Studio extension with that version and publishes a GitHub release with the
+  VSIX and its SHA-256 checksum. `docs/visual-studio-extension.md` now covers installing it.
 - Storage and Key Vault firewalls list the app and worker subnets (with service endpoints) next
   to their private endpoints, so deployments pass "require VNet ACLs" policies.
   `azure-deploy.ps1` prints denied resources and failed operations when a deployment fails.

@@ -20,7 +20,9 @@ dotnet build src/D365FnoMcp.Extension -c Release
 On Windows the build writes `src/D365FnoMcp.Extension/bin/Release/net8.0-windows8.0/D365FnoMcp.Extension.vsix`.
 Other operating systems compile the code and generate the extension metadata but do not package a
 `.vsix`. CI builds the package on `windows-latest` and publishes it as the `vs-extension-vsix`
-artifact.
+artifact. Tagged versions are published as GitHub releases; see
+[Installing](../docs/visual-studio-extension.md#installing) and
+[Releasing a version](../docs/visual-studio-extension.md#releasing-a-version).
 
 To debug, open `D365FnoMcp.sln` in Visual Studio with the *Visual Studio extension development*
 workload and press F5. This starts the experimental instance with the extension loaded.
