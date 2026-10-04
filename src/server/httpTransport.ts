@@ -36,6 +36,16 @@ export interface HttpTransportOptions {
   sessionSweepIntervalMs?: number;
   /** Routes mounted at `/admin` after authentication. */
   admin?: AdminRoutes;
+  /**
+   * Readiness gate. While it reports not ready, `/health` answers 503 and
+   * authenticated requests are refused with 503, so a platform probe routes no
+   * traffic to this replica. Omitted means always ready.
+   */
+  readiness?: ReadinessProbe;
+}
+
+export interface ReadinessProbe {
+  isReady(): boolean;
 }
 
 export interface AdminRoutes {
@@ -133,7 +143,7 @@ export function createHttpApp(createMcpServer: ServerFactory, options: HttpTrans
       max: options.rateLimitMaxRequests,
       standardHeaders: true,
       legacyHeaders: false,
-      skip: (req) => req.path === '/health',
+      skip: (req) => req.path === '/health' || req.path === '/live',
       // Key on the client IP alone. The rate limiter runs before authentication,
       // so a client-controlled credential header must not be part of the bucket key;
       // a per-key throttle would belong behind verified auth.
@@ -146,9 +156,19 @@ export function createHttpApp(createMcpServer: ServerFactory, options: HttpTrans
   );
 
 
-  // ── Health check (unauthenticated) ────────────────────────────────────────
+  const isReady = () => options.readiness?.isReady() ?? true;
+
+  // ── Health checks (unauthenticated) ───────────────────────────────────────
+  // `/health` is readiness: 200 only once the index is open. `/live` is liveness.
   app.get('/health', (_req: Request, res: Response) => {
+    if (!isReady()) {
+      res.status(503).set('Retry-After', '10').json({ status: 'starting', version: options.version });
+      return;
+    }
     res.json({ status: 'ok', version: options.version });
+  });
+  app.get('/live', (_req: Request, res: Response) => {
+    res.json({ status: 'alive', version: options.version });
   });
 
   // ── API key auth ──────────────────────────────────────────────────────────
@@ -164,6 +184,12 @@ export function createHttpApp(createMcpServer: ServerFactory, options: HttpTrans
     res.locals.apiKeyName = entry.name;
     logger.info('Request', { method: req.method, path: req.path, ip: clientIp(req), apiKey: entry.name });
     next();
+  });
+
+  // ── Readiness gate ────────────────────────────────────────────────────────
+  app.use((_req: Request, res: Response, next: NextFunction) => {
+    if (isReady()) return next();
+    res.status(503).set('Retry-After', '10').json(jsonRpcError(-32000, 'Server is starting: the index is not ready'));
   });
 
   // ── Admin routes ──────────────────────────────────────────────────────────
@@ -412,6 +438,7 @@ export function startHttpServer(
       host: options.host || 'all interfaces',
       endpoint: `http://localhost:${port}/mcp`,
       health: `http://localhost:${port}/health`,
+      ready: options.readiness?.isReady() ?? true,
       trustProxyHops: options.trustProxyHops ?? 0,
       apiKeys: options.apiKeys.length,
     });

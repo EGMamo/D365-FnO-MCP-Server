@@ -47,7 +47,7 @@ internal sealed class ConfigureConnectionCommand : Command
         string serverUrl;
         try
         {
-            serverUrl = ServerUrl.Normalize(url);
+            serverUrl = ServerUrl.NormalizeSecure(url);
         }
         catch (FormatException ex)
         {
@@ -83,21 +83,9 @@ internal sealed class ConfigureConnectionCommand : Command
         }
 
         string? solutionDirectory = await this.GetSolutionDirectoryAsync(cancellationToken);
-        settings.ServerUrl = serverUrl;
-        this.services.Settings.Save(settings);
-        this.services.Secrets.Write(SecretNames.ApiKey(serverUrl), apiKey);
 
-        McpGateway gateway;
-        try
-        {
-            gateway = await this.services.RestartGatewayAsync(serverUrl, apiKey, cancellationToken);
-        }
-        catch (Exception ex) when (ex is IOException or HttpRequestException or InvalidOperationException)
-        {
-            await shell.ShowPromptAsync($"Could not start the local MCP gateway: {ex.Message}", PromptOptions.ErrorConfirm, cancellationToken);
-            return;
-        }
-
+        // Ask for the target before anything changes: dismissing it keeps the previous settings,
+        // stored key and running gateway exactly as they were.
         var choices = new PromptOptions<TargetChoice>
         {
             Title = "Where should Visual Studio find the server?",
@@ -126,6 +114,17 @@ internal sealed class ConfigureConnectionCommand : Command
         }
 
         string path = choice == TargetChoice.Solution ? McpJsonFile.SolutionFilePath(solutionDirectory!) : McpJsonFile.UserFilePath();
+        McpGateway gateway;
+        try
+        {
+            gateway = await this.services.RestartGatewayAsync(serverUrl, apiKey, cancellationToken);
+        }
+        catch (Exception ex) when (ex is IOException or HttpRequestException or InvalidOperationException)
+        {
+            await shell.ShowPromptAsync($"Could not start the local MCP gateway: {ex.Message}", PromptOptions.ErrorConfirm, cancellationToken);
+            return;
+        }
+
         try
         {
             McpJsonFile.Write(path, settings.McpServerName, gateway.Endpoint!, gateway.BearerToken);
@@ -136,6 +135,8 @@ internal sealed class ConfigureConnectionCommand : Command
             return;
         }
 
+        this.services.Secrets.Write(SecretNames.ApiKey(serverUrl), apiKey);
+        settings.ServerUrl = serverUrl;
         settings.McpConfigurationPath = path;
         this.services.Settings.Save(settings);
 

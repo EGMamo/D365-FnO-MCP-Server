@@ -117,6 +117,45 @@ describe('health endpoint', () => {
   });
 });
 
+describe('readiness gate', () => {
+  it('reports starting and refuses MCP traffic until the index is ready', async () => {
+    let ready = false;
+    const factory = vi.fn(() => new McpServer({ name: 'test', version: '0.0.0' }));
+    const url = await listen(makeApp(factory, { readiness: { isReady: () => ready } }).app);
+    const initialize = () =>
+      fetch(`${url}/mcp`, {
+        method: 'POST',
+        headers: {
+          'X-API-Key': API_KEY,
+          'Content-Type': 'application/json',
+          Accept: 'application/json, text/event-stream',
+        },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'initialize',
+          params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 't', version: '0' } },
+        }),
+      });
+
+    const health = await fetch(`${url}/health`);
+    expect(health.status).toBe(503);
+    expect(health.headers.get('retry-after')).toBe('10');
+    expect(await health.json()).toEqual({ status: 'starting', version: '0.1.0' });
+    expect((await fetch(`${url}/live`)).status).toBe(200);
+    expect((await fetch(`${url}/mcp`, { method: 'POST' })).status).toBe(401);
+    const refused = await initialize();
+    expect(refused.status).toBe(503);
+    expect(((await refused.json()) as { error: { code: number } }).error.code).toBe(-32000);
+    expect(factory).not.toHaveBeenCalled();
+
+    ready = true;
+    expect((await fetch(`${url}/health`)).status).toBe(200);
+    expect((await initialize()).status).toBe(200);
+    expect(factory).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('json-rpc validation', () => {
   it('rejects a request missing "method" with -32600', async () => {
     const res = await fetch(`${baseUrl}/mcp`, {

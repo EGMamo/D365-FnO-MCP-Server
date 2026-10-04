@@ -14,6 +14,8 @@ import {
   type ArtifactProvenance,
   type ArtifactValidationReport,
   type CapabilityInventory,
+  ArtifactProvenanceSchema,
+  CapabilityInventorySchema,
   assertArtifactCompatible,
   canonicalJson,
   computeBundleId,
@@ -113,6 +115,58 @@ function inspectBundledDatabase(file: string, manifest: ArtifactManifest): void 
   }
 }
 
+interface BundleValidationCheck {
+  id: string;
+  run: () => string;
+}
+
+function failureDetail(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.length > 1000 ? `${message.slice(0, 997)}...` : message || 'failed';
+}
+
+/** Runs every check, records its outcome, and never reports a check it did not run. */
+function runBundleValidationChecks(
+  generatedAt: string,
+  checks: readonly BundleValidationCheck[]
+): ArtifactValidationReport {
+  const results = checks.map((check): ArtifactValidationReport['checks'][number] => {
+    try {
+      return { id: check.id, status: 'passed', detail: failureDetail(check.run()) };
+    } catch (error) {
+      return { id: check.id, status: 'failed', detail: failureDetail(error) };
+    }
+  });
+  return parseValidationReport({
+    contract: ARTIFACT_CONTRACT_NAME,
+    contractVersion: ARTIFACT_CONTRACT_VERSION,
+    generatedAt,
+    status: results.every((result) => result.status === 'passed') ? 'passed' : 'rejected',
+    checks: results,
+  });
+}
+
+function inspectSqliteIntegrity(
+  file: string,
+  pragma: 'integrity_check' | 'quick_check',
+  expectedObjects: number
+): string {
+  const database = new DatabaseSync(file, { readOnly: true });
+  try {
+    const verdict = Object.values(database.prepare(`PRAGMA ${pragma}`).get() as Record<string, string>)[0];
+    if (verdict !== 'ok') throw new Error(`SQLite ${pragma} reported: ${verdict}`);
+    const objects = Number(
+      (database.prepare('SELECT COUNT(*) AS count FROM ax_objects').get() as { count: number | bigint }).count
+    );
+    if (objects !== expectedObjects) {
+      throw new Error(`Bundled index has ${objects} objects but the source reported ${expectedObjects}.`);
+    }
+    return verdict;
+  } finally {
+    database.close();
+  }
+}
+
 export function artifactBundleDirectory(storeRoot: string, bundleId: string): string {
   if (!/^sha256:[a-f0-9]{64}$/.test(bundleId)) throw new Error(`Invalid artifact bundle ID: ${bundleId}`);
   return path.join(path.resolve(storeRoot), 'bundles', bundleId.slice('sha256:'.length));
@@ -133,32 +187,73 @@ export function createArtifactBundle(
     const snapshot = snapshotIndex(sourceDatabase, databaseFile, {
       relativePathsRoot: options.relativePathsRoot,
       integrityCheck: options.integrityCheck,
+      verify: false,
     });
-    if (snapshot.applicationVersion && snapshot.applicationVersion !== options.applicationVersion) {
-      throw new Error(
-        `Requested application version ${options.applicationVersion} does not match index metadata ` +
-          `${snapshot.applicationVersion}.`
-      );
+    const integrityPragma = options.integrityCheck ? 'integrity_check' : 'quick_check';
+    const report = runBundleValidationChecks(now, [
+      {
+        id: 'sqlite-integrity',
+        run: () => {
+          const verdict = inspectSqliteIntegrity(databaseFile, integrityPragma, snapshot.stats.objects);
+          return `PRAGMA ${integrityPragma}=${verdict}; ${snapshot.stats.objects} objects match the source index.`;
+        },
+      },
+      {
+        id: 'index-metadata',
+        run: () => {
+          if (!snapshot.applicationVersion) {
+            throw new Error('The source index does not record an authoritative D365 application version.');
+          }
+          if (snapshot.applicationVersion !== options.applicationVersion) {
+            throw new Error(
+              `Requested application version ${options.applicationVersion} does not match index metadata ` +
+                `${snapshot.applicationVersion}.`
+            );
+          }
+          if (snapshot.schemaVersion === null) {
+            throw new Error('The source index does not record a valid index schema version.');
+          }
+          assertIsoDate(snapshot.builtAt, 'Index builtAt');
+          return `Application ${snapshot.applicationVersion}, schema ${snapshot.schemaVersion}, built ${snapshot.builtAt}.`;
+        },
+      },
+      {
+        id: 'source-provenance',
+        run: () => {
+          const provenance = ArtifactProvenanceSchema.parse(options.provenance);
+          const sources = [
+            provenance.packagesLocalDirectory,
+            ...provenance.vsixAssets,
+            provenance.dbrefx,
+            ...provenance.optionalInputs,
+          ];
+          const future = sources.find((source) => Date.parse(source.acquiredAt) > Date.parse(now));
+          if (future) throw new Error(`Source ${future.sourceId} was acquired after the bundle creation time.`);
+          return `${sources.length} sources with SHA-256 and size recorded.`;
+        },
+      },
+      {
+        id: 'capability-inventory',
+        run: () => {
+          const inventory = CapabilityInventorySchema.parse(options.capabilities);
+          const incomplete = options.requiredCapabilities.filter(
+            (capability) => inventory[capability].completeness !== 'complete'
+          );
+          if (incomplete.length > 0) {
+            throw new Error(`Required capabilities are not complete: ${incomplete.join(', ')}.`);
+          }
+          return `${options.requiredCapabilities.length} required capabilities complete.`;
+        },
+      },
+    ]);
+    if (report.status !== 'passed') {
+      const failures = report.checks
+        .filter((check) => check.status === 'failed')
+        .map((check) => `${check.id}: ${check.detail ?? 'failed'}`);
+      throw new Error(`Artifact validation failed. ${failures.join(' ')}`);
     }
-    if (!snapshot.applicationVersion) {
-      throw new Error('The source index does not record an authoritative D365 application version.');
-    }
-    if (snapshot.schemaVersion === null) {
-      throw new Error('The source index does not record a valid index schema version.');
-    }
-
-    const report: ArtifactValidationReport = {
-      contract: ARTIFACT_CONTRACT_NAME,
-      contractVersion: ARTIFACT_CONTRACT_VERSION,
-      generatedAt: now,
-      status: 'passed',
-      checks: [
-        { id: 'sqlite-integrity', status: 'passed' },
-        { id: 'index-metadata', status: 'passed' },
-        { id: 'source-provenance', status: 'passed' },
-        { id: 'capability-inventory', status: 'passed' },
-      ],
-    };
+    // The schema version was checked above; narrow it for the manifest.
+    const schemaVersion = snapshot.schemaVersion as number;
     const reportFile = path.join(staging, ARTIFACT_VALIDATION_FILE);
     writeCanonicalJson(reportFile, report);
 
@@ -176,7 +271,7 @@ export function createArtifactBundle(
       },
       generator: { name: 'd365-fno-mcp-server', version: options.generatorVersion },
       index: {
-        schemaVersion: snapshot.schemaVersion,
+        schemaVersion: schemaVersion,
         file: ARTIFACT_DATABASE_FILE,
         bytes: fs.statSync(databaseFile).size,
         sha256: sha256File(databaseFile),
@@ -193,7 +288,7 @@ export function createArtifactBundle(
       compatibility: {
         minimumServerVersion: options.minimumServerVersion,
         maximumServerVersion: options.maximumServerVersion,
-        indexSchemaVersion: snapshot.schemaVersion,
+        indexSchemaVersion: schemaVersion,
         requiredCapabilities: options.requiredCapabilities,
       },
     };
@@ -205,8 +300,8 @@ export function createArtifactBundle(
     parseValidationReport(report);
     assertArtifactCompatible(checkedManifest, {
       serverVersion: options.generatorVersion,
-      minimumIndexSchemaVersion: snapshot.schemaVersion,
-      maximumIndexSchemaVersion: snapshot.schemaVersion,
+      minimumIndexSchemaVersion: schemaVersion,
+      maximumIndexSchemaVersion: schemaVersion,
       requiredCapabilities: options.requiredCapabilities,
     });
     const manifestFile = path.join(staging, ARTIFACT_MANIFEST_FILE);
@@ -216,8 +311,8 @@ export function createArtifactBundle(
     publishStagedArtifactDirectory(staging, finalDirectory);
     return validateArtifactBundle(finalDirectory, {
       serverVersion: options.generatorVersion,
-      minimumIndexSchemaVersion: snapshot.schemaVersion,
-      maximumIndexSchemaVersion: snapshot.schemaVersion,
+      minimumIndexSchemaVersion: schemaVersion,
+      maximumIndexSchemaVersion: schemaVersion,
       requiredCapabilities: options.requiredCapabilities,
     });
   } catch (error) {
@@ -266,7 +361,17 @@ export function stageAndActivateArtifactBundle(
   targetDatabase: string,
   policy: ArtifactCompatibilityPolicy
 ): ValidatedArtifactBundle {
-  const validated = validateArtifactBundle(directory, policy);
+  return activateValidatedArtifactBundle(validateArtifactBundle(directory, policy), targetDatabase);
+}
+
+/**
+ * Copies an already validated bundle's database next to `targetDatabase`,
+ * re-verifies the copy and atomically activates it.
+ */
+export function activateValidatedArtifactBundle(
+  validated: ValidatedArtifactBundle,
+  targetDatabase: string
+): ValidatedArtifactBundle {
   const target = path.resolve(targetDatabase);
   fs.mkdirSync(path.dirname(target), { recursive: true });
   const candidate = path.join(

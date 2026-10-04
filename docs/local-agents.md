@@ -21,22 +21,31 @@ None of the agents can use `write_table_extension` or `apply_table_extension_cha
 ## 1. Build the index
 
 Follow the [Quick start](../README.md#quick-start) on the machine that has the
-PackagesLocalDirectory (usually the development VM): `setup`, `doctor`, `index`. You can also
-connect to the hosted API or use an Azure-promoted index. The clients connect to the authenticated
+PackagesLocalDirectory (usually the development VM): `setup`, `doctor`, `index`, `serve`. You can
+instead connect to a hosted API that serves an Azure-promoted index. The clients connect to the authenticated
 Streamable HTTP endpoint; they do not launch a local server process.
 
 ## 2. Register the two MCP servers
 
 Use exactly these server names: **`d365-fno`** and **`microsoft-learn`**. The agents' tool lists are
 prefixed with them (`d365-fno/search_symbols`, `mcp__d365-fno__search_symbols`), so a different
-name leaves an agent without tools. Use absolute paths. Windows JSON needs forward slashes or
-doubled backslashes.
+name leaves an agent without tools. Point `d365-fno` at the server's `/mcp` URL:
+`http://127.0.0.1:3000/mcp` for a local `serve` (default `MCP_PORT`), or the hosted HTTPS URL and
+personal API key from your operator. The examples use the hosted form.
 
 **VS Code**: `.vscode/mcp.json` in your X++ workspace. **Visual Studio**: `.mcp.json` next to the
 solution, same shape.
 
 ```json
 {
+  "inputs": [
+    {
+      "id": "d365-mcp-api-key",
+      "type": "promptString",
+      "description": "D365 FnO MCP API key",
+      "password": true
+    }
+  ],
   "servers": {
     "d365-fno": {
       "type": "http",
@@ -83,9 +92,8 @@ solution, same shape.
 }
 ```
 
-If your team uses a [hosted server](hosted-deployment.md), register `d365-fno` as an HTTP server
-with the `X-API-Key` header instead ([Connecting clients](hosted-deployment.md#connecting-clients)).
-The agents work the same way, but trace data is never on a hosted server.
+The agents work the same way against a local or [hosted server](hosted-deployment.md#client-connection),
+but trace data is never on a hosted server.
 
 ## 3. Copy the agents
 
@@ -139,7 +147,7 @@ Instructions in Markdown.
 
 Keep each agent's tool list short: the model picks tools more reliably from a focused set. To let
 an agent write a table extension through the server, add `write_table_extension` and
-`apply_table_extension_change` to your own copy and set `D365_ENABLE_WRITE_TOOLS=1` in the
-`d365-fno` server's `env`. The server refuses this with a published index.
+`apply_table_extension_change` to your own copy and start your local server with
+`D365_ENABLE_WRITE_TOOLS=1`. A hosted server always refuses write tools.
 
 See also: [Responsible AI and security FAQ](responsible-ai-faq.md).

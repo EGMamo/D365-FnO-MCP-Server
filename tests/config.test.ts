@@ -65,4 +65,27 @@ describe('loadConfig', () => {
     expect(config.artifactStorePath).toBe('/artifacts');
     expect(config.enableWriteTools).toBe(false);
   });
+
+  it('requires a local directory, HTTPS account and container for Azure Blob artifacts', () => {
+    expect(issuesOf({
+      MCP_API_KEY: key('a'),
+      D365_ARTIFACT_SOURCE: 'azure-blob',
+      D365_ARTIFACT_ACCOUNT_URL: 'http://account.blob.core.windows.net/?sig=secret',
+    })).toEqual([
+      expect.stringMatching(/D365_ARTIFACT_STORE_PATH must name an instance-local directory/),
+      expect.stringMatching(/D365_ARTIFACT_ACCOUNT_URL must be an HTTPS storage account URL/),
+      expect.stringMatching(/D365_ARTIFACT_CONTAINER is required/),
+    ]);
+
+    const config = loadConfig({
+      MCP_API_KEY: key('a'),
+      D365_ARTIFACT_SOURCE: 'azure-blob',
+      D365_ARTIFACT_STORE_PATH: '/data/artifacts',
+      D365_ARTIFACT_ACCOUNT_URL: ' https://account.blob.core.windows.net ',
+      D365_ARTIFACT_CONTAINER: 'd365-artifacts',
+    });
+    expect(config.artifactSource).toBe('azure-blob');
+    expect(config.artifactAccountUrl).toBe('https://account.blob.core.windows.net');
+    expect(config.artifactManagedIdentityClientId).toBe('');
+  });
 });

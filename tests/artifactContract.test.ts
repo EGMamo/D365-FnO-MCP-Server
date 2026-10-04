@@ -187,6 +187,28 @@ describe('Azure artifact contract', () => {
     }
   });
 
+  it('records the outcome of every validation check it ran', () => {
+    const bundle = createBundle();
+
+    expect(bundle.validationReport.status).toBe('passed');
+    expect(bundle.validationReport.checks.map((check) => [check.id, check.status, check.detail])).toEqual([
+      ['sqlite-integrity', 'passed', 'PRAGMA integrity_check=ok; 1 objects match the source index.'],
+      ['index-metadata', 'passed', `Application 10.0.2500.1, schema ${INDEX_SCHEMA_VERSION}, built ${FIRST_TIME}.`],
+      ['source-provenance', 'passed', '3 sources with SHA-256 and size recorded.'],
+      ['capability-inventory', 'passed', '3 required capabilities complete.'],
+    ]);
+  });
+
+  it('refuses to build a bundle when a validation check fails', () => {
+    expect(() =>
+      createBundle(FIRST_TIME, { ...capabilities, securityGraphs: { completeness: 'partial', itemCount: 0 } })
+    ).toThrow(/capability-inventory: Required capabilities are not complete: securityGraphs/);
+    expect(() => createBundle('2026-10-03T09:00:00.000Z')).toThrow(
+      /source-provenance: Source packages-local-directory was acquired after the bundle creation time/
+    );
+    expect(fs.readdirSync(path.join(root, 'bundles'))).toEqual([]);
+  });
+
   it('rejects a database whose bytes no longer match the immutable manifest', () => {
     const bundle = createBundle();
     fs.appendFileSync(path.join(bundle.directory, ARTIFACT_DATABASE_FILE), 'corrupt');

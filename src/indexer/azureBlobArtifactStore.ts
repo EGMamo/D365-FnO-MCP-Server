@@ -9,6 +9,7 @@ import {
   ARTIFACT_POINTERS_FILE,
   ARTIFACT_VALIDATION_FILE,
   type ArtifactCompatibilityPolicy,
+  type ArtifactManifest,
   type ArtifactPointers,
   canonicalJson,
   parseArtifactManifest,
@@ -74,6 +75,8 @@ export interface ArtifactPointerSnapshot {
 export interface MaterializeArtifactBundleOptions {
   localStoreRoot: string;
   policy: ArtifactCompatibilityPolicy;
+  /** Runs after the manifest is read and before any bundle file is downloaded. */
+  beforeDownload?: (manifest: ArtifactManifest) => void;
 }
 
 function statusCode(error: unknown): number | undefined {
@@ -183,6 +186,7 @@ export class AzureBlobArtifactStore {
         `Requested artifact bundle ${bundleId} but the manifest identifies ${manifest.bundleId}.`
       );
     }
+    options.beforeDownload?.(manifest);
 
     const root = path.resolve(options.localStoreRoot);
     const bundles = path.join(root, 'bundles');

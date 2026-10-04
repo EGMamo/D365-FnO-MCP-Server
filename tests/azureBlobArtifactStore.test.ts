@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   type ArtifactBlobContainer,
   type ArtifactBlobLease,
@@ -14,10 +14,13 @@ import {
   type CapabilityInventory,
 } from '../src/indexer/artifactContract.js';
 import { createArtifactBundle } from '../src/indexer/artifactBundle.js';
+import { readArtifactPointers } from '../src/indexer/artifactPointers.js';
+import { materializeAzureArtifactIndex } from '../src/server/artifactStartup.js';
 import {
   INDEX_SCHEMA_VERSION,
   META_KEYS,
   openDb,
+  openDbReadOnly,
   setMeta,
   upsertObject,
 } from '../src/indexer/db.js';
@@ -412,4 +415,128 @@ describe('Azure Blob artifact adapter', () => {
     ).rejects.toThrow('worker failed');
     await expect(store.withAcquisitionLease(async () => 'reacquired')).resolves.toBe('reacquired');
   }, 15_000);
+});
+
+describe('Azure startup materialization', () => {
+  const plenty = () => Number.MAX_SAFE_INTEGER;
+  let localStore: string;
+  let indexDbPath: string;
+
+  beforeEach(() => {
+    localStore = path.join(root, 'replica', 'artifacts');
+    indexDbPath = path.join(root, 'replica', 'data', 'd365_index.db');
+  });
+
+  function startup(freeBytes: (directory: string) => number = plenty) {
+    return materializeAzureArtifactIndex({
+      store,
+      storePath: localStore,
+      indexDbPath,
+      serverVersion: policy.serverVersion,
+      indexSchemaVersion: INDEX_SCHEMA_VERSION,
+      requiredCapabilities: policy.requiredCapabilities,
+      freeBytes,
+    });
+  }
+
+  async function publishAndPromote(...bundles: Array<ReturnType<typeof createBundle>>) {
+    await store.withAcquisitionLease(async (writer) => {
+      for (const [revision, bundle] of bundles.entries()) {
+        await writer.uploadBundle(bundle.directory, policy);
+        await writer.promote(bundle.manifest.bundleId, revision, policy, bundle.manifest.createdAt);
+      }
+    });
+  }
+
+  function downloadedBlobs(spy: { mock: { calls: unknown[][] } }): string[] {
+    return spy.mock.calls.map(([name]) => String(name)).filter((name) => name.endsWith('d365_index.db'));
+  }
+
+  it('downloads, validates and activates the pinned active bundle on instance-local disk', async () => {
+    const bundle = createBundle(FIRST_TIME);
+    await publishAndPromote(bundle);
+    const pinnedEtag = (await store.readPointers()).etag;
+
+    const prepared = await startup();
+
+    expect(prepared.bundle.manifest.bundleId).toBe(bundle.manifest.bundleId);
+    expect(prepared.pointerRevision).toBe(1);
+    expect(prepared.pointerEtag).toBe(pinnedEtag);
+    expect(prepared.reusedLocalBundle).toBe(false);
+    expect(prepared.bundle.directory.startsWith(path.join(localStore, 'bundles'))).toBe(true);
+    expect(readArtifactPointers(localStore).active?.bundleId).toBe(bundle.manifest.bundleId);
+    expect(fs.readdirSync(path.join(localStore, 'bundles'))).toEqual([
+      bundle.manifest.bundleId.slice('sha256:'.length),
+    ]);
+    const database = openDbReadOnly(indexDbPath);
+    try {
+      const row = database.prepare('SELECT name FROM ax_objects').get() as { name: string };
+      expect(row.name).toBe('AzureBlobFixture');
+    } finally {
+      database.close();
+    }
+  });
+
+  it('reuses a validated local copy and prunes superseded bundles and interrupted downloads', async () => {
+    const first = createBundle(FIRST_TIME);
+    const second = createBundle(SECOND_TIME);
+    await publishAndPromote(first);
+    await startup();
+    await store.withAcquisitionLease(async (writer) => {
+      await writer.uploadBundle(second.directory, policy);
+      await writer.promote(second.manifest.bundleId, 1, policy, SECOND_TIME);
+    });
+    fs.mkdirSync(path.join(localStore, 'bundles', '.downloading-crashed'));
+
+    const getBlob = vi.spyOn(container, 'getBlob');
+    const upgraded = await startup();
+    expect(upgraded.bundle.manifest.bundleId).toBe(second.manifest.bundleId);
+    expect(upgraded.reusedLocalBundle).toBe(false);
+    expect(downloadedBlobs(getBlob)).toHaveLength(1);
+    expect(fs.readdirSync(path.join(localStore, 'bundles'))).toEqual([
+      second.manifest.bundleId.slice('sha256:'.length),
+    ]);
+
+    getBlob.mockClear();
+    const restarted = await startup();
+    expect(restarted.reusedLocalBundle).toBe(true);
+    expect(downloadedBlobs(getBlob)).toHaveLength(0);
+  });
+
+  it('replaces a corrupt local copy with a fresh download', async () => {
+    const bundle = createBundle(FIRST_TIME);
+    await publishAndPromote(bundle);
+    const first = await startup();
+    fs.appendFileSync(path.join(first.bundle.directory, 'd365_index.db'), 'corrupt');
+
+    const again = await startup();
+    expect(again.reusedLocalBundle).toBe(false);
+    expect(again.bundle.manifest.bundleId).toBe(bundle.manifest.bundleId);
+  });
+
+  it('fails closed when the remote store has no active bundle', async () => {
+    await expect(startup()).rejects.toThrow(/no active validated bundle/);
+    expect(fs.existsSync(indexDbPath)).toBe(false);
+  });
+
+  it('fails closed on corrupt remote content without activating or caching it', async () => {
+    const bundle = createBundle(FIRST_TIME);
+    await publishAndPromote(bundle);
+    container.corrupt(`bundles/${bundle.manifest.bundleId.slice('sha256:'.length)}/d365_index.db`);
+
+    await expect(startup()).rejects.toThrow(/bytes; expected|SHA-256/);
+    expect(fs.existsSync(indexDbPath)).toBe(false);
+    expect(fs.readdirSync(path.join(localStore, 'bundles'))).toEqual([]);
+    expect(fs.existsSync(path.join(localStore, 'deployment-pointers.json'))).toBe(false);
+  });
+
+  it('refuses to download a bundle that does not fit on local disk', async () => {
+    const bundle = createBundle(FIRST_TIME);
+    await publishAndPromote(bundle);
+    const getBlob = vi.spyOn(container, 'getBlob');
+
+    await expect(startup(() => bundle.manifest.index.bytes)).rejects.toThrow(/Insufficient local disk/);
+    expect(downloadedBlobs(getBlob)).toHaveLength(0);
+    expect(fs.existsSync(indexDbPath)).toBe(false);
+  });
 });

@@ -18,12 +18,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   testing and alerts for health, capacity, auth failures, Blob denials, worker failures and index
   freshness. CI builds and lints the templates. `deploy.yml` now deploys to the staging slot,
   waits for bundle activation, smoke-tests, swaps and swaps back if production is unhealthy.
+- Per-replica startup materialization from Azure Blob (`D365_ARTIFACT_SOURCE=azure-blob`): the
+  replica listens unready, reads the active pointer with managed identity and pins its ETag,
+  checks local disk, downloads the immutable bundle into a staging directory, validates it,
+  atomically publishes and activates it on instance-local disk, and reports ready only after a
+  representative query on the opened index. `/health` is now readiness (`503` while starting) and
+  the new `/live` route reports liveness. Startup failures exit with code 1.
+
 - A fail-closed Azure artifact contract for immutable content-addressed index bundles, including
   source provenance, capability inventory, compatibility bounds, durable validation reports,
   concurrency-safe active/previous promotion, pointer-only rollback and validated local API
   activation, plus an Azure Blob adapter with managed identity, create-only bundle writes, ETag
   pointer promotion, acquisition leases, rollback-safe retention, and fail-closed materialization.
-  Azure infrastructure remains gated on Windows acquisition proof and worker integration.
 - A guided Azure resource plan. The default SDK acquisition worker is Windows because Microsoft
   documents `pac tool xpp install` as a .NET Full Framework command; Linux Container Apps Jobs remain
   conditional on a documented and complete X++ SDK acquisition proof. A candidate Windows ARM64 VM
@@ -93,12 +99,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the limits of its results.
 - `docs/roadmap.md`: expansion roadmap drawn from Microsoft's Dynamics 365 FastTrack
   implementation assets, with a catalog of its AI ERP agents.
-- `index-status` command: compares the local packages folder with the local index and with the
-  index a server serves (`--server`), and reports added, changed and removed files per model and
-  whether a newer local index still needs uploading. `--json` for tools.
-- Visual Studio extension: *Check Index Freshness* runs `index-status` with the saved settings and
-  offers *Update Index*, which re-runs index, XRef import and upload incrementally without opening
-  the Index and Upload window.
+- `index-status` command: compares the local packages folder with the local index and reports
+  added, changed and removed files per model. `--json` for tools.
 - `index --packages-dir/--db-path`.
 - `index-xref` signs in with Windows authentication (`Trusted_Connection=yes`) through the optional
   `msnodesqlv8` driver, which also reaches LocalDB.
@@ -107,14 +109,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   before listening, so the server runs read-only without a `PackagesLocalDirectory`.
 - `MCP_API_KEYS`: named API keys (`name=key,...`) alongside the legacy `MCP_API_KEY`; requests log
   the key name only and a session is bound to the key that opened it.
-- `doctor --hosted` and immutable artifact activation at server startup.
 - `ax_meta` build metadata (`built_at`, server version, raw-XML setting); `get_index_stats` reports
-  it and `get_index_staleness` reports `mode: "published"` on a hosted server.
+  it and `get_index_staleness` reports `mode: "snapshot"` on a server without source files.
 - `MCP_HOST` to bind a single interface; graceful shutdown that closes sessions before exit.
-- `Dockerfile`, `.dockerignore`, `scripts/publish-index.ps1`, Bicep infrastructure with a runbook
-  (`infra/`), a `deploy.yml` workflow (OIDC → ACR → App Service), a CI job that builds and
-  smoke-tests the image, and `docs/hosted-deployment.md` with Visual Studio / Claude Code / VS Code
-  client configuration.
+- `Dockerfile`, `.dockerignore`, a `deploy.yml` workflow (OIDC → ACR → App Service), a CI job that
+  builds and smoke-tests the image, and `docs/hosted-deployment.md` with Visual Studio / Claude Code /
+  VS Code client configuration.
 
 ### Changed
 
@@ -125,7 +125,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `mssql` moved to `optionalDependencies`; the container image and `--omit=optional` installs leave
   it out and `index-xref` explains how to install it.
 - Configuration parsing is a pure `loadConfig()` (`src/configLoader.ts`) with tests.
-- Manifest `db.gzip` is a boolean alongside the new `db.encoding`; older gzip manifests still load.
+- Artifact bundle validation reports record checks that actually ran (SQLite integrity, index
+  metadata, source provenance, capability inventory) with their details; a failed check stops the
+  bundle from being built.
+- `scripts/acquire-ude-assets.ps1` also verifies Content-MD5 when the blob reports one, redacts SAS
+  values from AzCopy errors, and checks native exit codes explicitly under Windows PowerShell 5.1;
+  `scripts/verify-windows-xpp.ps1` exits 1 when `pac tool xpp list` fails.
+- Visual Studio extension: `.mcp.json` is rewritten only when our entry changes, under a
+  cross-process lock and through an atomic replace, and `.bak` keeps the pre-extension file; an
+  instance no longer overwrites another running instance's gateway entry; cancelling Configure
+  Connection leaves the saved key and settings untouched; remote server URLs must use HTTPS; SDK
+  folders sort by version and `AosService` is no longer sent as an SDK version.
 
 ### Removed
 
@@ -137,7 +147,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to be built, validated and atomically promoted by private Azure automation.
 
 - `docs/vs-addin-plan.md`: the extension that applies generated code was not pursued; the Visual
-  Studio extension now handles connection setup and index uploads instead.
+  Studio extension now handles connection setup and the loopback MCP gateway instead.
 
 ### Added (initial scaffold)
 

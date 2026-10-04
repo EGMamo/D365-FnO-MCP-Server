@@ -23,7 +23,22 @@ public static class ServerUrl
         return $"{uri.Scheme}://{uri.Authority}{path}".TrimEnd('/');
     }
 
-    public static string McpEndpoint(string value) => Normalize(value) + "/mcp";
+    /// <summary>
+    /// <see cref="Normalize"/> for a hosted server that will receive the API key:
+    /// https is required except for loopback hosts (localhost, 127.0.0.1, ::1).
+    /// </summary>
+    public static string NormalizeSecure(string value)
+    {
+        string normalized = Normalize(value);
+        if (IsInsecure(normalized))
+        {
+            throw new FormatException($"'{normalized}' must use https; plain http is only allowed for localhost, 127.0.0.1 or ::1.");
+        }
+
+        return normalized;
+    }
+
+    public static string McpEndpoint(string value) => NormalizeSecure(value) + "/mcp";
 
     /// <summary>True for plain http to anything but this machine, where the API key would travel unencrypted.</summary>
     public static bool IsInsecure(string value)

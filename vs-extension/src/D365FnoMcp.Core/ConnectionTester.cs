@@ -62,17 +62,13 @@ public sealed class ConnectionTester
         string baseUrl;
         try
         {
-            baseUrl = ServerUrl.Normalize(serverUrl);
+            // Plain http to another machine would send the API key unencrypted, so it is refused before any request.
+            baseUrl = ServerUrl.NormalizeSecure(serverUrl);
         }
         catch (FormatException ex)
         {
             report.Checks.Add(new("URL", CheckStatus.Failed, ex.Message));
             return report;
-        }
-
-        if (ServerUrl.IsInsecure(baseUrl))
-        {
-            report.Checks.Add(new("URL", CheckStatus.Warning, "Plain http to another machine sends the API key unencrypted; use https."));
         }
 
         if (!await this.CheckHealthAsync(baseUrl, report, cancellationToken))

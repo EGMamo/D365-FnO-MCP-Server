@@ -21,11 +21,11 @@ captures and Microsoft release plans.
 - **Optional**: `mssql` (only for `index-xref` / `index-trace`)
 
 ## Key Design Decisions
-- Read-only by default. Generators return previews; file writes need `D365_ENABLE_WRITE_TOOLS=1`, are two-step (`write_table_extension` -> `apply_table_extension_change`) and are refused with a published index
+- Read-only by default. Generators return previews; file writes need `D365_ENABLE_WRITE_TOOLS=1`, are two-step (`write_table_extension` -> `apply_table_extension_change`) and are refused in hosted mode
 - Every generator is grounded: it resolves referenced objects/fields/EDTs against the index and reports what it could not resolve
 - Network use is opt-in: Azure artifact publication through `artifact`/`acquire` and
   `index-release-plans` (public feed)
-- Trace data stays local and is not included in published artifact bundles
+- Trace data stays local and is not included in artifact bundles
 - Index is incremental (file mtime-based)
 
 ## MCP Tools (54)
@@ -45,11 +45,11 @@ captures and Microsoft release plans.
 ## File Structure
 ```
 src/
-  index.ts                # CLI entry point (serve, index, index-xref, index-trace, index-release-plans,
-                          #   index-status, acquire, artifact, digest, doctor, setup)
+  index.ts                # CLI entry point (serve, index, index-xref, index-trace, index-bp,
+                          #   index-release-plans, index-status, acquire, artifact, digest, doctor, setup)
   config.ts, configLoader.ts  # Zod env validation
   cli/                    # One module per command
-  server/                 # start.ts (tool registration), httpTransport.ts, apiKeys.ts, indexUpload.ts
+  server/                 # start.ts (tool registration), httpTransport.ts, apiKeys.ts, artifactStartup.ts
   indexer/                # scanner, parser, db schema, buildIndex, xref/trace/release-plan importers, artifact bundles
   tools/                  # MCP tool handlers (see above)
   security/model.ts       # Role/duty/privilege flattening
@@ -59,7 +59,7 @@ src/
 tests/                    # vitest
 docs/                     # roadmap, hosted deployment, local agents, RAI FAQ
 agents/                   # source/ -> github-copilot/*.agent.md + claude-code/*.md (npm run build:agents)
-infra/                    # Azure App Service deployment
+infra/                    # Azure infrastructure plan (template not yet added)
 ```
 
 ## D365 FnO AOT File Layout (PackagesLocalDirectory)

@@ -40,9 +40,11 @@ endpoint.
 6. Finalize an immutable bundle containing the database, manifest and validation report.
 7. Atomically update the active/previous pointer document with optimistic concurrency. Keep every
    referenced bundle for rollback.
-8. Signal the API. Each replica validates the selected bundle, copies it to a sibling candidate on
-   local disk and atomically activates that local file. Existing sessions may finish on the prior
-   read-only handle.
+8. Restart or slot-swap the API. With `D365_ARTIFACT_SOURCE=azure-blob`, each replica listens
+   unready, reads the active pointer with managed identity and pins its ETag, downloads the
+   immutable bundle to local disk, validates it, atomically activates the local copy and reports
+   ready on `/health` only after a representative query. See the README section "Hosted startup
+   from Azure Blob".
 
 ## Scheduled acquisition worker
 
