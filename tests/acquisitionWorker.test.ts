@@ -5,12 +5,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   AcquisitionWorkerError,
   LocalArtifactPublisher,
+  acquisitionStepLogFile,
+  resolveAcquisitionPolicy,
   runAcquisitionWorker,
   validateAcquisitionWorkerConfig,
   type AcquisitionRunContext,
   type AcquisitionWorkerConfig,
   type ArtifactPublisher,
 } from '../src/indexer/acquisitionWorker.js';
+import { DEFAULT_REQUIRED_CAPABILITIES } from '../src/indexer/capabilityCoverage.js';
+import { VERSION } from '../src/version.js';
 import {
   INDEX_SCHEMA_VERSION,
   META_KEYS,
@@ -300,5 +304,90 @@ describe('scheduled acquisition worker', () => {
       ...config,
       timeoutMs: 0,
     })).toThrow(/positive integer/);
+  });
+});
+
+describe('acquisition policy defaults', () => {
+  it('fills every omitted policy field with what this build serves', () => {
+    const defaults = {
+      serverVersion: VERSION,
+      minimumIndexSchemaVersion: INDEX_SCHEMA_VERSION,
+      maximumIndexSchemaVersion: INDEX_SCHEMA_VERSION,
+      requiredCapabilities: DEFAULT_REQUIRED_CAPABILITIES,
+    };
+    expect(resolveAcquisitionPolicy()).toEqual(defaults);
+    expect(resolveAcquisitionPolicy({ requiredCapabilities: ['codeMetadata'] })).toEqual({
+      ...defaults,
+      requiredCapabilities: ['codeMetadata'],
+    });
+    const withoutPolicy: AcquisitionWorkerConfig = { ...config };
+    delete withoutPolicy.policy;
+    expect(() => validateAcquisitionWorkerConfig(withoutPolicy)).not.toThrow();
+  });
+
+  it('still rejects invalid policy values that are supplied', () => {
+    expect(() => validateAcquisitionWorkerConfig({ ...config, policy: { serverVersion: '' } }))
+      .toThrow(/serverVersion is required/);
+    expect(() => validateAcquisitionWorkerConfig({
+      ...config,
+      policy: { minimumIndexSchemaVersion: INDEX_SCHEMA_VERSION + 1 },
+    })).toThrow(/schema compatibility range is invalid/);
+    expect(() => validateAcquisitionWorkerConfig({
+      ...config,
+      policy: { requiredCapabilities: ['codeMetadata', 'forms'] as never },
+    })).toThrow(/unknown capability/);
+    expect(() => validateAcquisitionWorkerConfig({ ...config, policy: [] as never }))
+      .toThrow(/policy must be an object/);
+  });
+
+  it('validates and publishes with the default policy when the configuration omits it', async () => {
+    const withoutPolicy: AcquisitionWorkerConfig = { ...config };
+    delete withoutPolicy.policy;
+    const publish = vi.fn(async () => ({ revision: 1 }));
+
+    const status = await runAcquisitionWorker(withoutPolicy, { publish }, {}, {
+      executeCommand: async (command, context) => {
+        if (command.name === 'build-index') writeCandidate(context);
+      },
+    });
+
+    expect(status.state).toBe('succeeded');
+    expect(publish).toHaveBeenCalledWith(expect.anything(), resolveAcquisitionPolicy(), expect.anything());
+  });
+});
+
+describe('acquisition command step output', () => {
+  const node = (script: string) => ({ executable: process.execPath, args: ['-e', script] });
+
+  it('keeps each step\'s stdout and stderr in a run log that survives cleanup', async () => {
+    config.acquire = [{ name: 'acquire assets', ...node("console.log('downloaded systemmetadata')") }];
+    config.build = [{
+      name: 'build-index',
+      ...node("console.log('indexing'); console.error('index failed: disk full'); process.exit(3)"),
+    }];
+    const runDirectory = path.join(config.runsRoot, config.runId);
+    const acquireLog = path.join(runDirectory, 'logs', 'acquire-1-acquire-assets.log');
+    const buildLog = path.join(runDirectory, 'logs', 'build-1-build-index.log');
+
+    const failure = await runAcquisitionWorker(config, { publish: vi.fn() }).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(AcquisitionWorkerError);
+    expect((failure as Error).message).toContain(`"build-index" failed with exit code 3. Output: ${buildLog}`);
+    expect((failure as AcquisitionWorkerError).status.phases.build.error).toContain(buildLog);
+    expect(fs.existsSync(path.join(runDirectory, 'work'))).toBe(false);
+    expect(fs.readFileSync(acquireLog, 'utf8')).toMatch(/acquire assets: started\ndownloaded systemmetadata\n$/);
+    const output = fs.readFileSync(buildLog, 'utf8');
+    expect(output).toContain('indexing\n');
+    expect(output).toContain('index failed: disk full\n');
+
+    await runAcquisitionWorker(config, { publish: vi.fn() }).catch(() => undefined);
+    expect(fs.readFileSync(buildLog, 'utf8').match(/build-index: started/g)).toHaveLength(2);
+  });
+
+  it('names step logs by phase, position and a filesystem-safe step name', () => {
+    expect(acquisitionStepLogFile('/runs/a', 'build', 0, '../prepare bundle:v2'))
+      .toBe(path.join('/runs/a', 'logs', 'build-1-prepare-bundle-v2.log'));
+    expect(acquisitionStepLogFile('/runs/a', 'acquire', 2, '***'))
+      .toBe(path.join('/runs/a', 'logs', 'acquire-3-step.log'));
   });
 });

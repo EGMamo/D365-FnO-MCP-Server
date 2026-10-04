@@ -31,6 +31,7 @@ import {
   upsertObject,
 } from '../src/indexer/db.js';
 import { prepareArtifactBackedIndex } from '../src/server/artifactStartup.js';
+import { DEFAULT_REQUIRED_CAPABILITIES } from '../src/indexer/capabilityCoverage.js';
 
 const FIRST_TIME = '2026-10-03T10:00:00.000Z';
 const SECOND_TIME = '2026-10-03T11:00:00.000Z';
@@ -297,53 +298,33 @@ describe('Azure artifact contract', () => {
     expect(readArtifactPointers(root).active).toBeNull();
   });
 
-  it('makes hosted startup require every advertised capability and an active pointer', () => {
+  it('makes hosted startup require the indexer-complete capabilities and an active pointer', () => {
     const target = path.join(root, 'runtime', 'active.db');
-    expect(() =>
-      prepareArtifactBackedIndex({
-        storePath: root,
-        indexDbPath: target,
-        serverVersion: '0.1.0',
-        indexSchemaVersion: INDEX_SCHEMA_VERSION,
-      })
-    ).toThrow(/no active validated bundle/);
-
-    const partialBundle = createBundle();
-    promoteArtifactBundle(root, partialBundle.manifest.bundleId, 0, policy, FIRST_TIME);
-    expect(() =>
-      prepareArtifactBackedIndex({
-        storePath: root,
-        indexDbPath: target,
-        serverVersion: '0.1.0',
-        indexSchemaVersion: INDEX_SCHEMA_VERSION,
-      })
-    ).toThrow(/reportingAnalytics is not complete/);
-    expect(fs.existsSync(target)).toBe(false);
-
-    const completeInventory = Object.fromEntries(
-      Object.entries(capabilities).map(([name, value]) => [
-        name,
-        { ...value, completeness: 'complete' as const },
-      ])
-    ) as CapabilityInventory;
-    const bundle = createBundle(SECOND_TIME, completeInventory);
-    promoteArtifactBundle(
-      root,
-      bundle.manifest.bundleId,
-      1,
-      {
-        ...policy,
-        requiredCapabilities: Object.keys(completeInventory) as (keyof CapabilityInventory)[],
-      },
-      SECOND_TIME
-    );
-
-    const prepared = prepareArtifactBackedIndex({
+    const startup = {
       storePath: root,
       indexDbPath: target,
       serverVersion: '0.1.0',
       indexSchemaVersion: INDEX_SCHEMA_VERSION,
-    });
+    };
+    expect(() => prepareArtifactBackedIndex(startup)).toThrow(/no active validated bundle/);
+
+    const unlabelled: CapabilityInventory = {
+      ...capabilities,
+      labelsResources: { completeness: 'partial', itemCount: 0 },
+    };
+    const partialBundle = createBundle(FIRST_TIME, unlabelled);
+    promoteArtifactBundle(root, partialBundle.manifest.bundleId, 0, policy, FIRST_TIME);
+    expect(() => prepareArtifactBackedIndex(startup)).toThrow(/labelsResources is not complete/);
+    expect(fs.existsSync(target)).toBe(false);
+
+    const bundle = createBundle(SECOND_TIME);
+    promoteArtifactBundle(root, bundle.manifest.bundleId, 1, policy, SECOND_TIME);
+    expect(() =>
+      prepareArtifactBackedIndex({ ...startup, requiredCapabilities: [...DEFAULT_REQUIRED_CAPABILITIES, 'reports'] })
+    ).toThrow(/reports is not complete/);
+    expect(fs.existsSync(target)).toBe(false);
+
+    const prepared = prepareArtifactBackedIndex(startup);
     expect(prepared.bundle.manifest.bundleId).toBe(bundle.manifest.bundleId);
     expect(prepared.pointerRevision).toBe(2);
     expect(fs.existsSync(target)).toBe(true);
