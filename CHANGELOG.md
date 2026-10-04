@@ -225,7 +225,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `prepare-bundle` crashed with exit code 134 (JavaScript heap out of memory) on a full X++ SDK:
   the index pass's cleanup loaded every label row in every language into memory to find stale
   ones. SQLite now finds and deletes stale objects and labels itself, so memory no longer grows
-  with the number of labels.
+  with the number of labels. The worker also gives `prepare-bundle` an 8 GB heap.
+- The acquisition run spent hours on avoidable disk work at full SDK size:
+  - Index databases use `synchronous = NORMAL`, so an index run no longer flushes the disk once per
+    file (about 600,000 times on a full SDK).
+  - Bundles leave out each label row's file path and its index, which only index runs use. Creating
+    a bundle compacts a scratch copy once with `VACUUM INTO` instead of vacuuming twice in place. On a
+    test index this was 2.4 times faster and the bundle 30% smaller.
+  - `FirstAcquisition` no longer runs `artifact status --verify`, which downloaded the bundle again
+    right after promote had downloaded and validated it.
+- The acquisition worker's publish step revalidated the whole active bundle against the current
+  policy (downloading it first for Azure), so every promotion after a server upgrade failed. Local
+  and Azure promotion now read only the active bundle's manifest to check the candidate is newer.
 - `get_task_guidance` matched a one-line request to an unrelated topic because a trailing period
   shifted the embedding score; clauses are now matched without trailing punctuation, and a request
   that does not split into clauses is reported as uncovered when no topic reaches the threshold.

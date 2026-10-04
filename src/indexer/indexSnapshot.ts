@@ -34,7 +34,6 @@ function rewritePathsRelative(db: InstanceType<typeof DatabaseSync>, root: strin
   const prefixes = new Set([resolved, resolved.replace(/\\/g, '/'), resolved.replace(/\//g, '\\')]);
   const columns: [string, string][] = [
     ['ax_objects', 'file_path'],
-    ['ax_labels', 'source_file'],
     ['ax_label_sources', 'source_file'],
   ];
   for (const prefix of prefixes) {
@@ -48,27 +47,37 @@ function rewritePathsRelative(db: InstanceType<typeof DatabaseSync>, root: strin
   }
 }
 
-function normalizeSnapshot(dbFile: string, relativePathsRoot?: string): void {
-  const db = new DatabaseSync(dbFile);
+/**
+ * Strips build-only data from a scratch copy and compacts it into `destination`.
+ *
+ * The scratch file is thrown away whatever happens, so it runs without a journal, and VACUUM
+ * INTO writes the compact copy directly instead of rebuilding the scratch file in place.
+ */
+function normalizeSnapshot(scratchFile: string, destination: string, relativePathsRoot?: string): void {
+  const db = new DatabaseSync(scratchFile);
   try {
-    db.exec('PRAGMA journal_mode = DELETE');
+    db.exec('PRAGMA journal_mode = OFF');
+    db.exec('BEGIN');
     const traces = db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ax_trace_imports'`).get();
     if (traces) {
-      db.exec('DELETE FROM ax_trace_sql; DELETE FROM ax_trace_methods; DELETE FROM ax_trace_sessions; DELETE FROM ax_trace_imports; VACUUM');
+      db.exec('DELETE FROM ax_trace_sql; DELETE FROM ax_trace_methods; DELETE FROM ax_trace_sessions; DELETE FROM ax_trace_imports');
     }
-    if (relativePathsRoot) {
-      db.exec('BEGIN');
-      try {
-        rewritePathsRelative(db, relativePathsRoot);
-        db.exec('COMMIT');
-      } catch (err) {
-        db.exec('ROLLBACK');
-        throw err;
-      }
-      db.exec('VACUUM');
-    }
+    // Label rows carry their file path only so an index run can replace one file's labels. A
+    // snapshot is served read-only, and on a full SDK the repeated paths and their index would
+    // take gigabytes of the bundle.
+    db.exec(`DROP INDEX IF EXISTS idx_ax_labels_source_file; UPDATE ax_labels SET source_file = '' WHERE source_file <> ''`);
+    if (relativePathsRoot) rewritePathsRelative(db, relativePathsRoot);
+    db.exec('COMMIT');
+    db.exec(`VACUUM INTO '${escapeSqlString(destination)}'`);
   } finally {
     db.close();
+  }
+  // A read-only server cannot open a WAL database without its shared-memory file.
+  const output = new DatabaseSync(destination);
+  try {
+    output.exec('PRAGMA journal_mode = DELETE');
+  } finally {
+    output.close();
   }
 }
 
@@ -101,6 +110,8 @@ export function snapshotIndex(dbPath: string, destination: string, options: Snap
   let usageRows: number;
   let xrefImportedAt: string | null;
   fs.rmSync(destination, { force: true });
+  const scratch = `${destination}.normalizing`;
+  fs.rmSync(scratch, { force: true });
   const source = openDb(dbPath);
   try {
     const recorded = getMeta(source, META_KEYS.builtAt);
@@ -121,12 +132,19 @@ export function snapshotIndex(dbPath: string, destination: string, options: Snap
     usageRows = Number((source.prepare('SELECT COUNT(*) AS n FROM ax_usage_refs').get() as { n: number | bigint }).n);
     xrefImportedAt = stats.usageSnapshot.status === 'imported' ? stats.usageSnapshot.importedAt : null;
     source.exec('PRAGMA wal_checkpoint(TRUNCATE)');
-    source.exec(`VACUUM INTO '${escapeSqlString(destination)}'`);
+    source.exec(`VACUUM INTO '${escapeSqlString(scratch)}'`);
   } finally {
     source.close();
   }
 
-  normalizeSnapshot(destination, options.relativePathsRoot);
+  try {
+    normalizeSnapshot(scratch, destination, options.relativePathsRoot);
+  } catch (error) {
+    fs.rmSync(destination, { force: true });
+    throw error;
+  } finally {
+    fs.rmSync(scratch, { force: true });
+  }
   if (options.verify !== false) verifySnapshot(destination, objects, options.integrityCheck === true);
   return {
     file: destination,

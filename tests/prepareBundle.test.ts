@@ -155,8 +155,20 @@ describe('prepare-bundle', () => {
     });
     const bundled = openDbReadOnly(path.join(bundle.directory, ARTIFACT_DATABASE_FILE));
     const paths = bundled.prepare('SELECT file_path FROM ax_objects').all() as { file_path: string }[];
+    const labels = bundled.prepare('SELECT label_id, source_file FROM ax_labels').all() as { source_file: string }[];
+    const labelSources = bundled.prepare('SELECT source_file FROM ax_label_sources').all() as { source_file: string }[];
+    const labelPathIndex = bundled.prepare(`SELECT 1 FROM sqlite_master WHERE name = 'idx_ax_labels_source_file'`).get();
+    const journalMode = bundled.prepare('PRAGMA journal_mode').get() as { journal_mode: string };
     bundled.close();
     expect(paths.every((row) => row.file_path.startsWith(`TestPackage${path.sep}`))).toBe(true);
+    // Label rows drop their build-only file path; the per-file sources keep a relative one.
+    expect(labels).toHaveLength(2);
+    expect(labels.every((row) => row.source_file === '')).toBe(true);
+    expect(labelPathIndex).toBeUndefined();
+    expect(labelSources.length).toBeGreaterThan(0);
+    expect(labelSources.every((row) => row.source_file.startsWith(`TestPackage${path.sep}`))).toBe(true);
+    expect(journalMode.journal_mode).toBe('delete');
+    expect(fs.readdirSync(bundle.directory).some((name) => name.endsWith('.normalizing'))).toBe(false);
   });
 
   it('feeds a full acquisition run that the API accepts with its default required capabilities', async () => {

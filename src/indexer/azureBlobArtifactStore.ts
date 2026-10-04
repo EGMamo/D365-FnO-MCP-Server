@@ -169,23 +169,29 @@ export class AzureBlobArtifactStore {
     };
   }
 
-  async materializeBundle(
-    bundleId: string,
-    options: MaterializeArtifactBundleOptions
-  ): Promise<ValidatedArtifactBundle> {
-    const prefix = bundlePrefix(bundleId);
-    const manifestBlob = this.container.getBlob(`${prefix}/${ARTIFACT_MANIFEST_FILE}`);
+  /** Reads and parses a bundle's manifest without downloading its database. */
+  async readManifest(bundleId: string): Promise<{ manifest: ArtifactManifest; bytes: Buffer }> {
+    const manifestBlob = this.container.getBlob(`${bundlePrefix(bundleId)}/${ARTIFACT_MANIFEST_FILE}`);
     const manifestProperties = await manifestBlob.getProperties();
     const manifestEtag = requireEtag(manifestProperties.etag, 'Artifact manifest read');
-    const manifestBytes = await manifestBlob.downloadToBuffer(MAX_MANIFEST_BYTES, {
+    const bytes = await manifestBlob.downloadToBuffer(MAX_MANIFEST_BYTES, {
       ifMatch: manifestEtag,
     });
-    const manifest = parseArtifactManifest(JSON.parse(manifestBytes.toString('utf8')) as unknown);
+    const manifest = parseArtifactManifest(JSON.parse(bytes.toString('utf8')) as unknown);
     if (manifest.bundleId !== bundleId) {
       throw new Error(
         `Requested artifact bundle ${bundleId} but the manifest identifies ${manifest.bundleId}.`
       );
     }
+    return { manifest, bytes };
+  }
+
+  async materializeBundle(
+    bundleId: string,
+    options: MaterializeArtifactBundleOptions
+  ): Promise<ValidatedArtifactBundle> {
+    const prefix = bundlePrefix(bundleId);
+    const { manifest, bytes: manifestBytes } = await this.readManifest(bundleId);
     options.beforeDownload?.(manifest);
 
     const root = path.resolve(options.localStoreRoot);
@@ -373,8 +379,10 @@ export class AzureBlobArtifactWriter {
     const current = await this.store.readPointers();
     assertExpectedRevision(current, expectedRevision);
     if (current.pointers.active?.bundleId === bundleId) return current;
+    // Only the active bundle's timestamps matter here. Its database was validated when it was
+    // promoted, and it may predate the current policy (for example after a server upgrade).
     const active = current.pointers.active
-      ? await this.validateRemoteBundle(current.pointers.active.bundleId, policy)
+      ? (await this.store.readManifest(current.pointers.active.bundleId)).manifest
       : null;
     if (active) {
       const candidateTime = Math.max(
@@ -383,14 +391,14 @@ export class AzureBlobArtifactWriter {
         Date.parse(candidate.manifest.publishedAt)
       );
       const activeTime = Math.max(
-        Date.parse(active.manifest.createdAt),
-        Date.parse(active.manifest.builtAt),
-        Date.parse(active.manifest.publishedAt)
+        Date.parse(active.createdAt),
+        Date.parse(active.builtAt),
+        Date.parse(active.publishedAt)
       );
       if (candidateTime <= activeTime) {
         throw new Error(
           `Refusing to promote artifact ${candidate.manifest.bundleId}: it is not newer than ` +
-            `the active bundle ${active.manifest.bundleId}.`
+            `the active bundle ${active.bundleId}.`
         );
       }
     }

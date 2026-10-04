@@ -47,6 +47,9 @@ export function openDb(dbPath: string): Database {
   const db = new NodeDatabaseSync(dbPath);
   try {
   db.exec('PRAGMA journal_mode = WAL');
+  // An index run commits once per file. With WAL, NORMAL skips the disk flush on each of those
+  // commits; a power loss can drop the last commits but cannot corrupt the database.
+  db.exec('PRAGMA synchronous = NORMAL');
   // Required for ON DELETE CASCADE on child tables (SQLite defaults to off).
   db.exec('PRAGMA foreign_keys = ON');
 
