@@ -1,8 +1,10 @@
 // Read-only MCP API on App Service for Linux with a staging slot.
 //
-// Each instance materializes the active Blob bundle onto instance-local disk at
-// startup and only reports healthy after activation, so App Service keeps the
-// replica out of rotation (and swap warm-up refuses the slot) until then.
+// With D365_ARTIFACT_SOURCE=azure-blob each instance listens immediately but
+// unready: /live answers 200 while /health (readiness) answers 503 until the
+// active Blob bundle has been materialized onto instance-local disk, validated
+// and opened. App Service health checks and swap warm-up both use /health, so a
+// replica gets no traffic and a slot cannot be swapped in before then.
 // The live SQLite file is never on Azure Files: App Service storage is off.
 
 param location string
@@ -41,8 +43,9 @@ param workspaceId string
 
 var websiteContributor = 'de139f84-1756-47ae-9be6-808fbbe84772'
 
-// Paths inside the container's own filesystem, not the /home share.
-var artifactStorePath = '/artifacts'
+// Paths inside the container's own filesystem, not the /home share. /data is
+// the image's only directory writable by the non-root runtime user.
+var artifactStorePath = '/data/artifacts'
 var indexDbPath = '/data/d365_index.db'
 
 var appSettings = [
@@ -57,6 +60,7 @@ var appSettings = [
   { name: 'TRUST_PROXY_HOPS', value: '1' }
   { name: 'MCP_API_KEYS', value: '@Microsoft.KeyVault(VaultName=${apiKeyVaultName};SecretName=${apiKeysSecretName})' }
   { name: 'D365_ENABLE_WRITE_TOOLS', value: '0' }
+  { name: 'D365_ARTIFACT_SOURCE', value: 'azure-blob' }
   { name: 'D365_ARTIFACT_STORE_PATH', value: artifactStorePath }
   { name: 'D365_INDEX_DB_PATH', value: indexDbPath }
   { name: 'D365_ARTIFACT_ACCOUNT_URL', value: artifactBlobEndpoint }

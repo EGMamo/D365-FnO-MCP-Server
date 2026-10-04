@@ -52,22 +52,24 @@ principal to hold Owner or User Access Administrator on the resource group.
 
 Each API instance runs the startup pull described in the architecture decision: it reads
 `deployment-pointers.json` with the API identity, downloads the immutable active bundle to
-instance-local disk, validates it and only then starts answering `/health`. The template sets:
+instance-local disk, validates it and opens it. Until then `/health` (readiness) answers 503 while
+`/live` (liveness) answers 200; App Service health checks and slot swap warm-up both use `/health`.
+The template sets:
 
 | Setting | Value |
 | --- | --- |
 | `D365_ARTIFACT_ACCOUNT_URL` | the storage account's Blob endpoint |
 | `D365_ARTIFACT_CONTAINER` | `d365-artifacts` |
 | `D365_ARTIFACT_MANAGED_IDENTITY_CLIENT_ID`, `AZURE_CLIENT_ID` | the API identity |
-| `D365_ARTIFACT_STORE_PATH` | `/artifacts` (container filesystem) |
+| `D365_ARTIFACT_SOURCE` | `azure-blob` |
+| `D365_ARTIFACT_STORE_PATH` | `/data/artifacts` (container filesystem, writable by the runtime user) |
 | `D365_INDEX_DB_PATH` | `/data/d365_index.db` (container filesystem) |
 | `WEBSITES_ENABLE_APP_SERVICE_STORAGE` | `false`, so nothing lands on the `/home` network share |
 | `WEBSITES_CONTAINER_START_TIME_LIMIT` | `1800` seconds for download and validation |
 | `MCP_API_KEYS` | Key Vault reference to the `mcp-api-keys` secret |
 | `TRUST_PROXY_HOPS` | `1` (App Service front end) |
 
-The `D365_ARTIFACT_*` names match the operator `artifact` CLI. If the startup materialization
-change settles on different names, update `modules/apiApp.bicep` and `deploy.yml` with it.
+These names match the startup materialization in the server configuration (`src/configLoader.ts`).
 
 ## Deployment and rollback
 

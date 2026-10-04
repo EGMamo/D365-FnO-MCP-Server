@@ -81,6 +81,10 @@ jobs:
               console.error("WEBSITES_ENABLE_APP_SERVICE_STORAGE must be false.");
               process.exitCode = 1;
             }
+            if (settings.get("D365_ARTIFACT_SOURCE") !== "azure-blob") {
+              console.error("D365_ARTIFACT_SOURCE must be azure-blob so each instance pulls its bundle at startup.");
+              process.exitCode = 1;
+            }
             if (settings.get("D365_ENABLE_WRITE_TOOLS") !== "0") {
               console.error("D365_ENABLE_WRITE_TOOLS must be 0 for the hosted API.");
               process.exitCode = 1;
@@ -111,8 +115,8 @@ jobs:
             --container-image-name "${{ steps.acr.outputs.server }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}"
           az webapp restart --resource-group "${{ vars.RESOURCE_GROUP }}" --name "${{ vars.WEBAPP_NAME }}" --slot "$SLOT"
 
-      # The slot reports healthy only after it has downloaded, verified and
-      # activated the active bundle locally (WEBSITES_CONTAINER_START_TIME_LIMIT=1800).
+      # /health is readiness: it answers 503 until the slot has downloaded,
+      # verified and activated the active bundle locally (/live is liveness only).
       - name: Wait for the staging slot to activate its bundle
         run: |
           URL="https://${{ steps.hosts.outputs.staging }}"
