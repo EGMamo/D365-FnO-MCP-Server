@@ -245,7 +245,8 @@ until the remaining integration checks pass:
 - The Windows worker persists and promotes them through
   `azureBlobArtifactStore.ts`.
 - Hosted startup materializes the selected Blob bundle into a local artifact
-  store before `artifactStartup.ts` activates it.
+  store before `artifactStartup.ts` activates it (implemented by
+  `D365_ARTIFACT_SOURCE=azure-blob`; needs an end-to-end run against Azure).
 - End-to-end tests cover Blob conflicts, interrupted downloads, worker
   acquisition failure, startup recovery, and rollback.
 - Tests prove Azure components cannot write to a local developer workspace.
@@ -539,11 +540,13 @@ On any failure:
 
 ### Safe SQLite startup
 
-The durable source is Blob Storage; the live SQLite file is local. The
-implemented startup seam currently consumes a local artifact store through
-`D365_ARTIFACT_STORE_PATH`. The Azure adapter must first materialize the
-selected immutable Blob bundle and `deployment-pointers.json` into that local
-store.
+The durable source is Blob Storage; the live SQLite file is local. Setting
+`D365_ARTIFACT_SOURCE=azure-blob` (with `D365_ARTIFACT_ACCOUNT_URL`,
+`D365_ARTIFACT_CONTAINER` and an instance-local `D365_ARTIFACT_STORE_PATH`)
+makes `serve` implement the sequence below through
+`materializeAzureArtifactIndex` in `src/server/artifactStartup.ts`. The HTTP
+listener starts first with `/health` answering 503, so App Service health
+checks and slot warm-up route no traffic until activation completes.
 
 At startup:
 

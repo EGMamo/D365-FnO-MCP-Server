@@ -152,3 +152,12 @@ export function rollbackArtifactBundle(
     return next;
   });
 }
+
+/**
+ * Records a pointer snapshot pinned from a remote store as this replica's local
+ * pointers. Only for an instance-local materialization cache that no other
+ * process promotes into, so it takes no pointer lock.
+ */
+export function writePinnedArtifactPointers(storeRoot: string, pointers: ArtifactPointers): void {
+  writePointersAtomic(storeRoot, parseArtifactPointers(pointers));
+}

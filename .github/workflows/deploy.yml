@@ -2,8 +2,9 @@ name: Deploy
 
 # Builds the server image, pushes it to Azure Container Registry, points the
 # App Service web app at it and waits for the artifact-backed server to come up.
-# The web app must already mount or synchronize the promoted immutable artifact
-# store configured by D365_ARTIFACT_STORE_PATH.
+# The web app either mounts the promoted immutable artifact store at
+# D365_ARTIFACT_STORE_PATH or sets D365_ARTIFACT_SOURCE=azure-blob to pull the
+# active bundle at startup; /health returns 200 only once the index is open.
 
 on:
   push:

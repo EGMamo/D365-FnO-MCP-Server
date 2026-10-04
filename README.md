@@ -76,7 +76,11 @@ Configuration comes from environment variables (a `.env` file in the working dir
 | `D365_PACKAGES_DIR` | _(empty)_ | Path to `PackagesLocalDirectory`. Required by `index`, `index-status` and local `doctor`; the hosted API receives an Azure-built database instead. |
 | `D365_APP_VERSION` | _(empty)_ | Four-part D365 application version of this host's `PackagesLocalDirectory`, e.g. `10.0.2645.136`. Only needed when the packages path does not name the version — Unified Developer Experience paths (`…\Dynamics365\<version>\PackagesLocalDirectory`) are detected automatically. See [SDK version warnings](#sdk-version-warnings). |
 | `D365_INDEX_DB_PATH` | `./d365_index.db` | Location of the SQLite index file. |
-| `D365_ARTIFACT_STORE_PATH` | _(empty)_ | Hosted mode only: immutable artifact-store root containing `deployment-pointers.json` and `bundles/`. Startup validates the active bundle into `D365_INDEX_DB_PATH` and opens the local snapshot read-only. |
+| `D365_ARTIFACT_STORE_PATH` | _(empty)_ | Hosted mode only. With `D365_ARTIFACT_SOURCE=local`: immutable artifact-store root containing `deployment-pointers.json` and `bundles/`. With `azure-blob`: this replica's instance-local materialization directory. Startup validates the active bundle into `D365_INDEX_DB_PATH` and opens the local snapshot read-only. |
+| `D365_ARTIFACT_SOURCE` | `local` | `azure-blob` makes each replica pull the active bundle from Blob Storage at startup (see [Hosted startup from Azure Blob](#hosted-startup-from-azure-blob)). |
+| `D365_ARTIFACT_ACCOUNT_URL` | _(empty)_ | Storage account origin, e.g. `https://<account>.blob.core.windows.net`. Required for `azure-blob` and the `artifact` commands. No SAS or key is accepted. |
+| `D365_ARTIFACT_CONTAINER` | _(empty)_ | Artifact container name. Required for `azure-blob` and the `artifact` commands. |
+| `D365_ARTIFACT_MANAGED_IDENTITY_CLIENT_ID` | _(empty)_ | Client ID of a user-assigned managed identity; empty uses the default `DefaultAzureCredential` chain. |
 | `D365_INDEX_STORE_RAW_XML` | `1` | Set to `0` to keep full AOT XML out of `ax_objects.raw_xml` and reduce DB size. `get_element_xml` then reads the source XML from `file_path` on demand, so source files must remain available. |
 | `D365_ENABLE_WRITE_TOOLS` | `0` | Set to `1` to register metadata preview/apply tools. Model writes also require `D365_WRITABLE_MODELS`. |
 | `D365_CUSTOM_METADATA_DIR` | _(empty)_ | The **Folder for your own custom metadata** configured in the Finance Operations Visual Studio extension. Required for write tools. |
@@ -127,6 +131,30 @@ d365-fno-mcp-server artifact rollback --expected-revision 4 --json
 Promotion and rollback fail when the expected pointer revision is stale. Promotion first
 materializes and validates every remote bundle file, while publication uses create-only blob
 conditions and verifies each upload, so retries are safe and incomplete uploads cannot be promoted.
+
+### Hosted startup from Azure Blob
+
+With `D365_ARTIFACT_SOURCE=azure-blob`, every API replica materializes the active bundle itself:
+
+1. The HTTP listener starts unready: `GET /health` answers `503 {"status":"starting"}` and MCP
+   requests get `503` until the index is open. `GET /live` answers `200` throughout.
+2. The replica reads `deployment-pointers.json` with its managed identity (grant it only
+   **Storage Blob Data Reader** on the container) and pins that pointer revision and ETag.
+3. It removes interrupted downloads and superseded bundles from `D365_ARTIFACT_STORE_PATH`, checks
+   free local disk against the manifest's declared sizes, and downloads the pinned immutable bundle
+   into a staging directory with size, SHA-256 and ETag checks.
+4. It validates manifest, hashes, compatibility, provenance, validation report and SQLite
+   integrity, atomically publishes the local bundle directory, records the pinned pointers, and
+   atomically activates the database into `D365_INDEX_DB_PATH`. An already materialized copy of the
+   same bundle is revalidated and reused instead of downloaded again.
+5. It opens the index read-only, runs a representative query and only then reports ready.
+
+Any failure logs `Artifact startup failed; refusing to serve` and exits with code 1, so the platform
+restarts the replica. `D365_ARTIFACT_STORE_PATH` and `D365_INDEX_DB_PATH` must be on instance-local
+disk (for App Service, not the `/home` share) with room for the bundle plus one database copy.
+A promotion takes effect when a replica restarts; for App Service, warm a staging slot against
+`/health` (`WEBSITE_SWAP_WARMUP_PING_PATH=/health`, `WEBSITE_SWAP_WARMUP_PING_STATUSES=200`) and
+swap, and roll back by promoting the previous pointer and restarting.
 
 ## CLI reference
 
@@ -345,7 +373,8 @@ Health check (no auth): `GET http://localhost:3000/health` → `{ "status": "ok"
 
 | Route | Auth | Purpose |
 | --- | --- | --- |
-| `GET /health` | none | Liveness and server version. |
+| `GET /health` | none | Readiness and server version: `503 {"status":"starting"}` while a hosted replica is still activating its artifact bundle, then `200`. |
+| `GET /live` | none | Liveness: `200` whenever the process is serving HTTP. |
 | `POST`, `GET`, `DELETE /mcp` | API key | MCP Streamable HTTP endpoint. |
 
 ## Indexing
@@ -622,7 +651,7 @@ database. Set `D365_RUN_SQL_INTEGRATION=1` and `D365_XREF_CONNECTION_STRING`, th
 
 ## Security notes
 
-- **API keys** — every key must be at least 32 characters; generate one per person with `openssl rand -hex 32` and list them in `MCP_API_KEYS`. Each request is checked against every key in constant time, only the key's name is logged, and a session is bound to the key that opened it. The `/health` endpoint is the only unauthenticated route.
+- **API keys** — every key must be at least 32 characters; generate one per person with `openssl rand -hex 32` and list them in `MCP_API_KEYS`. Each request is checked against every key in constant time, only the key's name is logged, and a session is bound to the key that opened it. The `/health` and `/live` endpoints are the only unauthenticated routes.
 - **Rate limiting** — requests are limited per client IP (`RATE_LIMIT_MAX_REQUESTS` per `RATE_LIMIT_WINDOW_MS`). Limiting is deliberately keyed on IP only, so rotating credentials cannot bypass the limit.
 - **Trust proxy** — `TRUST_PROXY_HOPS` defaults to `0`, meaning `X-Forwarded-For` is ignored and the socket address is used. Only raise it when the server genuinely sits behind that many trusted proxies; otherwise clients can spoof their IP and evade rate limiting.
 - **Session limits** — `MAX_CONCURRENT_SESSIONS` and `SESSION_IDLE_TIMEOUT_MS` bound memory use and clean up abandoned sessions.

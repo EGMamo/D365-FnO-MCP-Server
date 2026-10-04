@@ -28,6 +28,15 @@ const configSchema = z.object({
   D365_INDEX_DB_PATH: z.string().default('./d365_index.db'),
   /** Optional immutable artifact store. The active bundle is validated into D365_INDEX_DB_PATH. */
   D365_ARTIFACT_STORE_PATH: z.string().default(''),
+  /**
+   * Where `serve` reads the active bundle from. `local`: D365_ARTIFACT_STORE_PATH is the
+   * artifact store. `azure-blob`: the store is the Blob container below and
+   * D365_ARTIFACT_STORE_PATH is this replica's instance-local materialization directory.
+   */
+  D365_ARTIFACT_SOURCE: z.enum(['local', 'azure-blob']).default('local'),
+  D365_ARTIFACT_ACCOUNT_URL: z.string().default(''),
+  D365_ARTIFACT_CONTAINER: z.string().default(''),
+  D365_ARTIFACT_MANAGED_IDENTITY_CLIENT_ID: z.string().default(''),
   D365_ENABLE_WRITE_TOOLS: z.coerce.number().default(0),
   D365_PROJECT_DIR: z.string().default(''),
   D365_VISUAL_STUDIO_WORKSPACE_DIR: z.string().default(''),
@@ -48,6 +57,15 @@ const configSchema = z.object({
 });
 
 type ParsedEnv = z.output<typeof configSchema>;
+
+function isHttpsOrigin(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && !url.username && !url.password && !url.search && !url.hash;
+  } catch {
+    return false;
+  }
+}
 
 const configSchemaWithGuards = configSchema.superRefine((env, ctx) => {
   const issue = (path: string, message: string) =>
@@ -77,6 +95,23 @@ const configSchemaWithGuards = configSchema.superRefine((env, ctx) => {
       'D365_ENABLE_WRITE_TOOLS',
       'D365_ENABLE_WRITE_TOOLS must be 0 when D365_ARTIFACT_STORE_PATH enables hosted artifact mode'
     );
+  }
+  if (env.D365_ARTIFACT_SOURCE === 'azure-blob') {
+    if (env.D365_ARTIFACT_STORE_PATH.trim().length === 0) {
+      issue(
+        'D365_ARTIFACT_STORE_PATH',
+        'D365_ARTIFACT_STORE_PATH must name an instance-local directory when D365_ARTIFACT_SOURCE=azure-blob'
+      );
+    }
+    if (!isHttpsOrigin(env.D365_ARTIFACT_ACCOUNT_URL.trim())) {
+      issue(
+        'D365_ARTIFACT_ACCOUNT_URL',
+        'D365_ARTIFACT_ACCOUNT_URL must be an HTTPS storage account URL without credentials or query parameters when D365_ARTIFACT_SOURCE=azure-blob'
+      );
+    }
+    if (env.D365_ARTIFACT_CONTAINER.trim().length === 0) {
+      issue('D365_ARTIFACT_CONTAINER', 'D365_ARTIFACT_CONTAINER is required when D365_ARTIFACT_SOURCE=azure-blob');
+    }
   }
   if (
     (env.D365_TARGET_PROJECT.trim().length > 0 || env.D365_TARGET_SOLUTION.trim().length > 0) &&
@@ -119,6 +154,10 @@ function buildConfig(env: ParsedEnv) {
     appVersion: env.D365_APP_VERSION.trim(),
     indexDbPath: env.D365_INDEX_DB_PATH,
     artifactStorePath: env.D365_ARTIFACT_STORE_PATH.trim(),
+    artifactSource: env.D365_ARTIFACT_SOURCE,
+    artifactAccountUrl: env.D365_ARTIFACT_ACCOUNT_URL.trim(),
+    artifactContainer: env.D365_ARTIFACT_CONTAINER.trim(),
+    artifactManagedIdentityClientId: env.D365_ARTIFACT_MANAGED_IDENTITY_CLIENT_ID.trim(),
     enableWriteTools: env.D365_ENABLE_WRITE_TOOLS === 1,
     projectDir: env.D365_PROJECT_DIR,
     visualStudioWorkspaceDir: env.D365_VISUAL_STUDIO_WORKSPACE_DIR,

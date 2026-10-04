@@ -361,7 +361,17 @@ export function stageAndActivateArtifactBundle(
   targetDatabase: string,
   policy: ArtifactCompatibilityPolicy
 ): ValidatedArtifactBundle {
-  const validated = validateArtifactBundle(directory, policy);
+  return activateValidatedArtifactBundle(validateArtifactBundle(directory, policy), targetDatabase);
+}
+
+/**
+ * Copies an already validated bundle's database next to `targetDatabase`,
+ * re-verifies the copy and atomically activates it.
+ */
+export function activateValidatedArtifactBundle(
+  validated: ValidatedArtifactBundle,
+  targetDatabase: string
+): ValidatedArtifactBundle {
   const target = path.resolve(targetDatabase);
   fs.mkdirSync(path.dirname(target), { recursive: true });
   const candidate = path.join(
