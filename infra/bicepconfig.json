@@ -1,0 +1,18 @@
+{
+  "analyzers": {
+    "core": {
+      "enabled": true,
+      "rules": {
+        "no-hardcoded-env-urls": { "level": "error" },
+        "no-unused-params": { "level": "error" },
+        "no-unused-vars": { "level": "error" },
+        "outputs-should-not-contain-secrets": { "level": "error" },
+        "secure-parameter-default": { "level": "error" },
+        "secure-secrets-in-params": { "level": "error" },
+        "protect-commandtoexecute-secrets": { "level": "error" },
+        "use-secure-value-for-secure-inputs": { "level": "error" },
+        "use-recent-api-versions": { "level": "off" }
+      }
+    }
+  }
+}

@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Azure infrastructure as code (`infra/main.bicep`, not yet deployed): App Service API with a
+  staging slot and startup Blob materialization settings, a deallocated-by-default Windows
+  acquisition VM run on schedule by a Logic App through Run Command, a Shared-Key-free artifact
+  store with lifecycle rules that never delete bundles, ACR, separate API and worker Key Vaults,
+  user-assigned identities with container- and resource-scoped roles, a GitHub OIDC deploy
+  identity, private endpoints, NAT egress, Log Analytics, Application Insights availability
+  testing and alerts for health, capacity, auth failures, Blob denials, worker failures and index
+  freshness. CI builds and lints the templates. `deploy.yml` now deploys to the staging slot,
+  waits for bundle activation, smoke-tests, swaps and swaps back if production is unhealthy.
 - A fail-closed Azure artifact contract for immutable content-addressed index bundles, including
   source provenance, capability inventory, compatibility bounds, durable validation reports,
   concurrency-safe active/previous promotion, pointer-only rollback and validated local API
