@@ -319,7 +319,7 @@ production component allowed to build or promote an index. See
 [`docs/hosted-deployment.md`](docs/hosted-deployment.md) and the guided
 [`Azure resource plan`](docs/azure-resource-guide.md).
 
-## Transport modes
+## Transport
 
 ### HTTP (default, `MCP_TRANSPORT=http`)
 
@@ -329,6 +329,7 @@ Streamable HTTP endpoint at `http://localhost:3000/mcp`. Every request must pres
 {
   "mcpServers": {
     "d365-fno": {
+      "type": "http",
       "url": "http://localhost:3000/mcp",
       "headers": { "X-API-Key": "your-api-key" }
     }

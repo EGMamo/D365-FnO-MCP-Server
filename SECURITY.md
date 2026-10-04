@@ -22,13 +22,9 @@ one) receives security fixes.
   `Authorization: Bearer`. Keys are at least 32 characters and compared in
   constant time; only key names are logged. An MCP session only accepts the key
   that opened it.
-- **Index uploads** (`/admin/index/uploads`) additionally need a key named in
-  `D365_INDEX_UPLOAD_KEYS`. Uploads are checked per chunk, on the whole package
-  and on the decoded database, and decoding stops at the declared size.
 - **Write tools** are off unless `D365_ENABLE_WRITE_TOOLS=1`, only write inside
   `D365_CUSTOM_METADATA_DIR`, and are always off in hosted mode.
-- **Secrets**: SQL connection strings and SAS URLs are read from the
-  environment and never logged with their query strings.
+- **Secrets**: SQL connection strings are read from the environment and never logged.
 - **HTTP transport** requires a configured API key on every MCP request.
 
 ## Operating a server safely
@@ -38,7 +34,8 @@ one) receives security fixes.
 - Bind a local server to `127.0.0.1` (`MCP_HOST`) and put a shared one behind
   TLS. Raise `TRUST_PROXY_HOPS` only for proxies you control.
 - Give the XRef and Trace Parser importers a read-only SQL login.
-- Scope the publish SAS (`D365_INDEX_PUBLISH_URL`) to one container with create
-  and write rights, and the read SAS in `D365_INDEX_URL` to read only.
+- Configure artifact storage with an HTTPS account URL without query parameters. The server and
+  acquisition worker authenticate to Azure Blob Storage with managed identity credentials; do not
+  place SAS tokens in account URLs or configuration.
 
 See also the [Responsible AI and security FAQ](docs/responsible-ai-faq.md).

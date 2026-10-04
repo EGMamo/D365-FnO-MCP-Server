@@ -30,7 +30,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Visual Studio single-gateway foundation: a loopback-only MCP gateway proxies hosted tools,
   forwards the installed D365 SDK version, keeps the hosted API key in Windows Credential Manager,
   and adds a privacy-safe `workspace_get_context` tool.
-- Session-start SDK version warnings. The index records the four-part D365 application version it was built from (read from Unified Developer Experience paths, or from the new `D365_APP_VERSION` for layouts that do not name it), and every session is told which version it is querying through the MCP `instructions`. A client declaring an older *build* — over the `X-D365-Client-Sdk-Version` header on HTTP, or `D365_APP_VERSION` on stdio — is warned that returned elements may not exist locally; an older *revision* of the same build is only a notice. Nothing is blocked. See [SDK version warnings](README.md#sdk-version-warnings).
+- Session-start SDK version warnings. The index records the four-part D365 application version it was built from (read from Unified Developer Experience paths, or from the new `D365_APP_VERSION` for layouts that do not name it), and every session is told which version it is querying through the MCP `instructions`. A client declaring an older *build* over the `X-D365-Client-SDK-Version` header is warned that returned elements may not exist locally; an older *revision* of the same build is only a notice. Nothing is blocked. See [SDK version warnings](README.md#sdk-version-warnings).
+- `acquire` command and scheduled acquisition worker: acquire source assets, build and validate an immutable artifact bundle, publish it, and promote it with retry-safe run IDs.
+- `artifact` command for Azure Blob bundle status, publication, promotion, and rollback.
 - A role-separated [user and administrator guide](docs/user-and-admin-guide.md), and expanded security knowledge on naming, grants, extensions, and non-admin testing.
 - `MCP_LOG_LEVEL` filters the structured stderr log (`DEBUG` by default, or `INFO`, `WARN`, `ERROR`, `FATAL`, `SILENT`).
 - Code quality tools, adapted from GitHub community projects (all MIT):
@@ -60,7 +62,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Trace tools: `list_trace_sessions`, `find_n_plus_one`, `find_slow_sql`, `get_top_methods` and
   `search_trace`. Findings link methods to AOT objects and SQL tables to their indexes and table
   group. Default thresholds come from the FastTrack Trace Parser Agent (MIT).
-- `publish-index` and `upload-index` remove imported trace data from the published copy.
 - Knowledge topic `22-performance-antipatterns`.
 - `analyze_batch_class`: reports a class's batch framework and inheritance, batch capability,
   `BatchRetryable` status, pack/unpack versioning and idempotency or set-based hints, together
@@ -89,31 +90,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Visual Studio extension: *Check Index Freshness* runs `index-status` with the saved settings and
   offers *Update Index*, which re-runs index, XRef import and upload incrementally without opening
   the Index and Upload window.
-- Index uploads: `POST/PUT/GET/DELETE /admin/index/uploads` accept a packaged index whole or in
-  chunks (per-chunk SHA-256, resend on mismatch), verify the assembled package, the decompressed
-  database and its object count, then swap it in without a restart (open sessions reconnect).
-  Uploads are enabled per key with `D365_INDEX_UPLOAD_KEYS`; `D365_INDEX_PUBLISH_URL` publishes a
-  verified upload to Blob Storage so restarts keep it. `GET /admin/index` reports the served index
-  and whether the caller may upload.
-- `upload-index` command: snapshot, compress (gzip, Brotli or none; fastest/balanced/smallest),
-  upload in parallel chunks with retries, compare the server's SHA-256, `--progress json` events.
-- Visual Studio 2022/2026 extension (`vs-extension/`): *Configure Connection* writes a `.mcp.json`
-  for Copilot after testing the server and stores the key in Windows Credential Manager; *Test
-  Connection*; *Index and Upload* indexes a chosen `PackagesLocalDirectory`, imports the XRef
-  database and uploads with the chosen compression and chunking. CI builds the `.vsix`.
-- `publish-index --compression/--level`; manifests record `db.encoding` and `db.rawSha256`, and
-  `pull-index`/hosted start-up verify the decompressed database too.
 - `index --packages-dir/--db-path`.
 - `index-xref` signs in with Windows authentication (`Trusted_Connection=yes`) through the optional
   `msnodesqlv8` driver, which also reaches LocalDB.
 
-- Hosted mode: `D365_INDEX_URL` makes `serve` download a published index (manifest + gzip SQLite,
-  SHA-256 verified) into local disk before listening, so the server runs read-only on Azure App
-  Service without a `PackagesLocalDirectory`.
+- Hosted mode: `D365_ARTIFACT_STORE_PATH` makes `serve` validate the active local artifact bundle
+  before listening, so the server runs read-only without a `PackagesLocalDirectory`.
 - `MCP_API_KEYS`: named API keys (`name=key,...`) alongside the legacy `MCP_API_KEY`; requests log
   the key name only and a session is bound to the key that opened it.
-- `publish-index` (compact `VACUUM INTO` copy, gzip, versioned and `latest` manifests, optional
-  `--relative-paths`), `pull-index`, and `doctor --hosted`.
+- `doctor --hosted` and immutable artifact activation at server startup.
 - `ax_meta` build metadata (`built_at`, server version, raw-XML setting); `get_index_stats` reports
   it and `get_index_staleness` reports `mode: "published"` on a hosted server.
 - `MCP_HOST` to bind a single interface; graceful shutdown that closes sessions before exit.
@@ -125,7 +110,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Upgraded glob to 13, fast-xml-parser to 5, ESLint to 10 and Vitest to 5, and moved the CI and deploy workflows to action versions that run on Node 24. `npm ci` no longer reports deprecated packages or audit findings.
-- `D365_PACKAGES_DIR` is required only for indexing; `MCP_API_KEY` is no longer required for stdio.
+- `D365_PACKAGES_DIR` is required only for indexing; HTTP transport and API keys are mandatory for
+  `serve`.
 - `getIndexStats().lastIndexed` now reports the recorded build time instead of the call time.
 - `mssql` moved to `optionalDependencies`; the container image and `--omit=optional` installs leave
   it out and `index-xref` explains how to install it.
@@ -134,6 +120,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- stdio transport and keyless local sessions. The server now exposes only authenticated Streamable
+  HTTP, and `MCP_API_KEYS` (or `MCP_API_KEY`) is mandatory.
 - Retired developer-built index distribution: `publish-index`, `pull-index`, `upload-index`,
   manifest download at server startup, direct upload routes, SAS/publish configuration, and the
   Visual Studio Index and Upload/freshness/update workflows. Production candidates are now expected
@@ -150,7 +138,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - MCP metadata tools: `search_symbols`, `get_table_schema`, `get_class_hierarchy`, `get_method_signature`, `find_references`, `get_enum_values`, `get_edt_details`, `get_form_datasources`, `get_element_xml`, `list_objects`, `get_index_stats`.
 - MCP label tools: `resolve_label`, `search_labels`.
 - X++ generators grounded against the index with validation gates: `create_coc_extension`, `create_table_extension`, `create_class_extension`, `generate_xpp_class`, `create_runbase_batch`, `create_sys_operation`.
-- stdio transport in addition to the Streamable HTTP transport, for local MCP clients.
+- Streamable HTTP transport for MCP clients.
 - CLI with `serve`, `index`, `doctor`, and `setup` commands, including non-interactive setup flags.
 - Packaging and documentation polish: comprehensive README, `files`/`keywords` metadata, CHANGELOG, and a GitHub Actions CI workflow running typecheck, lint, build, and tests (now on Node 24).
 
@@ -199,7 +187,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Chain of Command wrappers now preserve the original method's access modifier and `static` flag.
 - Generators fail closed on ungrounded Chain of Command and table extension input instead of emitting unverified code.
 - Transport-level server leaks and unbounded concurrent sessions; session lifecycle is now pre-checked against the session cap.
-- stdout is kept clean in stdio mode so JSON-RPC framing is never corrupted by log output.
 
 ### Security
 
