@@ -3,10 +3,12 @@ import path from 'node:path';
 import {
   ARTIFACT_CONTRACT_NAME,
   ARTIFACT_CONTRACT_VERSION,
+  ARTIFACT_MANIFEST_FILE,
   ARTIFACT_POINTERS_FILE,
   type ArtifactCompatibilityPolicy,
   type ArtifactPointers,
   canonicalJson,
+  parseArtifactManifest,
   parseArtifactPointers,
 } from './artifactContract.js';
 import { artifactBundleDirectory, validateArtifactBundle } from './artifactBundle.js';
@@ -80,6 +82,14 @@ function requireRevision(current: ArtifactPointers, expectedRevision: number): v
   }
 }
 
+function bundleTimestamp(bundle: { manifest: { createdAt: string; builtAt: string; publishedAt: string } }): number {
+  return Math.max(
+    Date.parse(bundle.manifest.createdAt),
+    Date.parse(bundle.manifest.builtAt),
+    Date.parse(bundle.manifest.publishedAt)
+  );
+}
+
 export function promoteArtifactBundle(
   storeRoot: string,
   bundleId: string,
@@ -90,8 +100,22 @@ export function promoteArtifactBundle(
   return withPointerLock(storeRoot, () => {
     const current = readArtifactPointers(storeRoot);
     requireRevision(current, expectedRevision);
-    validateArtifactBundle(artifactBundleDirectory(storeRoot, bundleId), policy);
+    const candidate = validateArtifactBundle(artifactBundleDirectory(storeRoot, bundleId), policy);
     if (current.active?.bundleId === bundleId) return current;
+    if (current.active) {
+      const activeManifest = parseArtifactManifest(JSON.parse(
+        fs.readFileSync(
+          path.join(artifactBundleDirectory(storeRoot, current.active.bundleId), ARTIFACT_MANIFEST_FILE),
+          'utf8'
+        )
+      ) as unknown);
+      if (bundleTimestamp(candidate) <= bundleTimestamp({ manifest: activeManifest })) {
+        throw new Error(
+          `Refusing to promote artifact ${candidate.manifest.bundleId}: it is not newer than ` +
+            `the active bundle ${activeManifest.bundleId}.`
+        );
+      }
+    }
     const next: ArtifactPointers = {
       contract: ARTIFACT_CONTRACT_NAME,
       contractVersion: ARTIFACT_CONTRACT_VERSION,

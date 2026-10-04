@@ -22,7 +22,7 @@ npm link
 
 After `npm link`, the `d365-fno-mcp-server` command is on the PATH.
 
-## 2. Build the index
+## 2. Build the local index
 
 Use absolute paths. The first run takes several minutes on a full `PackagesLocalDirectory`.
 
@@ -36,7 +36,33 @@ Then check the setup:
 D365_PACKAGES_DIR="<PackagesLocalDirectory>" D365_INDEX_DB_PATH="<absolute path>/d365_index.db" d365-fno-mcp-server doctor
 ```
 
-## 3. Register the hosted HTTP server
+## 3. Run the local HTTP server (local-data setup)
+
+Generate a key and start the authenticated server:
+
+```bash
+export MCP_API_KEYS="local=$(openssl rand -hex 32)"
+MCP_HOST=127.0.0.1 D365_INDEX_DB_PATH="<absolute path>/d365_index.db" \
+  d365-fno-mcp-server serve
+```
+
+Register `http://127.0.0.1:3000/mcp` in the client using the same key:
+
+```json
+{
+  "mcpServers": {
+    "d365-fno": {
+      "type": "http",
+      "url": "http://127.0.0.1:3000/mcp",
+      "headers": { "X-API-Key": "<the value after local=>"}
+    }
+  }
+}
+```
+
+Use this local setup for tools that depend on local-only imports such as `index-trace`.
+
+## 4. Register a hosted HTTP server (alternative)
 
 Add this to the client's MCP settings file:
 
@@ -70,9 +96,12 @@ VS Code uses a `servers` key:
 }
 ```
 
-## 4. Verify
+## 5. Verify
 
-Restart the client and call `get_index_stats`. It should report thousands of objects. If it reports none, rerun step 2 and check that `D365_INDEX_DB_PATH` is absolute.
+Restart the client and call `get_index_stats`. A local server reads the database from
+`D365_INDEX_DB_PATH`; a hosted server reads the active validated bundle configured by
+`D365_ARTIFACT_STORE_PATH`. If the hosted server cannot start, inspect its artifact-store mount and
+startup logs rather than rerunning local indexing.
 
 ## Optional data
 

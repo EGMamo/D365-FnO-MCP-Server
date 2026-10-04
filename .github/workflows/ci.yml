@@ -67,7 +67,17 @@ jobs:
         run: |
           set -euo pipefail
           KEY=$(openssl rand -hex 32)
-          docker run -d --name mcp -p 8080:8080 -e MCP_API_KEYS="ci=$KEY" d365-fno-mcp-server:ci
+          docker run -d --name mcp-empty -e MCP_API_KEYS="ci=$KEY" d365-fno-mcp-server:ci
+          sleep 2
+          if docker inspect -f '{{.State.Running}}' mcp-empty | grep -q true; then
+            echo "The container must fail closed when the artifact store is empty."
+            exit 1
+          fi
+          docker logs mcp-empty 2>&1 | grep -q 'no active validated bundle'
+          docker run -d --name mcp -p 8080:8080 \
+            -e MCP_API_KEYS="ci=$KEY" \
+            -e D365_ARTIFACT_STORE_PATH= \
+            d365-fno-mcp-server:ci
           for _ in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:8080/health >/dev/null 2>&1; then break; fi
             sleep 2
@@ -87,7 +97,9 @@ jobs:
           if docker exec mcp test -d node_modules/mssql; then echo "mssql should be omitted" && exit 1; fi
       - name: Container logs
         if: always()
-        run: docker logs mcp || true
+        run: |
+          docker logs mcp-empty || true
+          docker logs mcp || true
       - name: Cleanup
         if: always()
-        run: docker rm -f mcp || true
+        run: docker rm -f mcp-empty mcp || true

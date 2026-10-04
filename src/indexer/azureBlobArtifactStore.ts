@@ -128,6 +128,17 @@ function contentType(file: string): string {
 export class AzureBlobArtifactStore {
   constructor(private readonly container: ArtifactBlobContainer) {}
 
+  async uploadBundle(
+    directory: string,
+    policy: ArtifactCompatibilityPolicy
+  ): Promise<ValidatedArtifactBundle> {
+    return new AzureBlobArtifactWriter(
+      this,
+      this.container,
+      async () => undefined
+    ).uploadBundle(directory, policy);
+  }
+
   async verifyContainer(): Promise<void> {
     await this.container.getProperties();
   }
@@ -227,27 +238,42 @@ export class AzureBlobArtifactStore {
     }
 
     let renewalError: unknown;
-    let renewalInFlight: Promise<void> | undefined;
-    const renewal = setInterval(() => {
-      renewalInFlight = lease.renew().catch((error: unknown) => {
+    let renewalChain = Promise.resolve();
+    const renewLease = (): Promise<void> => {
+      const renewal = renewalChain.then(async () => {
+        await lease.renew();
+        renewalError = undefined;
+      });
+      renewalChain = renewal.catch((error: unknown) => {
         renewalError = error;
       });
+      return renewal;
+    };
+    const renewal = setInterval(() => {
+      void renewLease().catch(() => undefined);
     }, LEASE_RENEWAL_MILLISECONDS);
     renewal.unref();
 
-    const assertLeaseHealthy = (): void => {
+    const ensureLeaseHealthy = async (): Promise<void> => {
       if (renewalError) {
         throw new Error('The Azure Blob acquisition lease could not be renewed.', {
           cause: renewalError,
         });
       }
+      try {
+        await renewLease();
+      } catch (error) {
+        throw new Error('The Azure Blob acquisition lease could not be renewed.', {
+          cause: error,
+        });
+      }
     };
 
     try {
-      return await action(new AzureBlobArtifactWriter(this, this.container, assertLeaseHealthy));
+      return await action(new AzureBlobArtifactWriter(this, this.container, ensureLeaseHealthy));
     } finally {
       clearInterval(renewal);
-      await renewalInFlight;
+      await renewalChain;
       await lease.release();
     }
   }
@@ -280,14 +306,14 @@ export class AzureBlobArtifactWriter {
   constructor(
     private readonly store: AzureBlobArtifactStore,
     private readonly container: ArtifactBlobContainer,
-    private readonly assertLeaseHealthy: () => void
+    private readonly ensureLeaseHealthy: () => Promise<void>
   ) {}
 
   async uploadBundle(
     directory: string,
     policy: ArtifactCompatibilityPolicy
   ): Promise<ValidatedArtifactBundle> {
-    this.assertLeaseHealthy();
+    await this.ensureLeaseHealthy();
     const validated = validateArtifactBundle(directory, policy);
     const prefix = bundlePrefix(validated.manifest.bundleId);
     const files = [
@@ -309,7 +335,7 @@ export class AzureBlobArtifactWriter {
     ];
 
     for (const file of files) {
-      this.assertLeaseHealthy();
+      await this.ensureLeaseHealthy();
       const source = path.join(validated.directory, file.name);
       const blobName = `${prefix}/${file.name}`;
       const blob = this.container.getBlob(blobName);
@@ -338,11 +364,32 @@ export class AzureBlobArtifactWriter {
     policy: ArtifactCompatibilityPolicy,
     promotedAt = new Date().toISOString()
   ): Promise<ArtifactPointerSnapshot> {
-    this.assertLeaseHealthy();
-    await this.validateRemoteBundle(bundleId, policy);
+    await this.ensureLeaseHealthy();
+    const candidate = await this.validateRemoteBundle(bundleId, policy);
     const current = await this.store.readPointers();
     assertExpectedRevision(current, expectedRevision);
     if (current.pointers.active?.bundleId === bundleId) return current;
+    const active = current.pointers.active
+      ? await this.validateRemoteBundle(current.pointers.active.bundleId, policy)
+      : null;
+    if (active) {
+      const candidateTime = Math.max(
+        Date.parse(candidate.manifest.createdAt),
+        Date.parse(candidate.manifest.builtAt),
+        Date.parse(candidate.manifest.publishedAt)
+      );
+      const activeTime = Math.max(
+        Date.parse(active.manifest.createdAt),
+        Date.parse(active.manifest.builtAt),
+        Date.parse(active.manifest.publishedAt)
+      );
+      if (candidateTime <= activeTime) {
+        throw new Error(
+          `Refusing to promote artifact ${candidate.manifest.bundleId}: it is not newer than ` +
+            `the active bundle ${active.manifest.bundleId}.`
+        );
+      }
+    }
     const next: ArtifactPointers = {
       contract: ARTIFACT_CONTRACT_NAME,
       contractVersion: ARTIFACT_CONTRACT_VERSION,
@@ -359,7 +406,7 @@ export class AzureBlobArtifactWriter {
     policy: ArtifactCompatibilityPolicy,
     promotedAt = new Date().toISOString()
   ): Promise<ArtifactPointerSnapshot> {
-    this.assertLeaseHealthy();
+    await this.ensureLeaseHealthy();
     const current = await this.store.readPointers();
     assertExpectedRevision(current, expectedRevision);
     if (!current.pointers.previous) {
@@ -381,7 +428,7 @@ export class AzureBlobArtifactWriter {
   }
 
   async deleteUnreferencedBundle(bundleId: string): Promise<boolean> {
-    this.assertLeaseHealthy();
+    await this.ensureLeaseHealthy();
     const prefix = `${bundlePrefix(bundleId)}/`;
     const before = await this.store.readPointers();
     if (
@@ -396,7 +443,7 @@ export class AzureBlobArtifactWriter {
     if (after.etag !== before.etag) {
       throw new Error('Artifact pointers changed while evaluating bundle retention.');
     }
-    this.assertLeaseHealthy();
+    await this.ensureLeaseHealthy();
     for (const name of blobNames) await this.container.getBlob(name).deleteIfExists();
     return blobNames.length > 0;
   }
@@ -404,10 +451,10 @@ export class AzureBlobArtifactWriter {
   private async validateRemoteBundle(
     bundleId: string,
     policy: ArtifactCompatibilityPolicy
-  ): Promise<void> {
+  ): Promise<ValidatedArtifactBundle> {
     const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'd365-azure-artifact-'));
     try {
-      await this.store.materializeBundle(bundleId, { localStoreRoot: temporary, policy });
+      return await this.store.materializeBundle(bundleId, { localStoreRoot: temporary, policy });
     } finally {
       fs.rmSync(temporary, { recursive: true, force: true });
     }
@@ -442,10 +489,10 @@ export class AzureBlobArtifactWriter {
     pointers: ArtifactPointers,
     expectedEtag: string | null
   ): Promise<ArtifactPointerSnapshot> {
-    this.assertLeaseHealthy();
     const checkedPointers = parseArtifactPointers(pointers);
     const blob = this.container.getBlob(ARTIFACT_POINTERS_FILE);
     try {
+      await this.ensureLeaseHealthy();
       await blob.uploadBuffer(Buffer.from(canonicalJson(checkedPointers)), {
         conditions: expectedEtag === null ? { ifNoneMatch: '*' } : { ifMatch: expectedEtag },
         contentType: 'application/json',

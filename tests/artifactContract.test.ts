@@ -6,6 +6,7 @@ import {
   ARTIFACT_DATABASE_FILE,
   ARTIFACT_VALIDATION_FILE,
   ArtifactProvenanceSchema,
+  canonicalJson,
   type ArtifactCompatibilityPolicy,
   type ArtifactProvenance,
   type CapabilityInventory,
@@ -132,6 +133,12 @@ function createBundle(createdAt = FIRST_TIME, inventory = capabilities) {
 }
 
 describe('Azure artifact contract', () => {
+  it('canonicalizes object keys by Unicode code point order', () => {
+    expect(canonicalJson({ é: 1, e: 2, a: 3, _: 4, A: 5, 0: 6 })).toBe(
+      '{"0":6,"A":5,"_":4,"a":3,"e":2,"é":1}\n'
+    );
+  });
+
   it('requires one or two version-applicable VSIX assets', () => {
     expect(ArtifactProvenanceSchema.safeParse(provenance).success).toBe(true);
     expect(ArtifactProvenanceSchema.safeParse({

@@ -249,11 +249,21 @@ function stableValue(value: unknown): unknown {
   if (value !== null && typeof value === 'object') {
     return Object.fromEntries(
       Object.entries(value as Record<string, unknown>)
-        .sort(([left], [right]) => left.localeCompare(right))
+        .sort(([left], [right]) => compareCodePoints(left, right))
         .map(([key, entry]) => [key, stableValue(entry)])
     );
   }
   return value;
+}
+
+function compareCodePoints(left: string, right: string): number {
+  const leftPoints = Array.from(left, (character) => character.codePointAt(0)!);
+  const rightPoints = Array.from(right, (character) => character.codePointAt(0)!);
+  for (let index = 0; index < Math.max(leftPoints.length, rightPoints.length); index += 1) {
+    const delta = (leftPoints[index] ?? -1) - (rightPoints[index] ?? -1);
+    if (delta !== 0) return Math.sign(delta);
+  }
+  return 0;
 }
 
 export function canonicalJson(value: unknown): string {

@@ -16,14 +16,16 @@ captures and Microsoft release plans.
 - **MCP SDK**: `@modelcontextprotocol/sdk`
 - **Indexing**: AOT XML -> `fast-xml-parser` -> SQLite via Node's built-in `node:sqlite`
 - **Auth (HTTP)**: API keys (`X-API-Key` or `Authorization: Bearer`), named keys in `MCP_API_KEYS`, >= 32 chars, sessions bound to the key
-- **Hosted mode**: read-only on Azure App Service from a published index (`D365_INDEX_URL`); see `docs/hosted-deployment.md`
+- **Hosted mode**: read-only from the active validated artifact bundle in the local
+  `D365_ARTIFACT_STORE_PATH`; see `docs/hosted-deployment.md`
 - **Optional**: `mssql` (only for `index-xref` / `index-trace`)
 
 ## Key Design Decisions
 - Read-only by default. Generators return previews; file writes need `D365_ENABLE_WRITE_TOOLS=1`, are two-step (`write_table_extension` -> `apply_table_extension_change`) and are refused with a published index
 - Every generator is grounded: it resolves referenced objects/fields/EDTs against the index and reports what it could not resolve
-- Network use is opt-in: publish/pull/upload of the index (your storage/server) and `index-release-plans` (public feed)
-- Trace data stays local; `publish-index` / `upload-index` strip it
+- Network use is opt-in: Azure artifact publication through `artifact`/`acquire` and
+  `index-release-plans` (public feed)
+- Trace data stays local and is not included in published artifact bundles
 - Index is incremental (file mtime-based)
 
 ## MCP Tools (54)
@@ -44,11 +46,11 @@ captures and Microsoft release plans.
 ```
 src/
   index.ts                # CLI entry point (serve, index, index-xref, index-trace, index-release-plans,
-                          #   index-status, publish-index, pull-index, upload-index, digest, doctor, setup)
+                          #   index-status, acquire, artifact, digest, doctor, setup)
   config.ts, configLoader.ts  # Zod env validation
   cli/                    # One module per command
   server/                 # start.ts (tool registration), httpTransport.ts, apiKeys.ts, indexUpload.ts
-  indexer/                # scanner, parser, db schema, buildIndex, xref/trace/release-plan importers, publish/pull/upload
+  indexer/                # scanner, parser, db schema, buildIndex, xref/trace/release-plan importers, artifact bundles
   tools/                  # MCP tool handlers (see above)
   security/model.ts       # Role/duty/privilege flattening
   validation/grounding.ts # Object resolution and naming checks for generators
@@ -80,7 +82,7 @@ MCP_API_KEYS=name=<32+ chars>,other=<32+ chars>
 D365_PACKAGES_DIR=K:\\AosService\\PackagesLocalDirectory
 D365_CUSTOM_METADATA_DIR=     # optional extra metadata root
 D365_INDEX_DB_PATH=./d365_index.db
-D365_INDEX_URL=               # hosted mode: published manifest URL
+D365_ARTIFACT_STORE_PATH=     # hosted mode: local artifact-store root
 D365_ENABLE_WRITE_TOOLS=0     # local only
 RATE_LIMIT_MAX_REQUESTS / RATE_LIMIT_WINDOW_MS / TRUST_PROXY_HOPS
 MAX_CONCURRENT_SESSIONS / SESSION_IDLE_TIMEOUT_MS / MCP_REQUEST_TIMEOUT_MS

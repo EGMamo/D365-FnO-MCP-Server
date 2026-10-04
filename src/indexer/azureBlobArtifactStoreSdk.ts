@@ -115,7 +115,17 @@ export function createAzureBlobArtifactStore(
   options: AzureBlobArtifactStoreOptions
 ): AzureBlobArtifactStore {
   const accountUrl = new URL(options.accountUrl);
-  if (accountUrl.protocol !== 'https:') throw new Error('Azure Storage account URL must use HTTPS.');
+  if (
+    accountUrl.protocol !== 'https:' ||
+    accountUrl.username ||
+    accountUrl.password ||
+    accountUrl.search ||
+    accountUrl.hash
+  ) {
+    throw new Error(
+      'Azure Storage account URL must be an HTTPS origin without credentials or query parameters.'
+    );
+  }
   if (!/^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])?$/.test(options.containerName)) {
     throw new Error(`Invalid Azure Blob container name: ${options.containerName}`);
   }
