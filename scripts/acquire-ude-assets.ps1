@@ -47,6 +47,68 @@ function Get-PlainTextSecret {
     }
 }
 
+function Get-RedactedText {
+    param(
+        [AllowNull()]
+        [AllowEmptyString()]
+        [string]$Text
+    )
+
+    if ([string]::IsNullOrEmpty($Text)) {
+        return $Text
+    }
+    # Strip query strings from any URL (SAS tokens live there) and any stray
+    # SAS signature parameter that appears outside a recognizable URL.
+    $redacted = [regex]::Replace($Text, '(https?://[^\s"''?]+)\?[^\s"'']*', '$1?<redacted>')
+    return [regex]::Replace($redacted, '(?i)(sig=)[^&\s"'']+', '$1<redacted>')
+}
+
+function Get-FileContentMd5 {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    $md5 = [Security.Cryptography.MD5]::Create()
+    try {
+        $stream = [IO.File]::OpenRead($Path)
+        try {
+            return [Convert]::ToBase64String($md5.ComputeHash($stream))
+        }
+        finally {
+            $stream.Dispose()
+        }
+    }
+    finally {
+        $md5.Dispose()
+    }
+}
+
+function Assert-ContentMd5 {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+
+        [AllowNull()]
+        [AllowEmptyString()]
+        [string]$ExpectedContentMd5,
+
+        [Parameter(Mandatory = $true)]
+        [string]$AssetName
+    )
+
+    # Blob Storage reports Content-MD5 only when the blob has one stored; the
+    # length check remains the baseline when it is absent.
+    if ([string]::IsNullOrWhiteSpace($ExpectedContentMd5)) {
+        return
+    }
+    $actualContentMd5 = Get-FileContentMd5 -Path $Path
+    if ($actualContentMd5 -cne $ExpectedContentMd5) {
+        throw "Content-MD5 mismatch for '$AssetName': expected $ExpectedContentMd5, " +
+            "got $actualContentMd5."
+    }
+}
+
 function Get-AssetUri {
     param(
         [Parameter(Mandatory = $true)]
@@ -143,11 +205,16 @@ function Get-AssetMetadata {
         ).GetAwaiter().GetResult()
         try {
             $response.EnsureSuccessStatusCode() | Out-Null
+            $contentMd5 = $null
+            if ($null -ne $response.Content.Headers.ContentMD5) {
+                $contentMd5 = [Convert]::ToBase64String($response.Content.Headers.ContentMD5)
+            }
             return [pscustomobject]@{
                 ResourceName = $AssetName
                 FileName = Get-ResponseFileName -Response $response -AssetUri $AssetUri `
                     -AssetName $AssetName
                 ContentLength = $response.Content.Headers.ContentLength
+                ContentMd5 = $contentMd5
                 ContentType = [string]$response.Content.Headers.ContentType
                 Downloaded = $false
                 Reused = $false
@@ -198,6 +265,8 @@ function Save-Asset {
         }
 
         Write-Host "Validating existing $AssetName asset..."
+        Assert-ContentMd5 -Path $destinationPath -ExpectedContentMd5 $metadata.ContentMd5 `
+            -AssetName $AssetName
         $existingHash = (
             Get-FileHash -LiteralPath $destinationPath -Algorithm SHA256
         ).Hash.ToLowerInvariant()
@@ -205,6 +274,7 @@ function Save-Asset {
             ResourceName = $AssetName
             FileName = $metadata.FileName
             ContentLength = $existingLength
+            ContentMd5 = $metadata.ContentMd5
             ContentType = $metadata.ContentType
             Downloaded = $true
             Reused = $true
@@ -223,11 +293,36 @@ function Save-Asset {
 
         try {
             Write-Host "Downloading $AssetName with AzCopy..."
-            $azCopyOutput = & $AzCopyExecutable copy $AssetUri.AbsoluteUri $stagingDirectory `
-                --from-to=BlobLocal --overwrite=false --check-length=true `
-                --output-type=json --output-level=essential --log-level=ERROR 2>&1
-            if ($LASTEXITCODE -ne 0) {
-                throw "AzCopy failed for '$AssetName' with exit code $LASTEXITCODE."
+            # Limitation: the Dev Tools service hands back a pre-signed SAS URL
+            # for a storage account this identity does not own, so AzCopy's
+            # environment-based auth (AZCOPY_AUTO_LOGIN_TYPE, managed identity,
+            # service principal) does not apply, and AzCopy accepts a SAS only
+            # as part of the source URL. The SAS is therefore visible on this
+            # child process's command line for the lifetime of the transfer.
+            # It is short-lived and never echoed: AzCopy output is captured,
+            # redacted before any error message, and then discarded. Omit
+            # AzCopy (no -AzCopyPath and not on PATH) to keep the SAS in-process.
+            $previousErrorActionPreference = $ErrorActionPreference
+            # Windows PowerShell 5.1 turns redirected native stderr into
+            # terminating errors under Stop; rely on the exit code instead.
+            $ErrorActionPreference = "Continue"
+            try {
+                $azCopyOutput = & $AzCopyExecutable copy $AssetUri.AbsoluteUri $stagingDirectory `
+                    --from-to=BlobLocal --overwrite=false --check-length=true `
+                    --output-type=json --output-level=essential --log-level=ERROR 2>&1
+                $azCopyExitCode = $LASTEXITCODE
+            }
+            finally {
+                $ErrorActionPreference = $previousErrorActionPreference
+            }
+            if ($azCopyExitCode -ne 0) {
+                $azCopyTail = (
+                    @($azCopyOutput | ForEach-Object { [string]$_ }) |
+                        Select-Object -Last 5
+                ) -join [Environment]::NewLine
+                $azCopyOutput = $null
+                throw "AzCopy failed for '$AssetName' with exit code $azCopyExitCode." +
+                    [Environment]::NewLine + (Get-RedactedText -Text $azCopyTail)
             }
             $azCopyOutput = $null
 
@@ -249,6 +344,8 @@ function Save-Asset {
                 throw "Length mismatch for '$AssetName': expected $($metadata.ContentLength), " +
                     "got $actualLength."
             }
+            Assert-ContentMd5 -Path $downloadedPath -ExpectedContentMd5 $metadata.ContentMd5 `
+                -AssetName $AssetName
             Move-Item -LiteralPath $downloadedPath -Destination $destinationPath
         }
         finally {
@@ -263,6 +360,7 @@ function Save-Asset {
             ResourceName = $AssetName
             FileName = $metadata.FileName
             ContentLength = $actualLength
+            ContentMd5 = $metadata.ContentMd5
             ContentType = $metadata.ContentType
             Downloaded = $true
             Reused = $false
@@ -279,6 +377,11 @@ function Save-Asset {
         $response.EnsureSuccessStatusCode() | Out-Null
         $partialPath = "$destinationPath.partial-$PID"
         $expectedLength = $metadata.ContentLength
+        $expectedContentMd5 = $metadata.ContentMd5
+        if ([string]::IsNullOrWhiteSpace($expectedContentMd5) -and
+            $null -ne $response.Content.Headers.ContentMD5) {
+            $expectedContentMd5 = [Convert]::ToBase64String($response.Content.Headers.ContentMD5)
+        }
         $inputStream = $response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
         $outputStream = [IO.File]::Open(
             $partialPath,
@@ -320,6 +423,14 @@ function Save-Asset {
             Remove-Item -LiteralPath $partialPath -Force
             throw "Length mismatch for '$AssetName': expected $expectedLength, got $actualLength."
         }
+        try {
+            Assert-ContentMd5 -Path $partialPath -ExpectedContentMd5 $expectedContentMd5 `
+                -AssetName $AssetName
+        }
+        catch {
+            Remove-Item -LiteralPath $partialPath -Force -ErrorAction SilentlyContinue
+            throw
+        }
         Move-Item -LiteralPath $partialPath -Destination $destinationPath
         $hash = (Get-FileHash -LiteralPath $destinationPath -Algorithm SHA256).Hash.ToLowerInvariant()
 
@@ -327,6 +438,7 @@ function Save-Asset {
             ResourceName = $AssetName
             FileName = $metadata.FileName
             ContentLength = $actualLength
+            ContentMd5 = $expectedContentMd5
             ContentType = $metadata.ContentType
             Downloaded = $true
             Reused = $false

@@ -25,7 +25,6 @@ one) receives security fixes.
 - **Write tools** are off unless `D365_ENABLE_WRITE_TOOLS=1`, only write inside
   `D365_CUSTOM_METADATA_DIR`, and are always off in hosted mode.
 - **Secrets**: SQL connection strings are read from the environment and never logged.
-- **HTTP transport** requires a configured API key on every MCP request.
 
 ## Operating a server safely
 

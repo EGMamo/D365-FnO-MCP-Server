@@ -135,6 +135,9 @@ d365-fno-mcp-server <command> [options]
 
 Commands:
   serve                     Start the MCP server (default command)
+  acquire                   Run one private acquisition/build/validation/publication cycle
+      --config <file>       Worker JSON config (default D365_ACQUISITION_CONFIG)
+      --run-id <id>         Stable run identifier for restart idempotency (default UTC timestamp)
   index [--force]           Run a foreground indexing pass
       --packages-dir <dir>  PackagesLocalDirectory to index (default D365_PACKAGES_DIR)
       --db-path <path>      SQLite index path (default D365_INDEX_DB_PATH or ./d365_index.db)
@@ -181,13 +184,14 @@ Commands:
       --force               Replace an existing .env
   artifact publish         Validate and idempotently upload a local bundle
       --bundle-dir <dir>   Validated local artifact bundle directory
-  artifact status          Inspect remote deployment pointers
-      --verify              Validate active and previous remote bundles
-  artifact promote         Validate and promote a remote bundle
+  artifact status          Inspect remote deployment pointers (use --verify to validate bundles)
+      --verify              Materialize and validate active/previous bundles
+  artifact promote         Validate and promote a remotely complete bundle
       --bundle-id <id>     Immutable sha256 bundle ID
-      --expected-revision <n> Required pointer revision
+      --expected-revision <n> Required pointer revision for optimistic concurrency
   artifact rollback        Validate and activate the previous bundle
-      --expected-revision <n> Required pointer revision
+      --expected-revision <n> Required pointer revision for optimistic concurrency
+  artifact commands accept --json and use D365_ARTIFACT_* configuration.
 
 Options:
   -h, --help                Show help
@@ -368,7 +372,7 @@ client's side, so every session is told which application version it is talking 
 The server records the application version at index time: Unified Developer Experience paths
 (`…\Dynamics365\10.0.2645.136\PackagesLocalDirectory`) name it, and layouts that do not — such as the
 classic `K:\AosService\PackagesLocalDirectory` — take it from `D365_APP_VERSION`. The version travels
-inside the index file, so a downloaded or uploaded index keeps it.
+inside the index file, so an index served from an artifact bundle keeps it.
 
 A client declares its own version in one of two ways:
 
@@ -603,8 +607,8 @@ docker build -t d365-fno-mcp-server:local .   # hosted image (needs Docker with 
 
 Build before running the full suite: compiled-server integration tests launch `dist/src/index.js`
 and use real SDK clients over HTTP. They cover tool discovery, resources/prompts, disabled
-writes, startup indexing flags, and hosted mode (a published index served from a local HTTP fixture
-with named API keys). `.worktrees` are excluded from discovery. CI runs Node 24 on Linux and Windows
+writes and indexing, an offline project write, a prebuilt index served without a packages directory
+under named API keys, and SDK version warnings. `.worktrees` are excluded from discovery. CI runs Node 24 on Linux and Windows
 and builds and smoke-tests the container image; these checks do not substitute for a live Finance
 Operations compiler test.
 
@@ -635,11 +639,11 @@ database. Set `D365_RUN_SQL_INTEGRATION=1` and `D365_XREF_CONNECTION_STRING`, th
 | Startup fails with `key for '<name>' is N characters` | Keys need at least 32 characters. Generate one with `openssl rand -hex 32`. |
 | Startup fails with `documentation placeholder` | The key is still the sample value from an old `.env.example`. Generate a real one. |
 | HTTP `403 Session belongs to a different API key` | A client reused another key's `mcp-session-id`. Reconnect so the client starts a new session. |
-| HTTP `404 Session not found` | The session expired (`SESSION_IDLE_TIMEOUT_MS`) or the server restarted or activated an uploaded index. Reconnect. |
+| HTTP `404 Session not found` | The session expired (`SESSION_IDLE_TIMEOUT_MS`) or the server restarted. Reconnect. |
 | `index` logs `Pruning skipped` and deleted objects stay in the index | The scan overlapped less than half of the objects already indexed, usually a wrong or partly mounted `D365_PACKAGES_DIR`. Fix the path; set `D365_BYPASS_PRUNE_GUARD=1` only for an intended large deletion. |
 | `index-xref` says the `mssql` or `msnodesqlv8` driver is missing | Install it where the CLI is installed: `npm install mssql`, and for Windows sign-in also `npm install msnodesqlv8` plus ODBC Driver 17 or 18. |
-| `get_element_xml` cannot read the source file | The index was built with `D365_INDEX_STORE_RAW_XML=0` and the file has moved, or the index is served from a published copy. Rebuild with raw XML stored. |
-| Anything else | Run `d365-fno-mcp-server doctor` (add `--hosted` for a published-index server); it checks configuration, paths and index access. |
+| `get_element_xml` cannot read the source file | The index was built with `D365_INDEX_STORE_RAW_XML=0` and the file has moved, or the index is served from an artifact bundle. Rebuild with raw XML stored. |
+| Anything else | Run `d365-fno-mcp-server doctor`; it checks configuration, paths and index access. |
 
 ## License
 

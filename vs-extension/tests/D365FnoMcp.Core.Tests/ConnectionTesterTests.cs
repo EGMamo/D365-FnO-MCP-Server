@@ -101,6 +101,24 @@ public class ConnectionTesterTests
     }
 
     [Fact]
+    public async Task RefusesPlainHttpToARemoteHostWithoutSendingTheKey()
+    {
+        var server = new FakeServer();
+        ConnectionReport report = await new ConnectionTester(new HttpClient(server)).TestAsync("http://app.example.net", Key, CancellationToken.None);
+
+        Assert.False(report.Succeeded);
+        Assert.Contains("https", report.Summary());
+        Assert.Empty(server.Requests);
+    }
+
+    [Fact]
+    public async Task AllowsPlainHttpToLoopback()
+    {
+        ConnectionReport report = await new ConnectionTester(new HttpClient(new FakeServer())).TestAsync("http://localhost:3000", Key, CancellationToken.None);
+        Assert.True(report.Succeeded, report.Summary());
+    }
+
+    [Fact]
     public void ParsesTheResponseEventFromAStream()
     {
         const string stream = "event: message\r\ndata: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\"}\r\n\r\nevent: message\r\ndata: {\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{}}\r\n\r\n";

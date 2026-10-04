@@ -18,6 +18,9 @@ namespace D365FnoMcp.Core;
 public sealed class McpGateway : IAsyncDisposable
 {
     public const string ContextToolName = "workspace_get_context";
+
+    /// <summary>Marks the gateway's own 401, so another Visual Studio instance can tell a live gateway from a reused port.</summary>
+    private const string GatewayHeader = "X-D365FnoMcp-Gateway";
     private readonly HttpClient upstreamClient;
     private readonly IWorkspaceContextProvider contextProvider;
     private WebApplication? application;
@@ -59,6 +62,30 @@ public sealed class McpGateway : IAsyncDisposable
         this.application = app;
     }
 
+    /// <summary>
+    /// True when <paramref name="endpoint"/> is a loopback gateway that is still running,
+    /// typically one started by another Visual Studio instance.
+    /// </summary>
+    public static async Task<bool> IsRunningAtAsync(HttpClient http, Uri endpoint, CancellationToken cancellationToken)
+    {
+        if (!endpoint.IsLoopback || endpoint.Scheme != Uri.UriSchemeHttp)
+        {
+            return false;
+        }
+
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(3));
+        try
+        {
+            using HttpResponseMessage response = await http.GetAsync(endpoint, timeout.Token);
+            return response.StatusCode == HttpStatusCode.Unauthorized && response.Headers.Contains(GatewayHeader);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException && !cancellationToken.IsCancellationRequested)
+        {
+            return false;
+        }
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (this.application is null)
@@ -77,6 +104,7 @@ public sealed class McpGateway : IAsyncDisposable
         if (!authorization.Equals($"Bearer {this.BearerToken}", StringComparison.Ordinal))
         {
             context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+            context.Response.Headers[GatewayHeader] = "1";
             return;
         }
 

@@ -3,9 +3,8 @@
 This guide separates **developer workflows** from **server operations**. These
 are responsibilities, not server-enforced user and administrator roles: an
 authenticated HTTP key can call the same MCP tools and read index status.
-Metadata write
-tools, when enabled, use server-wide configuration and an explicit model
-allowlist; do not treat an ordinary API key as a read-only credential.
+Metadata write tools, when enabled, use server-wide configuration and an
+explicit model allowlist; do not treat an ordinary API key as a read-only credential.
 
 ## For developers
 
@@ -37,8 +36,8 @@ Connection** command or add `.mcp.json` beside their solution:
 ```
 
 In Copilot Chat, select **Agent** mode and enable the server's tools. See
-[hosted deployment](hosted-deployment.md#connecting-clients) for Claude Code,
-VS Code, and header-handling alternatives, or
+[local agents](local-agents.md#2-register-the-two-mcp-servers) and the README
+[transport section](../README.md#transport) for Claude Code and VS Code, or
 [Visual Studio extension](visual-studio-extension.md) for setup and testing.
 Visual Studio's MCP connection does not imply that offline Finance Operations
 project writes are supported; check the
@@ -100,8 +99,7 @@ client setup, capacity planning, and Azure operations.
 
 For a local source, run `index` against `PackagesLocalDirectory`; optionally
 run `index-xref` against `DynamicsXrefDB`. Runtime startup does not index local
-packages. `index-status` compares a local package tree with its index and
-its local index.
+packages. `index-status` compares a local package tree with its local index.
 
 For hosted use, schedule the private Azure acquisition worker. It downloads the
 approved SDK, builds a sibling candidate, validates it and atomically promotes
@@ -136,9 +134,9 @@ are in [hosted deployment](hosted-deployment.md#operations).
 | Object or usage result missing | `get_index_stats`, `get_index_staleness`, `get_usage_snapshot_status`, then `index-status` or `index-xref`. |
 | Write tool missing or target rejected | `D365_ENABLE_WRITE_TOOLS`, model descriptor and `D365_WRITABLE_MODELS`; run `doctor`. |
 | Hosted server will not start | Verify the active database exists and passes candidate validation; inspect worker and API health logs. |
-| Hosted index stale or unavailable | Check the published manifest URL, artifact integrity, and server startup logs. |
+| Hosted index stale or unavailable | Check the active pointer and bundle integrity with `artifact status --verify`, then server startup logs. |
 | Too many sessions or requests | `MAX_CONCURRENT_SESSIONS`, `RATE_LIMIT_MAX_REQUESTS`, `RATE_LIMIT_WINDOW_MS`, and proxy settings. |
 
-See [Visual Studio troubleshooting](visual-studio-extension.md#troubleshooting)
+See the [Visual Studio connection model](visual-studio-extension.md#connection-model)
 and the [README troubleshooting section](../README.md#troubleshooting) for
 additional diagnostics.

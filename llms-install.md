@@ -30,18 +30,14 @@ Use absolute paths. The first run takes several minutes on a full `PackagesLocal
 d365-fno-mcp-server index --packages-dir "<PackagesLocalDirectory>" --db-path "<absolute path>/d365_index.db"
 ```
 
-Then check the setup:
-
-```bash
-D365_PACKAGES_DIR="<PackagesLocalDirectory>" D365_INDEX_DB_PATH="<absolute path>/d365_index.db" d365-fno-mcp-server doctor
-```
-
 ## 3. Run the local HTTP server (local-data setup)
 
-Generate a key and start the authenticated server:
+Generate a key, check the setup (`doctor` fails without a key), and start the authenticated server:
 
 ```bash
 export MCP_API_KEYS="local=$(openssl rand -hex 32)"
+D365_PACKAGES_DIR="<PackagesLocalDirectory>" D365_INDEX_DB_PATH="<absolute path>/d365_index.db" \
+  d365-fno-mcp-server doctor
 MCP_HOST=127.0.0.1 D365_INDEX_DB_PATH="<absolute path>/d365_index.db" \
   d365-fno-mcp-server serve
 ```
@@ -100,8 +96,10 @@ VS Code uses a `servers` key:
 
 Restart the client and call `get_index_stats`. A local server reads the database from
 `D365_INDEX_DB_PATH`; a hosted server reads the active validated bundle configured by
-`D365_ARTIFACT_STORE_PATH`. If the hosted server cannot start, inspect its artifact-store mount and
-startup logs rather than rerunning local indexing.
+`D365_ARTIFACT_STORE_PATH`. A `401` means the key is missing or wrong. If a local server cannot
+start, run `d365-fno-mcp-server doctor` with the same environment. If a hosted server cannot start,
+ask its operator to check the artifact-store configuration and startup logs; rerunning local
+indexing does not change a hosted server.
 
 ## Optional data
 
