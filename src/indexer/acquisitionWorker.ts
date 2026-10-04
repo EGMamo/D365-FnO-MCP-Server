@@ -405,7 +405,9 @@ export async function executeAcquisitionCommand(
     : context.workDirectory;
   fs.mkdirSync(cwd, { recursive: true });
   fs.mkdirSync(path.dirname(context.logFile), { recursive: true });
-  // Step output can name internal hosts or echo inputs, so the log is readable by the worker only.
+  // Step output can name internal hosts or echo inputs. The mode keeps the log private on POSIX;
+  // on Windows it inherits the runs root's ACL, which the worker setup limits to SYSTEM and
+  // Administrators. Steps must not print credentials either way.
   const log = fs.openSync(context.logFile, 'a', 0o600);
   try {
     fs.writeSync(log, `[${new Date().toISOString()}] ${command.name}: started\n`);

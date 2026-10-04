@@ -67,7 +67,7 @@ Commands:
       --run-id <id>         Stable run identifier for restart idempotency (default UTC timestamp)
   prepare-bundle            Worker build step: index acquired UDE assets and write the bundle options
       --sources <file>      sources.json written by the acquire step
-      --db-path <path>      SQLite index to build (always a full --force pass)
+      --db-path <path>      New SQLite index to build (must not exist yet)
       --bundle-options <path> CreateArtifactBundleOptions JSON to write (never overwritten)
       --release-id <id>     Release identity for the manifest (default ude-<applicationVersion>)
   index [--force]           Run a foreground indexing pass

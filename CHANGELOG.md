@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Automated worker preparation: `azure-post-deploy.ps1 -Step PrepareWorker -DataverseUrl <url>
+  -WorkerApplicationId <app id>` checks through Run Command that the worker can read its secret,
+  sign in to Dataverse, read the Finance and Operations version and resolve the downloads, then
+  writes an `acquisition.json` that needs no RDP, PAC or manual SDK install. Its acquire step,
+  `scripts/worker/acquire-ude-sources.ps1`, downloads the X++ SDK (`systemmetadata`), the VS tools
+  VSIX and the cross-reference backup for the environment's current version into a per-version
+  cache and writes `sources.json`; the new `prepare-bundle` command indexes that SDK and writes the
+  bundle options with source provenance. The cross-reference backup is hashed but not imported.
+- Acquisition steps write their output to `<runsRoot>/<runId>/logs`, and a failed step's error
+  names its log file. `FirstAcquisition` prints the log tails when a run fails.
+- New environments create the acquisition scheduler disabled (`workerSchedulerEnabled`), and its
+  recurrence has a fixed start time, so deploying or enabling it no longer starts a run on an
+  unprepared worker. `azure-deploy.ps1` keeps an enabled scheduler enabled on redeploys, and
+  `ResumeScheduler` enables it after the first acquisition. A run whose VM deallocation fails now
+  fails, so the worker-run alert reports a VM left running.
 - `Release VS extension` workflow: an `extension-v<version>` tag, or a manual run on `master`,
   builds the Visual Studio extension with that version and publishes a GitHub release with the
   VSIX and its SHA-256 checksum. `docs/visual-studio-extension.md` now covers installing it.
@@ -129,6 +144,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Bundles declare capability coverage from what the indexer actually reads
+  (`src/indexer/capabilityCoverage.ts`): code, data model, forms, labels, extensions and security
+  graphs are partial, and workflows, reporting and reports are absent. A capability whose source
+  files failed to index is at most partial. The API, the `artifact` commands and the acquisition
+  worker used to require all nine to be complete, which no real bundle could honestly claim; by
+  default they now require the complete ones, which is none yet. Set
+  `D365_ARTIFACT_REQUIRED_CAPABILITIES` to require more. `prepare-bundle` still refuses an index with
+  no code, data model, label or security items. The worker's `policy` block is optional and
+  defaults to the same checks the API applies.
+- `azure-post-deploy.ps1`: `SetupWorker` no longer installs the PAC CLI and builds from
+  `-Repository`; `FirstAcquisition` passes its script as a file (multi-line inline scripts break
+  in `az.cmd`), waits for a terminal state and requires the verification to finish;
+  `ResumeScheduler` deallocates the VM before enabling the schedule so an immediate run is not cut
+  off; `Deploy` waits for the run it started.
 - Upgraded glob to 13, fast-xml-parser to 5, ESLint to 10 and Vitest to 5, and moved the CI and deploy workflows to action versions that run on Node 24. `npm ci` no longer reports deprecated packages or audit findings.
 - `D365_PACKAGES_DIR` is required only for indexing; HTTP transport and API keys are mandatory for
   `serve`.

@@ -7,6 +7,7 @@ import {
   ArtifactManifestSchema,
   ArtifactProvenanceSchema,
   CapabilityInventorySchema,
+  type ArtifactCapabilityName,
   type ArtifactProvenance,
   type CapabilityInventory,
 } from '../indexer/artifactContract.js';
@@ -23,6 +24,18 @@ export interface PrepareBundleOptions {
 }
 
 const manifest = ArtifactManifestSchema.shape;
+
+/**
+ * Capabilities every PackagesLocalDirectory provides. A bundle where one of them
+ * is absent comes from a truncated or wrong source tree, so it is refused even
+ * though no capability is required to be complete.
+ */
+const EXPECTED_CAPABILITIES: readonly ArtifactCapabilityName[] = [
+  'codeMetadata',
+  'dataModelMetadata',
+  'labelsResources',
+  'securityGraphs',
+];
 
 /** One file the acquire step downloaded. */
 const AcquiredFileSchema = z
@@ -159,6 +172,14 @@ function checkBundleOptions(options: CreateArtifactBundleOptions): void {
   if (incomplete.length > 0) {
     throw new Error(`The index does not completely provide required capabilities: ${incomplete.join(', ')}.`);
   }
+  const missing = EXPECTED_CAPABILITIES.filter(
+    (capability) => options.capabilities[capability].completeness === 'absent'
+  );
+  if (missing.length > 0) {
+    throw new Error(
+      `The index has nothing for ${missing.join(', ')}; the PackagesLocalDirectory looks incomplete.`
+    );
+  }
 }
 
 function requiredFlag(value: string | undefined, flag: string): string {
@@ -174,12 +195,17 @@ function requiredFlag(value: string | undefined, flag: string): string {
 export async function prepareBundleCommand(options: PrepareBundleOptions): Promise<number> {
   try {
     const sourcesFile = path.resolve(requiredFlag(options.sources, '--sources'));
-    const dbPath = requiredFlag(options.dbPath, '--db-path');
+    const dbPath = path.resolve(requiredFlag(options.dbPath, '--db-path'));
     const outputFile = path.resolve(requiredFlag(options.bundleOptions, '--bundle-options'));
     const sources = readSourcesFile(sourcesFile);
     const declared = sources.applicationVersion;
     if (fs.existsSync(outputFile)) {
       throw new Error(`Refusing to overwrite the existing bundle options file ${outputFile}.`);
+    }
+    // Indexing into an existing database keeps rows from another source tree, because pruning is
+    // skipped when the trees do not overlap, so every bundle starts from a new file.
+    if (['', '-wal', '-shm', '-journal'].some((suffix) => fs.existsSync(`${dbPath}${suffix}`))) {
+      throw new Error(`Refusing to reuse the existing index ${dbPath}; pass a new --db-path.`);
     }
     const packagesDir = path.resolve(sources.packagesLocalDirectory);
     if (!fs.statSync(packagesDir, { throwIfNoEntry: false })?.isDirectory()) {
@@ -194,14 +220,17 @@ export async function prepareBundleCommand(options: PrepareBundleOptions): Promi
     console.error(`Indexing ${packagesDir} -> ${dbPath} (force)`);
     const { stats, summary } = await runIndexPass(packagesDir, dbPath, true);
     if (stats.errors > 0) {
-      console.error(`Warning: ${stats.errors} files could not be indexed; their objects are missing from the index.`);
+      console.error(
+        `Warning: ${stats.errors} files could not be indexed (${JSON.stringify(stats.errorsByType)}); ` +
+          'the capabilities they belong to are declared partial.'
+      );
     }
     const db = openDb(dbPath);
     let recorded: string | null;
     let capabilities: CapabilityInventory;
     try {
       recorded = getMeta(db, META_KEYS.appVersion);
-      capabilities = computeCapabilityInventory(db);
+      capabilities = computeCapabilityInventory(db, stats.errorsByType);
     } finally {
       db.close();
     }

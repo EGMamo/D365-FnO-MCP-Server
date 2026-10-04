@@ -14,7 +14,8 @@
       2. Registers the resource providers the template uses (needed on a new subscription).
       3. Creates the resource group if it does not exist.
       4. Writes infra/main.<environment>.local.bicepparam (git-ignored, no secret values). On a
-         redeploy it keeps the API image that is currently running.
+         redeploy it keeps the API image that is currently running and, once scheduled
+         acquisition runs are on, keeps them on. A new environment starts with them off.
       5. Runs what-if, asks for confirmation, then deploys.
       6. Prints the outputs and, with -PostDeploy, runs scripts/azure-post-deploy.ps1.
 
@@ -282,6 +283,12 @@ else {
         Write-Host "Keeping the running API image $apiImage."
     }
 
+    # The scheduler is created off; keep it on when azure-post-deploy.ps1 has already turned it on.
+    $schedulerState = & az resource show -g $ResourceGroup -n "logic-worker-$WorkloadName-$EnvironmentName" `
+        --resource-type Microsoft.Logic/workflows --query properties.state -o tsv 2>$null
+    $schedulerEnabled = $LASTEXITCODE -eq 0 -and $schedulerState -eq 'Enabled'
+    if ($schedulerEnabled) { Write-Host 'Keeping scheduled acquisition runs on.' }
+
     $allTags = [ordered]@{}
     foreach ($entry in $Tags.GetEnumerator()) { $allTags[$entry.Key] = [string]$entry.Value }
     $tagLines = ($allTags.GetEnumerator() | ForEach-Object {
@@ -302,6 +309,7 @@ else {
         "param githubRepository = $(ConvertTo-BicepString $GitHubRepository)"
     )
     if ($apiImage) { $lines += "param apiImage = $(ConvertTo-BicepString $apiImage)" }
+    if ($schedulerEnabled) { $lines += 'param workerSchedulerEnabled = true' }
     $lines += "param workerAdminPassword = readEnvironmentVariable('$PasswordVariable')"
 
     $paramPath = Join-Path $RepoRoot "infra/main.$EnvironmentName.local.bicepparam"

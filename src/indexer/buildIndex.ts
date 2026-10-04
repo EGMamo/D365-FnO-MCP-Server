@@ -23,6 +23,8 @@ export interface IndexStats {
   updated: number;
   skipped: number;
   errors: number;
+  /** Files that could not be indexed, by object type ('Label' for label files). */
+  errorsByType: Record<string, number>;
   deleted: number;
   collisions: number;
   durationMs: number;
@@ -50,7 +52,8 @@ function readLabelFile(filePath: string, content: string): dbUtils.LabelInput[] 
  */
 async function recoverUnderContributingLabelSources(
   writer: ReturnType<typeof dbUtils.createIndexWriter>,
-  seenLabelFiles: Set<string>
+  seenLabelFiles: Set<string>,
+  stats: IndexStats
 ): Promise<number> {
   let recovered = 0;
   for (const filePath of seenLabelFiles) {
@@ -77,6 +80,8 @@ async function recoverUnderContributingLabelSources(
       } catch {
         // Best effort only; the warning below is still the actionable signal.
       }
+      stats.errors++;
+      stats.errorsByType.Label = (stats.errorsByType.Label ?? 0) + 1;
       logger.warn('Failed to re-apply label source after prune; will retry next run', {
         filePath,
         error: err instanceof Error ? err.message : String(err),
@@ -94,6 +99,7 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
     updated: 0,
     skipped: 0,
     errors: 0,
+    errorsByType: {},
     deleted: 0,
     collisions: 0,
     durationMs: 0,
@@ -390,6 +396,7 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
 
     } catch (err) {
       stats.errors++;
+      stats.errorsByType[file.type] = (stats.errorsByType[file.type] ?? 0) + 1;
       logger.error('Failed to index file', { filePath: file.filePath, message: String(err) });
     }
   }
@@ -434,7 +441,7 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
 
   // Deleting or re-reading a label file can drop a row another file still declares.
   if (labelsChanged) {
-    const recovered = await recoverUnderContributingLabelSources(writer, seenLabelFiles);
+    const recovered = await recoverUnderContributingLabelSources(writer, seenLabelFiles, stats);
     if (recovered > 0) {
       stats.updated += recovered;
       labelFtsDirty = true;

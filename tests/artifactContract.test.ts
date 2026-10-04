@@ -298,7 +298,7 @@ describe('Azure artifact contract', () => {
     expect(readArtifactPointers(root).active).toBeNull();
   });
 
-  it('makes hosted startup require the indexer-complete capabilities and an active pointer', () => {
+  it('makes hosted startup require an active pointer and the configured complete capabilities', () => {
     const target = path.join(root, 'runtime', 'active.db');
     const startup = {
       storePath: root,
@@ -314,7 +314,9 @@ describe('Azure artifact contract', () => {
     };
     const partialBundle = createBundle(FIRST_TIME, unlabelled);
     promoteArtifactBundle(root, partialBundle.manifest.bundleId, 0, policy, FIRST_TIME);
-    expect(() => prepareArtifactBackedIndex(startup)).toThrow(/labelsResources is not complete/);
+    expect(() => prepareArtifactBackedIndex({ ...startup, requiredCapabilities: ['labelsResources'] })).toThrow(
+      /labelsResources is not complete/
+    );
     expect(fs.existsSync(target)).toBe(false);
 
     const bundle = createBundle(SECOND_TIME);
@@ -324,6 +326,7 @@ describe('Azure artifact contract', () => {
     ).toThrow(/reports is not complete/);
     expect(fs.existsSync(target)).toBe(false);
 
+    // By default only what the indexer covers completely is required, which is nothing yet.
     const prepared = prepareArtifactBackedIndex(startup);
     expect(prepared.bundle.manifest.bundleId).toBe(bundle.manifest.bundleId);
     expect(prepared.pointerRevision).toBe(2);

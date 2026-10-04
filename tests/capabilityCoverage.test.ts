@@ -40,7 +40,7 @@ afterEach(() => {
 
 describe('capability coverage', () => {
   it('requires by default exactly the capabilities the indexer covers completely, in contract order', () => {
-    expect(DEFAULT_REQUIRED_CAPABILITIES).toEqual(['codeMetadata', 'labelsResources', 'securityGraphs']);
+    expect(DEFAULT_REQUIRED_CAPABILITIES).toEqual([]);
     expect(Object.keys(CAPABILITY_COVERAGE)).toEqual([...ARTIFACT_CAPABILITY_NAMES]);
     expect(
       ARTIFACT_CAPABILITY_NAMES.filter((name) => CAPABILITY_COVERAGE[name].completeness === 'absent')
@@ -64,12 +64,12 @@ describe('capability coverage', () => {
     const inventory = computeCapabilityInventory(db);
 
     expect(CapabilityInventorySchema.parse(inventory)).toEqual(inventory);
-    expect(inventory.codeMetadata).toMatchObject({ completeness: 'complete', itemCount: 3 });
+    expect(inventory.codeMetadata).toMatchObject({ completeness: 'partial', itemCount: 3 });
     expect(inventory.dataModelMetadata).toMatchObject({ completeness: 'partial', itemCount: 3 });
     expect(inventory.uiFormPatterns).toMatchObject({ completeness: 'partial', itemCount: 1 });
-    expect(inventory.labelsResources).toMatchObject({ completeness: 'complete', itemCount: 2 });
+    expect(inventory.labelsResources).toMatchObject({ completeness: 'partial', itemCount: 2 });
     expect(inventory.extensions).toMatchObject({ completeness: 'partial', itemCount: 1 });
-    expect(inventory.securityGraphs).toMatchObject({ completeness: 'complete', itemCount: 5 });
+    expect(inventory.securityGraphs).toMatchObject({ completeness: 'partial', itemCount: 5 });
     expect(inventory.reports).toEqual({ completeness: 'absent', note: CAPABILITY_COVERAGE.reports.note });
     expect(inventory.workflowServiceMetadata).not.toHaveProperty('itemCount');
   });
@@ -79,16 +79,38 @@ describe('capability coverage', () => {
 
     const inventory = computeCapabilityInventory(db);
 
-    expect(inventory.codeMetadata.completeness).toBe('complete');
+    expect(inventory.codeMetadata.completeness).toBe('partial');
     expect(inventory.labelsResources).toMatchObject({ completeness: 'absent', itemCount: 0 });
     expect(inventory.securityGraphs).toMatchObject({ completeness: 'absent', itemCount: 0 });
     expect(inventory.dataModelMetadata).toMatchObject({ completeness: 'absent', itemCount: 0 });
+  });
+
+  it('needs roles, duties or privileges for a security graph, not just menu items', () => {
+    addObjects('MenuItemDisplay', 2);
+
+    expect(computeCapabilityInventory(db).securityGraphs).toMatchObject({ completeness: 'absent', itemCount: 2 });
+
+    addObjects('SecurityDuty', 1);
+    expect(computeCapabilityInventory(db).securityGraphs).toMatchObject({ completeness: 'partial', itemCount: 3 });
+  });
+
+  it('says how many source files of a capability failed to index', () => {
+    addObjects('SecurityRole', 1);
+    upsertLabels(db, [{ labelId: 'SYS1', value: 'Account' }]);
+
+    const inventory = computeCapabilityInventory(db, { Label: 2, AxClass: 1 });
+
+    expect(CapabilityInventorySchema.parse(inventory)).toEqual(inventory);
+    expect(inventory.labelsResources.completeness).toBe('partial');
+    expect(inventory.labelsResources.note).toMatch(/ 2 source files of this kind could not be indexed\.$/);
+    expect(inventory.securityGraphs.note).toBe(CAPABILITY_COVERAGE.securityGraphs.note);
   });
 
   it('parses D365_ARTIFACT_REQUIRED_CAPABILITIES with the defaults when unset', () => {
     expect(parseRequiredCapabilities(undefined)).toEqual([...DEFAULT_REQUIRED_CAPABILITIES]);
     expect(parseRequiredCapabilities('  ')).toEqual([...DEFAULT_REQUIRED_CAPABILITIES]);
     expect(parseRequiredCapabilities(' reports , codeMetadata,reports ')).toEqual(['reports', 'codeMetadata']);
+    expect(() => parseRequiredCapabilities(' , ')).toThrow(/names no capabilities/);
     expect(() => parseRequiredCapabilities('codeMetadata,forms')).toThrow(
       /D365_ARTIFACT_REQUIRED_CAPABILITIES contains unknown capabilities: forms/
     );

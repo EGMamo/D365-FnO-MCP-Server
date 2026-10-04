@@ -142,9 +142,9 @@ describe('prepare-bundle', () => {
       relativePathsRoot: packagesDir,
       integrityCheck: true,
     });
-    expect(options.capabilities.codeMetadata).toMatchObject({ completeness: 'complete', itemCount: 1 });
-    expect(options.capabilities.labelsResources).toMatchObject({ completeness: 'complete', itemCount: 2 });
-    expect(options.capabilities.securityGraphs).toMatchObject({ completeness: 'complete', itemCount: 4 });
+    expect(options.capabilities.codeMetadata).toMatchObject({ completeness: 'partial', itemCount: 1 });
+    expect(options.capabilities.labelsResources).toMatchObject({ completeness: 'partial', itemCount: 2 });
+    expect(options.capabilities.securityGraphs).toMatchObject({ completeness: 'partial', itemCount: 4 });
     expect(options.capabilities.reports.completeness).toBe('absent');
 
     const bundle = createArtifactBundle(dbPath, path.join(root, 'store'), options);
@@ -255,6 +255,42 @@ describe('prepare-bundle', () => {
     expect(stderr.join('\n')).toContain(`Refusing to overwrite the existing bundle options file ${optionsFile}`);
     expect(fs.readFileSync(optionsFile, 'utf8')).toBe('previous');
     expect(fs.existsSync(dbPath)).toBe(false);
+  });
+
+  it('refuses to index into an existing database', async () => {
+    writeSources(sourcesDocument());
+    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+    fs.writeFileSync(`${dbPath}-wal`, '');
+
+    expect(await prepare()).toBe(1);
+
+    expect(stderr.join('\n')).toContain(`Refusing to reuse the existing index ${dbPath}`);
+    expect(fs.existsSync(dbPath)).toBe(false);
+    expect(fs.existsSync(optionsFile)).toBe(false);
+  });
+
+  it('refuses an SDK without labels or security objects', async () => {
+    fs.rmSync(path.join(packagesDir, 'TestPackage', 'TestModel', 'AxLabelFile'), { recursive: true });
+    writeSources(sourcesDocument());
+
+    expect(await prepare()).toBe(1);
+
+    expect(stderr.join('\n')).toMatch(/The index has nothing for labelsResources; the PackagesLocalDirectory looks incomplete/);
+    expect(fs.existsSync(optionsFile)).toBe(false);
+  });
+
+  it('records source files that could not be indexed in the capability notes', async () => {
+    // A directory named like a label file cannot be read, like a locked or corrupt file.
+    fs.mkdirSync(path.join(packagesDir, 'TestPackage', 'TestModel', 'AxLabelFile', 'LabelResources', 'en-US', 'Broken.en-US.label.txt'));
+    writeSources(sourcesDocument());
+
+    expect(await prepare()).toBe(0);
+
+    expect(stderr.join('\n')).toMatch(/1 files could not be indexed \(\{"Label":1\}\)/);
+    expect(readOptions().capabilities.labelsResources).toMatchObject({
+      completeness: 'partial',
+      note: expect.stringMatching(/ 1 source files of this kind could not be indexed\.$/),
+    });
   });
 
   it('rejects a release identity the manifest cannot carry', async () => {

@@ -81,7 +81,7 @@ Configuration comes from environment variables (a `.env` file in the working dir
 | `D365_ARTIFACT_ACCOUNT_URL` | _(empty)_ | Storage account origin, e.g. `https://<account>.blob.core.windows.net`. Required for `azure-blob` and the `artifact` commands. No SAS or key is accepted. |
 | `D365_ARTIFACT_CONTAINER` | _(empty)_ | Artifact container name. Required for `azure-blob` and the `artifact` commands. |
 | `D365_ARTIFACT_MANAGED_IDENTITY_CLIENT_ID` | _(empty)_ | Client ID of a user-assigned managed identity; empty uses the default `DefaultAzureCredential` chain. |
-| `D365_ARTIFACT_REQUIRED_CAPABILITIES` | _(empty)_ | Comma-separated capabilities the active bundle must declare `complete`, for hosted startup and the `artifact` commands. Empty requires the ones the indexer covers completely: `codeMetadata,labelsResources,securityGraphs`. An unknown name fails validation. |
+| `D365_ARTIFACT_REQUIRED_CAPABILITIES` | _(empty)_ | Comma-separated capabilities the active bundle must declare `complete`, for hosted startup and the `artifact` commands. Empty requires the ones the indexer covers completely, which is none yet (see `src/indexer/capabilityCoverage.ts`). A value that names no capability, or an unknown one, fails validation. |
 | `D365_INDEX_STORE_RAW_XML` | `1` | Set to `0` to keep full AOT XML out of `ax_objects.raw_xml` and reduce DB size. `get_element_xml` then reads the source XML from `file_path` on demand, so source files must remain available. |
 | `D365_ENABLE_WRITE_TOOLS` | `0` | Set to `1` to register metadata preview/apply tools. Model writes also require `D365_WRITABLE_MODELS`. |
 | `D365_CUSTOM_METADATA_DIR` | _(empty)_ | The **Folder for your own custom metadata** configured in the Finance Operations Visual Studio extension. Required for write tools. |
@@ -169,7 +169,7 @@ Commands:
       --run-id <id>         Stable run identifier for restart idempotency (default UTC timestamp)
   prepare-bundle            Worker build step: index acquired UDE assets and write the bundle options
       --sources <file>      sources.json written by the acquire step
-      --db-path <path>      SQLite index to build (always a full --force pass)
+      --db-path <path>      New SQLite index to build (must not exist yet)
       --bundle-options <path> CreateArtifactBundleOptions JSON to write (never overwritten)
       --release-id <id>     Release identity for the manifest (default ude-<applicationVersion>)
   index [--force]           Run a foreground indexing pass
