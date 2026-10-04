@@ -1,3 +1,8 @@
+---
+appliesTo:
+  tools: [get_data_entity_details, check_entity_odata_readiness]
+note: "Outbound shape: DMF export to an incremental landing folder, a storage-event pipeline that upserts by key, then a callback that writes the sync status back."
+---
 # Outbound Batch-Integration Architecture Pattern
 
 > A reference architecture for "export from F&O, push to an external system, write status back" —

@@ -1,3 +1,8 @@
+---
+appliesTo:
+  tools: [get_index_staleness]
+note: "Spec status columns go stale. Verify what is built against the metadata, and treat earlier notes as point-in-time."
+---
 # Documentation & Ways-of-Working Practices
 
 > Process habits worth surfacing to a developer, not just X++ facts.

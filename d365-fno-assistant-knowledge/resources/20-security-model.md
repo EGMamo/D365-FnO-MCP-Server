@@ -1,3 +1,11 @@
+---
+appliesTo:
+  tools: [get_security_object, find_security_path, analyze_sod_conflicts, diff_roles, convert_security_customizations]
+  objectTypes: [SecurityRole, SecurityDuty, SecurityPrivilege, SecurityRoleExtension, SecurityDutyExtension]
+match:
+  tools: [analyze_sod_conflicts, find_security_path]
+note: "Evaluate a role with its extensions and sub-roles applied: Role > Duty > Privilege > entry point. Static analysis cannot see runtime assignments or XDS policies."
+---
 # Security Model Traversal & Segregation of Duties
 
 > How Role → Duty → Privilege → Entry point resolves, and what the security tools report.

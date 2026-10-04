@@ -1,3 +1,10 @@
+---
+appliesTo:
+  tools: [get_class_hierarchy, search_symbols, get_method_signature]
+match:
+  names: ['*Test', '*TestCase', 'SysTestCase*']
+note: "Each test method gets a fresh instance. Base insert()/update() skip validateWrite(), so call validateWrite() explicitly when testing a CoC extension of it."
+---
 # Unit Testing Conventions (`SysTestCase`)
 
 > Standard framework behavior that's easy to get wrong, plus a reusable fixture pattern for

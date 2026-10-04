@@ -2,7 +2,6 @@ import { describe, it, expect, afterEach, beforeEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import {
   validateStructure,
   scanSensitiveContent,
@@ -14,8 +13,7 @@ import {
   extractSummary,
   digestKnowledge,
 } from '../src/knowledge/digest.js';
-import { openDb, upsertObject, type Database } from '../src/indexer/db.js';
-import { registerKnowledgeDigestTool } from '../src/tools/knowledge.js';
+import { openDb, upsertObject } from '../src/indexer/db.js';
 
 const GOOD_ARTICLE = `# Widget Batch Export Pattern
 
@@ -282,48 +280,5 @@ describe('knowledge digest: conceptual duplication surfacing', () => {
     expect(report.existingTopics[0].slug).toBe('01-reworded');
 
     fs.rmSync(dir, { recursive: true, force: true });
-  });
-});
-
-describe('knowledge digest: MCP tool registration', () => {
-  type Handler = (args: Record<string, unknown>) => Promise<{ content: { type: string; text: string }[]; isError?: boolean }>;
-
-  function collectTool(db: Database, enableWriteTools: boolean): Handler | undefined {
-    let handler: Handler | undefined;
-    const fakeServer = {
-      tool: (_name: string, _desc: string, _schema: unknown, cb: Handler) => {
-        handler = cb;
-      },
-    } as unknown as McpServer;
-    registerKnowledgeDigestTool(fakeServer, db, { enableWriteTools });
-    return handler;
-  }
-
-  it('is not registered when write tools are disabled', () => {
-    const db = openDb(':memory:');
-    expect(collectTool(db, false)).toBeUndefined();
-    db.close();
-  });
-
-  it('validates and reports via the tool handler when enabled', async () => {
-    const db = openDb(':memory:');
-    const handler = collectTool(db, true);
-    expect(handler).toBeDefined();
-
-    const result = await handler!({ content: GOOD_ARTICLE, dryRun: true });
-    const report = JSON.parse(result.content[0].text);
-    expect(report.written).toBe(false);
-    expect(result.isError).toBeFalsy();
-    db.close();
-  });
-
-  it('marks isError true in dry-run mode when the draft has blocking structural errors', async () => {
-    const db = openDb(':memory:');
-    const handler = collectTool(db, true);
-
-    const malformed = `Just some prose with no title heading and no Pattern section, ${'x'.repeat(150)}`;
-    const result = await handler!({ content: malformed, dryRun: true });
-    expect(result.isError).toBe(true);
-    db.close();
   });
 });

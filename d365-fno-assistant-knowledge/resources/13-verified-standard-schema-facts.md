@@ -1,3 +1,10 @@
+---
+appliesTo:
+  tools: [get_table_schema, get_data_entity_details, search_symbols]
+match:
+  names: ['RetailColorGroup*', 'EcoResColor*']
+note: "OData entity field names often differ from the underlying table fields. Check the AxTable XML before using a name in fieldNum() or a relation."
+---
 # Verified Standard-Schema Facts
 
 > Core F&O schema facts worth knowing outright, because the OData entity names differ from the

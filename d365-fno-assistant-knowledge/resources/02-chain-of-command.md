@@ -1,3 +1,10 @@
+---
+appliesTo:
+  tools: [get_class_hierarchy, get_method_signature, search_symbols, find_references, get_table_schema, get_form_datasources, get_data_entity_details]
+match:
+  names: ['*_Extension', 'ExtensionOf*']
+note: "[ExtensionOf] must use the selector for the target type: classStr for classes, tableStr for tables, views and data entities, formStr for forms. A wrong selector compiles but never attaches."
+---
 # Chain of Command (`[ExtensionOf]`) — the #1 Gotcha
 
 > The `[ExtensionOf]` selector function depends on the *target type*, not on how the code looks —

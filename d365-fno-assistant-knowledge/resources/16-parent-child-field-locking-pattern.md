@@ -1,3 +1,8 @@
+---
+appliesTo:
+  tools: [get_table_schema, find_field_access]
+note: "For parent-managed fields, keep the field list in a setup table by name, lock the fields in validateWrite, and let the sync batch bypass the lock with a context flag."
+---
 # Parent/Child Attribute-Inheritance & Field-Locking Pattern
 
 > A recurring ERP customization shape: a role field, a parent link, a setup table naming which

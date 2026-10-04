@@ -21,3 +21,4 @@ vs-extension/**/obj/
 vs-extension/**/TestResults/
 *.vsix
 infra/*.local.bicepparam
+models/

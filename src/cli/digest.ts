@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import { findKnowledgeDir } from '../tools/knowledge.js';
+import { scoreDraftByMeaning, type SemanticMatch } from '../knowledge/semantic.js';
 import { digestKnowledge, type DigestReport } from '../knowledge/digest.js';
 import type { Database } from '../indexer/db.js';
 
@@ -31,6 +32,17 @@ function printReport(report: DigestReport): void {
     for (const dup of report.duplicates) {
       console.log(`  ${(dup.score * 100).toFixed(0)}%  ${dup.slug} — ${dup.title}`);
     }
+  }
+
+  if (report.semanticCheck === 'skipped') {
+    console.log('\nMeaning-based duplicate check skipped: embedding model not installed (npm run fetch-model).');
+  } else if (report.semanticDuplicates.length > 0) {
+    console.log('\nOverlap by meaning (local embedding model):');
+    for (const match of report.semanticDuplicates) {
+      console.log(`  ${(match.score * 100).toFixed(0)}%  ${match.slug} — ${match.title}`);
+    }
+  } else {
+    console.log('\nNo existing topic says the same thing (meaning-based check).');
   }
 
   if (report.existingTopics.length > 0) {
@@ -93,7 +105,15 @@ export async function digestCommand(
   }
 
   try {
+    // Meaning-based duplicate check with the local embedding model, when it is installed.
+    let semanticScores: SemanticMatch[] | undefined;
+    try {
+      semanticScores = (await scoreDraftByMeaning(content, kbDir)) ?? undefined;
+    } catch (err) {
+      console.error(`Meaning-based duplicate check failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
     const report = digestKnowledge({
+      semanticScores,
       content,
       kbDir,
       db,
