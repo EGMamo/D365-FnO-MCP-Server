@@ -46,6 +46,12 @@ concerns one topic.
 | `resources/22-performance-antipatterns.md` | Trace Parser workflow, N+1 and slow SQL, set-based operations, index checks, caching by table group |
 | `resources/23-batch-and-telemetry.md` | SysOperation vs RunBaseBatch, pack/unpack, BatchRetryable and idempotency, batch telemetry events and KQL |
 | `resources/24-form-patterns-ui-layout.md` | Web client logical/physical split, selecting form patterns and subpatterns, ArrangeMethod/ColumnsMode/sizing, pattern property ownership |
+| `resources/25-arrival-journals-to-product-receipts.md` | Batch-posting arrival journals, then product receipts per PO with the journal's packing slip id; registered-quantity and idempotency gotchas (API names to verify) |
+| `resources/26-sales-orders-from-excel.md` | Creating sales orders from an uploaded Excel file: Data management import first, then staging, EPPlus reading, SalesTable/SalesLine creation and idempotency (API names to verify) |
+
+Each topic starts with a YAML header (`appliesTo`, `match`, `filter`, `rank`, `note`) that the
+server's knowledge filter uses to annotate index tool results; see "Knowledge filter" in the
+repository README.
 
 ## Provenance
 

@@ -1,3 +1,9 @@
+---
+appliesTo:
+  tools: [get_data_entity_details, check_entity_odata_readiness, create_data_entity]
+  objectTypes: [DataEntity]
+note: "Unmapped fields are populated in postLoad() and are not computed fields. Natural keys are usually unique per company only, so wrap find() calls in changecompany(this.DataAreaId)."
+---
 # Data Entities
 
 > Mapped vs. unmapped/computed fields, `postLoad` population, company scoping, and the DMF

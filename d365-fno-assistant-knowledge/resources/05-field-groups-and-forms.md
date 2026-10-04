@@ -1,3 +1,9 @@
+---
+appliesTo:
+  tools: [get_form_datasources, get_table_schema]
+  objectTypes: [Form]
+note: "Controls inside a group bound to a field group (DataGroup) are regenerated from that group, so unbound controls placed there are stripped. Never strip the [Form] attribute from a form classDeclaration."
+---
 # Field Groups & Form Extensions
 
 > Naming conventions, the `DataGroup` auto-generation trap, and the one property you must never

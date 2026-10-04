@@ -1,3 +1,10 @@
+---
+appliesTo:
+  tools: [check_entity_odata_readiness, create_data_entity, create_odata_action, create_readonly_role_for_entities, get_data_entity_details]
+match:
+  tools: [check_entity_odata_readiness, create_odata_action, create_readonly_role_for_entities]
+note: "OData-ready entities need IsPublic=Yes, unique public entity and collection names, and a primary key backed by a unique index. Agents run as the calling user, so give them read-only roles."
+---
 # Exposing F&O Data and Actions to AI Agents
 
 > How integrations, Power Platform and Copilot Studio agents reach F&O data. What the entity tools check and generate.

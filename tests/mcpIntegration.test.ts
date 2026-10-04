@@ -116,6 +116,7 @@ describe('compiled MCP server over http', () => {
     const listedTools = (await client.listTools()).tools;
     const tools = listedTools.map((tool) => tool.name);
     expect(tools).toContain('get_visual_studio_workspace');
+    expect(tools).toContain('get_task_guidance');
     expect(tools).not.toContain('write_table_extension');
     expect(tools).not.toContain('digest_knowledge');
     const symbolSearch = listedTools.find((tool) => tool.name === 'search_symbols');
@@ -147,6 +148,22 @@ describe('compiled MCP server over http', () => {
     expect(await client.callTool({
       name: 'get_visual_studio_workspace', arguments: {},
     })).toMatchObject({ isError: true });
+  }, 30_000);
+
+  it('passes index tool results through the knowledge filter', async () => {
+    const client = await connect('http');
+    const result = await client.callTool({ name: 'get_bp_findings', arguments: {} });
+    if (!Array.isArray(result.content)) throw new Error('Expected content.');
+    const knowledge = JSON.parse((result.content.at(-1) as { text: string }).text) as {
+      knowledge: { notes: Array<{ topic: string }> };
+    };
+    expect(knowledge.knowledge.notes.map((note) => note.topic)).toEqual(
+      expect.arrayContaining(['d365kb://07-label-files', 'd365kb://11-best-practice-warnings'])
+    );
+
+    const raw = await connect('http', { ...environment, D365_KNOWLEDGE_FILTER: '0' });
+    const unfiltered = await raw.callTool({ name: 'get_bp_findings', arguments: {} });
+    expect(unfiltered.content).toHaveLength(1);
   }, 30_000);
 
   it('previews and applies a synthetic supported offline project through the real protocol', async () => {

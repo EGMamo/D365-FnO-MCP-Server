@@ -1,3 +1,8 @@
+---
+appliesTo:
+  tools: [get_form_datasources, get_table_schema, get_query_datasources]
+note: "Build filtered lookups with SysTableLookup plus a Query. Use a field-level Lookup event handler for every form, or a control-level one for a single form."
+---
 # Lookups & Filtering
 
 > Building filtered dropdowns, hiding disabled values, and the reliable way to make one lookup

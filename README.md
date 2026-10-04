@@ -83,6 +83,8 @@ Configuration comes from environment variables (a `.env` file in the working dir
 | `D365_ARTIFACT_MANAGED_IDENTITY_CLIENT_ID` | _(empty)_ | Client ID of a user-assigned managed identity; empty uses the default `DefaultAzureCredential` chain. |
 | `D365_ARTIFACT_REQUIRED_CAPABILITIES` | _(empty)_ | Comma-separated capabilities the active bundle must declare `complete`, for hosted startup and the `artifact` commands. Empty requires the ones the indexer covers completely, which is none yet (see `src/indexer/capabilityCoverage.ts`). A value that names no capability, or an unknown one, fails validation. |
 | `D365_INDEX_STORE_RAW_XML` | `1` | Set to `0` to keep full AOT XML out of `ax_objects.raw_xml` and reduce DB size. `get_element_xml` then reads the source XML from `file_path` on demand, so source files must remain available. |
+| `D365_KNOWLEDGE_FILTER` | `1` | Passes index tool results through the knowledge base filter (see [Knowledge filter](#knowledge-filter)). Set to `0` for raw results. |
+| `D365_EMBEDDING_MODEL_DIR` | _(empty)_ | Folder holding the embedding model files. Empty uses `models/all-MiniLM-L6-v2` at the package root, where `fetch-model` puts it. |
 | `D365_ENABLE_WRITE_TOOLS` | `0` | Set to `1` to register metadata preview/apply tools. Model writes also require `D365_WRITABLE_MODELS`. |
 | `D365_CUSTOM_METADATA_DIR` | _(empty)_ | The **Folder for your own custom metadata** configured in the Finance Operations Visual Studio extension. Required for write tools. |
 | `D365_VISUAL_STUDIO_WORKSPACE_DIR` | _(empty)_ | Folder containing the Visual Studio `.sln` or `.slnx` solution and Finance Operations `.rnrproj` projects. Enables workspace discovery and automatic project membership updates. |
@@ -210,6 +212,10 @@ Commands:
       --force                Write despite a near-duplicate match (missing sections/secrets still block)
       --kb-dir <dir>         Override the knowledge base resources directory
       --db-path <path>       Index DB to cross-check mentioned identifiers against
+  fetch-model               Download the embedding model for the knowledge filter (network; once)
+      --dir <dir>            Models directory (default models/ at the package root)
+  knowledge-check           Validate topic headers and cache topic vectors for the knowledge filter
+      --kb-dir <dir>         Override the knowledge base resources directory
   setup [--non-interactive] Create a .env configuration file
       --packages-dir <dir>  D365 PackagesLocalDirectory path
       --api-key <key>       MCP API key (>= 32 chars; generated when omitted)
@@ -234,36 +240,87 @@ Options:
 Flags accept --flag, --flag=value, and --flag value forms.
 ```
 
-### Adding to the knowledge base with `digest`
+### Knowledge filter
 
 `d365-fno-assistant-knowledge/resources/` (see its own README) is a curated, project-agnostic
-markdown knowledge base exposed to MCP clients as `d365kb://{slug}` resources. Rather than hand-
-writing and numbering files yourself, run them through the digester, which validates before
-writing anything:
+markdown knowledge base. Clients can read it as `d365kb://{slug}` resources, but its main job is to
+shape index results: every metadata, label, security, entity, trace, telemetry, code-quality and
+release-plan tool result passes through it before it reaches the client.
+
+- **Filter** drops rows a topic marks as noise, such as `XppMetadata`/`XppSource` build-output
+  mirrors, and reports how many were removed.
+- **Rank** moves rows a topic prefers to the front.
+- **Annotate** attaches up to three matching topics with a one-line note, found by the topic's
+  header rules and, with the embedding model installed, by meaning.
+
+**Task guidance.** For a multi-step request, the client calls `get_task_guidance` with the user's
+request first (the server's instructions tell it to). The request is matched clause by clause, so
+"post the arrival journals and create product receipts using the packing slip id" finds the topics
+for each part. The result lists the topics that apply, a coverage rating (`strong`, `partial` or
+`none`) and the clauses no topic covers, which tells you where the knowledge base has a gap. The
+request is kept for the MCP session: later index and generator calls get the task's topics attached
+once, on the tools those topics name.
+
+The filter only removes, reorders or adds notes. It never adds or renames objects, so every name in
+a result still comes from the index. The tool's own JSON stays the first content item, and the
+knowledge section is a second item: `{"knowledge": {"notes": [...], "filtered": [...], "reordered": [...]}}`.
+
+Each topic starts with an optional YAML header that drives this:
+
+```yaml
+---
+appliesTo:
+  tools: [get_class_hierarchy, search_symbols]  # tools the topic may act on (omit for all)
+  objectTypes: [Class]                          # rows or arguments of these types trigger the note
+match:
+  names: ['*_Extension']                        # object names that trigger the note (glob)
+  tools: [analyze_batch_class]                  # tools whose every call gets the note
+filter:
+  exclude: [{ field: file_path, pattern: '*XppMetadata*' }]
+rank:
+  prefer: [{ field: name, pattern: '*_Extension' }]
+note: "One line the client sees with the result."
+---
+```
+
+The embedding model is all-MiniLM-L6-v2 (Apache-2.0, about 90 MB), run on the CPU inside the
+server through the WebAssembly build of ONNX Runtime. There is no API call or cost. The Docker
+image includes it. For a local install run `npm run build`, `npm run fetch-model` (one hash-pinned
+download) and `npm run knowledge-check`, which validates every header and caches the topic vectors
+so the server starts without embedding the knowledge base. Without the model the filter still runs
+on header rules, and the server logs that it did so.
+
+### Adding to the knowledge base
+
+Only the server owner adds knowledge, in the repository during development. MCP clients cannot add
+or change topics, and the image ships with the topics that were merged. Run each draft through the
+digester, which validates before writing anything:
 
 ```bash
 npm run digest -- --file ./my-draft.md            # validate + write if it passes
 npm run digest -- --file ./my-draft.md --dry-run   # validate only, report findings
-npm run digest -- --file ./my-draft.md --force     # write despite a near-duplicate match
+npm run digest -- --file ./my-draft.md --force     # write despite a duplicate match
+npm run knowledge-check                            # after adding or editing topics
 ```
 
 The digester checks:
-- **Structure** — a `# Title` and a `## Pattern` section are required (missing either always
-  blocks the write, even with `--force`); `When to use this`, `Gotchas / notes`, and `Related`
-  are recommended.
+- **Structure** — a `# Title` and a `## Pattern` section are required, and a header, if present,
+  must be valid (these always block the write, even with `--force`); `When to use this`,
+  `Gotchas / notes`, and `Related` are recommended.
 - **Sanitization** — likely un-redacted emails, connection-string secrets, and API keys always
   block the write, even with `--force`. Probable company-prefixed object names (for example,
   `ABCSalesTable`) and IPv4-shaped strings (which also match D365 version numbers such as
   `10.0.39.0`) are warnings only because those heuristics are prone to false positives.
-- **Duplicates** — compares the draft against every existing topic with bag-of-words similarity;
-  near-duplicates (≥80% similar) block by default and require `--force` to add anyway.
+- **Duplicates by meaning** — with the embedding model installed, the draft's passages are compared
+  with every topic's passages. A draft that says the same as an existing topic in different words
+  (62% or more) is blocked unless you pass `--force`, and 50% or more is reported as an overlap.
+  On the shipped topics a reworded copy scores about 64% and unrelated drafts stay under 30%, while
+  the closest pair of distinct topics (form groups and form patterns) scores 67%, so a block can
+  mean "extend that topic instead".
+- **Duplicates by wording** — bag-of-words similarity; 80% or more blocks without `--force`.
 - **Feasibility** — cross-checks PascalCase identifiers mentioned in the draft against the
   indexed AOT metadata (pass `--db-path`) and reports which ones weren't found, so you can verify
   or replace them with `<Prefix>`/`<Model>` placeholders.
-
-The same validation is available to an MCP client as the `digest_knowledge` tool (feature-flagged
-behind `D365_ENABLE_WRITE_TOOLS=1`, same as the other write tools), so an assistant can hand over a
-sanitized draft directly instead of you running the CLI.
 
 ## Visual Studio 2022/2026 and unified Finance Operations development
 
@@ -462,10 +519,10 @@ X++ generators (grounded against the index):
 `create_coc_extension`, `create_table_extension`, `create_class_extension`, `generate_xpp_class`, `create_runbase_batch`, `create_sys_operation`
 
 Write tools (only with `D365_ENABLE_WRITE_TOOLS=1`):
-`write_table_extension`, `apply_table_extension_change`, `digest_knowledge`
+`write_table_extension`, `apply_table_extension_change`
 
 Resources and prompts:
-`d365kb://{slug}` knowledge base topics, and the `d365_pattern_assistant` prompt.
+`d365kb://{slug}` knowledge base topics, and the `d365_pattern_assistant` prompt. Index tool results also carry matching topic notes, and `get_task_guidance` matches a whole request against the knowledge base (see [Knowledge filter](#knowledge-filter)).
 
 ## Optional compiler cross-reference usage data
 
@@ -662,7 +719,7 @@ database. Set `D365_RUN_SQL_INTEGRATION=1` and `D365_XREF_CONNECTION_STRING`, th
 - **Trust proxy** — `TRUST_PROXY_HOPS` defaults to `0`, meaning `X-Forwarded-For` is ignored and the socket address is used. Only raise it when the server genuinely sits behind that many trusted proxies; otherwise clients can spoof their IP and evade rate limiting.
 - **Session limits** — `MAX_CONCURRENT_SESSIONS` and `SESSION_IDLE_TIMEOUT_MS` bound memory use and clean up abandoned sessions.
 - **Exposure** — the server grants read access to your source metadata and should not be exposed to untrusted networks. It binds every interface unless `MCP_HOST` says otherwise; set `MCP_HOST=127.0.0.1` for a local server, and front a shared one with TLS (App Service terminates HTTPS in hosted mode).
-- **Write tools over HTTP** — with `D365_ENABLE_WRITE_TOOLS=1` every API key can use the write tools, including `digest_knowledge`, which adds knowledge base articles that all clients read. Enable them only on a local or single-user server.
+- **Write tools over HTTP** — with `D365_ENABLE_WRITE_TOOLS=1` every API key can use the write tools. Enable them only on a local or single-user server. No tool adds or changes knowledge base topics.
 - **Data and AI use** — see the [Responsible AI and security FAQ](docs/responsible-ai-faq.md) for what the server reads, stores and sends, and how to review AI output that uses it.
 - **Reporting a vulnerability** — see [SECURITY.md](SECURITY.md).
 

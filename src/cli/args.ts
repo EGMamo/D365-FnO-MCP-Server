@@ -108,6 +108,10 @@ Commands:
       --force                Write despite a near-duplicate match (missing sections/secrets still block)
       --kb-dir <dir>         Override the knowledge base resources directory
       --db-path <path>       Index DB to cross-check mentioned identifiers against
+  fetch-model               Download the embedding model for the knowledge filter (network; once)
+      --dir <dir>            Models directory (default models/ at the package root)
+  knowledge-check           Validate topic headers and cache topic vectors for the knowledge filter
+      --kb-dir <dir>         Override the knowledge base resources directory
   setup [--non-interactive] Create a .env configuration file
       --packages-dir <dir>  D365 PackagesLocalDirectory path
       --api-key <key>       MCP API key (>= 32 chars; generated when omitted)

@@ -41,6 +41,8 @@ const configSchema = z.object({
   /** Comma-separated capabilities the active bundle must declare complete. Empty: the indexer's complete ones. */
   D365_ARTIFACT_REQUIRED_CAPABILITIES: z.string().default(''),
   D365_ENABLE_WRITE_TOOLS: z.coerce.number().default(0),
+  /** 1 (default) passes index tool results through the knowledge base filter; 0 returns raw results. */
+  D365_KNOWLEDGE_FILTER: z.coerce.number().default(1),
   D365_PROJECT_DIR: z.string().default(''),
   D365_VISUAL_STUDIO_WORKSPACE_DIR: z.string().default(''),
   D365_CUSTOM_METADATA_DIR: z.string().default(''),
@@ -168,6 +170,7 @@ function buildConfig(env: ParsedEnv) {
     artifactManagedIdentityClientId: env.D365_ARTIFACT_MANAGED_IDENTITY_CLIENT_ID.trim(),
     artifactRequiredCapabilities: parseRequiredCapabilities(env.D365_ARTIFACT_REQUIRED_CAPABILITIES),
     enableWriteTools: env.D365_ENABLE_WRITE_TOOLS === 1,
+    knowledgeFilter: env.D365_KNOWLEDGE_FILTER !== 0,
     projectDir: env.D365_PROJECT_DIR,
     visualStudioWorkspaceDir: env.D365_VISUAL_STUDIO_WORKSPACE_DIR,
     customMetadataDir: env.D365_CUSTOM_METADATA_DIR || env.D365_PROJECT_DIR,

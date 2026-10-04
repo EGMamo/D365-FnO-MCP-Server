@@ -1,3 +1,9 @@
+---
+appliesTo:
+  tools: [get_table_schema, get_edt_details, find_field_access]
+  objectTypes: [Table, Edt]
+note: "Prefer EDT inheritance for field types. A string FK to a custom lookup uses IgnoreEDTRelation=Yes plus an explicit relation, and new tables need the BP properties (TitleField1, CacheLookup, DeveloperDocumentation)."
+---
 # Tables & Fields
 
 > Field-type patterns, EDT inheritance, the string-lookup FK pattern, and the BP-required

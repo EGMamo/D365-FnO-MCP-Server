@@ -1,3 +1,10 @@
+---
+appliesTo:
+  tools: [resolve_label, search_labels, resolve_label_by_language, search_labels_fts, get_bp_findings]
+match:
+  tools: [get_bp_findings]
+note: "BPErrorUnknownLabel for a label that exists usually means a stale compiled label resource: do a full rebuild or re-save the label file in the VS label editor. Use the same id across locales."
+---
 # Label Files
 
 > Label storage/reference pattern, and the #1 cause of a "label clearly exists but BP says

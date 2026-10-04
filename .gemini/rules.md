@@ -40,7 +40,7 @@ captures and Microsoft release plans.
 - **Telemetry / batch** (`tools/telemetry.ts`): generate_kql_query, analyze_batch_class
 - **Release plans** (`tools/releasePlans.ts`): search_release_plans, check_feature_impact
 - **Workspace / writes** (`tools/workspace.ts`, `tools/writers.ts`): get_visual_studio_workspace, write_table_extension, apply_table_extension_change
-- **Knowledge** (`tools/knowledge.ts`): digest_knowledge (plus knowledge topics in `d365-fno-assistant-knowledge/`)
+- **Knowledge** (`tools/knowledge.ts`, `knowledge/`): `d365kb://` resources and the knowledge filter that annotates index tool results (topics in `d365-fno-assistant-knowledge/`)
 
 ## File Structure
 ```

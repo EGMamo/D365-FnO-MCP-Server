@@ -26,6 +26,9 @@ RUN --mount=type=secret,id=npmrc,target=/root/.npmrc \
     npm ci --omit=optional
 COPY src ./src
 RUN npm run build
+# Embedding model for the knowledge filter (hash-pinned download), plus its topic vector cache.
+COPY d365-fno-assistant-knowledge ./d365-fno-assistant-knowledge
+RUN node dist/src/index.js fetch-model && node dist/src/index.js knowledge-check
 
 FROM node:26-slim AS runtime
 ENV NODE_ENV=production \
@@ -43,6 +46,8 @@ RUN --mount=type=secret,id=npmrc,target=/root/.npmrc \
 COPY --from=build /app/dist ./dist
 # findKnowledgeDir() walks up from dist/src/tools, so the knowledge base must sit next to dist/.
 COPY d365-fno-assistant-knowledge ./d365-fno-assistant-knowledge
+# Read-only at runtime: the filter loads the model and cached topic vectors from here.
+COPY --from=build /app/models ./models
 COPY README.md LICENSE ./
 RUN mkdir -p /data && chown -R node:node /data
 USER node

@@ -18,7 +18,14 @@ import { registerTelemetryTools } from '../tools/telemetry.js';
 import { registerCodeQualityTools } from '../tools/codeQuality.js';
 import { registerGeneratorTools } from '../tools/generators.js';
 import { registerWriterTools } from '../tools/writers.js';
-import { registerKnowledgeResources, registerKnowledgeDigestTool } from '../tools/knowledge.js';
+import {
+  findKnowledgeDir,
+  registerKnowledgeResources,
+  registerTaskGuidanceTool,
+  TASK_GUIDANCE_HINT,
+} from '../tools/knowledge.js';
+import { KnowledgeSession, startKnowledgeFilter } from '../knowledge/filter.js';
+import { registerWithKnowledgeFilter } from '../knowledge/toolWrapper.js';
 import { registerWorkspaceTools } from '../tools/workspace.js';
 
 /** How long a graceful shutdown may take before the process exits regardless. */
@@ -72,6 +79,11 @@ export async function startServer(): Promise<void> {
     return config.appVersion || null;
   }
 
+  // Index tool results pass through the knowledge base (filter, rank, annotate). Embeddings load
+  // in the background; until then, and without the model, topic header rules still apply.
+  const knowledgeDir = findKnowledgeDir();
+  const knowledgeFilter = config.knowledgeFilter ? startKnowledgeFilter(knowledgeDir) : { current: () => null };
+
   /**
    * Factory: create a new McpServer instance with all tools registered.
    * Called once per MCP client session. All sessions share the same `db`
@@ -92,18 +104,22 @@ export async function startServer(): Promise<void> {
     }
     const server = new McpServer(
       { name: 'd365-fno-mcp-server', version: VERSION },
-      { instructions: instructions.text }
+      { instructions: config.knowledgeFilter ? `${instructions.text}\n\n${TASK_GUIDANCE_HINT}` : instructions.text }
     );
+    const knowledgeSession = new KnowledgeSession();
 
-    registerMetadataTools(server, db, { sourceFilesAvailable });
-    registerLabelsTools(server, db);
-    registerSecurityTools(server, db);
-    registerEntityTools(server, db);
-    registerTraceTools(server, db);
-    registerTelemetryTools(server, db);
-    registerCodeQualityTools(server, db);
-    registerReleasePlanTools(server, db);
-    registerGeneratorTools(server, db);
+    registerWithKnowledgeFilter(server, knowledgeFilter.current, () => {
+      registerMetadataTools(server, db, { sourceFilesAvailable });
+      registerLabelsTools(server, db);
+      registerSecurityTools(server, db);
+      registerEntityTools(server, db);
+      registerTraceTools(server, db);
+      registerTelemetryTools(server, db);
+      registerCodeQualityTools(server, db);
+      registerReleasePlanTools(server, db);
+      registerGeneratorTools(server, db);
+    }, knowledgeSession);
+    if (config.knowledgeFilter) registerTaskGuidanceTool(server, knowledgeFilter.current, knowledgeSession);
     registerWriterTools(server, db, {
       enableWriteTools: config.enableWriteTools,
       projectDir: config.projectDir,
@@ -127,8 +143,7 @@ export async function startServer(): Promise<void> {
       customMetadataSource: config.customMetadataSource,
       enableWriteTools: config.enableWriteTools,
     });
-    registerKnowledgeResources(server);
-    registerKnowledgeDigestTool(server, db, { enableWriteTools: config.enableWriteTools });
+    registerKnowledgeResources(server, knowledgeDir);
 
     return server;
   }

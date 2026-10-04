@@ -1,3 +1,9 @@
+---
+appliesTo:
+  tools: [get_security_object, find_security_path, create_security_privilege, create_readonly_role_for_entities, diff_roles]
+  objectTypes: [SecurityRole, SecurityDuty, SecurityPrivilege, SecurityRoleExtension, SecurityDutyExtension]
+note: "Name privileges after object and intent (View/Maintain), duties after responsibilities, roles after personas. Grant the intended entry points and test with a non-admin user."
+---
 # Security (Privileges, Duties, Roles)
 
 > Design-time naming, entry-point coverage, and checks for usable custom security.
