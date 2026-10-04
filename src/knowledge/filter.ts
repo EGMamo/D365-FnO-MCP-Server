@@ -68,7 +68,7 @@ export class KnowledgeSession {
 
 export interface TaskGuidance {
   task: string;
-  /** strong: a topic clearly covers the request; partial: related topics only; none: no topic applies. */
+  /** strong: a topic clearly covers the request and most of its parts; partial: related topics only; none: no topic applies. */
   coverage: 'strong' | 'partial' | 'none';
   topics: Array<{ topic: string; title: string; note: string; score: number }>;
   /** Parts of the request no topic covers; ground these in the index tools alone. */
@@ -175,11 +175,14 @@ export class KnowledgeFilter {
       .sort((a, b) => b.score - a.score)
       .slice(0, MAX_TASK_TOPICS);
     // Nothing covers the request: every part of it is uncovered, with or without the model.
-    if (best < TASK_TOPIC_SCORE && uncovered.length === 0) uncovered.push(...(clauses.length > 1 ? clauses.slice(1) : clauses));
+    const parts = clauses.length > 1 ? clauses.slice(1) : clauses;
+    if (best < TASK_TOPIC_SCORE && uncovered.length === 0) uncovered.push(...parts);
+    // One close fragment ("operations live (D365)") must not make a long spec look covered.
+    const mostlyCovered = uncovered.length * 2 <= parts.length;
     if (session) session.task = { text, scores: new Map(ranked.map(({ topic, score }) => [topic.slug, score])) };
     return {
       task: text,
-      coverage: best >= TASK_STRONG_SCORE ? 'strong' : best >= TASK_TOPIC_SCORE ? 'partial' : 'none',
+      coverage: best >= TASK_STRONG_SCORE && mostlyCovered ? 'strong' : best >= TASK_TOPIC_SCORE ? 'partial' : 'none',
       topics: ranked.map(({ topic, score }) => ({
         topic: topic.uri,
         title: topic.title,

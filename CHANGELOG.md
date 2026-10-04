@@ -194,6 +194,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `get_task_guidance` matched a one-line request to an unrelated topic because a trailing period
   shifted the embedding score; clauses are now matched without trailing punctuation, and a request
   that does not split into clauses is reported as uncovered when no topic reaches the threshold.
+- `get_task_guidance` rated a long spec "strong" when one short fragment matched a topic; strong
+  coverage now also needs at least half of the request's parts covered.
 - `azure-post-deploy.ps1 -Step SetupWorker` no longer fails with a 404 on the Node.js download:
   the VM script (Windows PowerShell 5.1) picks the Node 24 x64 installer from the release's
   `SHASUMS256.txt` and verifies its checksum, and npm warnings on stderr no longer stop the build.

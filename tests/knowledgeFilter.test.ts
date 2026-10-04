@@ -199,6 +199,12 @@ describe.skipIf(!modelDir)('knowledge embeddings (needs npm run fetch-model)', (
     const excel = await filter.guidance('enables automated Sales Order creation from an Excel file.');
     expect(excel.coverage).toBe('strong');
     expect(excel.topics[0].topic).toBe('d365kb://26-sales-orders-from-excel');
+    // A long spec with one close fragment is related, not covered.
+    const spec = await filter.guidance(
+      'Customers earn loyalty points and move through tiers that unlock perks. The system where points are earned is usually not the system where finance and operations live (D365). Register a new member (POST). Read a member\'s current points and tier (GET). Update member details such as phone or linked customer (PATCH). Add points via a custom action, and D365 re-evaluates the tier. A clerk enrolls a member on the form, or a process auto-enrolls on first invoice.'
+    );
+    expect(spec.coverage).toBe('partial');
+    expect(spec.uncovered.length).toBeGreaterThan(3);
   }, 120_000);
 
   it('blocks a draft that restates an existing topic in different words', async () => {
