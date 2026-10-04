@@ -11,8 +11,23 @@ New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 
 $pac = Get-Command pac -ErrorAction Stop
 $pacListPath = Join-Path $OutputDirectory "pac-tool-xpp-list.txt"
-$pacList = & $pac.Source tool xpp list 2>&1 | Out-String
+$previousErrorActionPreference = $ErrorActionPreference
+# Windows PowerShell 5.1 turns redirected native stderr into terminating errors
+# under Stop; capture it as text and rely on the exit code instead.
+$ErrorActionPreference = "Continue"
+try {
+    $pacList = & $pac.Source tool xpp list 2>&1 | ForEach-Object { [string]$_ } | Out-String
+    $pacExitCode = $LASTEXITCODE
+}
+finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+}
 $pacList | Set-Content -Path $pacListPath -Encoding UTF8
+if ($pacExitCode -ne 0) {
+    Write-Error ("'pac tool xpp list' failed with exit code $pacExitCode. " +
+        "Output written to: $pacListPath") -ErrorAction Continue
+    exit 1
+}
 
 $dynamicsRoot = Join-Path $env:LOCALAPPDATA "Microsoft\Dynamics365"
 $configRoot = Join-Path $dynamicsRoot "XPPConfig"

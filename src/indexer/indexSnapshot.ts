@@ -21,6 +21,8 @@ export interface SnapshotOptions {
   allowNoRawXml?: boolean;
   integrityCheck?: boolean;
   relativePathsRoot?: string;
+  /** Callers that run and record their own integrity check can skip the built-in one. */
+  verify?: boolean;
 }
 
 function escapeSqlString(value: string): string {
@@ -125,7 +127,7 @@ export function snapshotIndex(dbPath: string, destination: string, options: Snap
   }
 
   normalizeSnapshot(destination, options.relativePathsRoot);
-  verifySnapshot(destination, objects, options.integrityCheck === true);
+  if (options.verify !== false) verifySnapshot(destination, objects, options.integrityCheck === true);
   return {
     file: destination,
     builtAt,
