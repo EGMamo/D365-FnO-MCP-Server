@@ -40,6 +40,7 @@ class MemoryBlobContainer implements ArtifactBlobContainer {
   readonly blobs = new Map<string, MemoryBlob>();
   readonly uploads: Array<{ name: string; conditions?: { ifMatch?: string; ifNoneMatch?: string } }> = [];
   failNextPointerCondition = false;
+  failLeaseRenewal = false;
   private etag = 0;
   private leased = false;
 
@@ -82,7 +83,7 @@ class MemoryBlobContainer implements ArtifactBlobContainer {
         let released = false;
         const lease: ArtifactBlobLease = {
           renew: async () => {
-            if (released || !this.leased) throw storageError(409);
+            if (released || !this.leased || this.failLeaseRenewal) throw storageError(409);
           },
           release: async () => {
             if (!released) {
@@ -325,6 +326,20 @@ describe('Azure Blob artifact adapter', () => {
         /ETag changed/
       );
     });
+
+    expect((await store.readPointers()).pointers.active).toBeNull();
+  });
+
+  it('renews the lease immediately before writing artifact pointers', async () => {
+    const bundle = createBundle(FIRST_TIME);
+
+    await store.uploadBundle(bundle.directory, policy);
+    await expect(
+      store.withAcquisitionLease(async (writer) => {
+        container.failLeaseRenewal = true;
+        await writer.promote(bundle.manifest.bundleId, 0, policy, FIRST_TIME);
+      })
+    ).rejects.toThrow(/lease could not be renewed/);
 
     expect((await store.readPointers()).pointers.active).toBeNull();
   });

@@ -284,6 +284,15 @@ function refreshRunLock(file: string, owner: RunLockOwner): void {
   }
 }
 
+function releaseRunLock(file: string, owner: RunLockOwner): void {
+  try {
+    const current = JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<RunLockOwner>;
+    if (current.instanceId === owner.instanceId) fs.rmSync(file, { force: true });
+  } catch {
+    // A missing or replaced lock is no longer owned by this process instance.
+  }
+}
+
 function bundleTimestamp(bundle: ValidatedArtifactBundle): number {
   return Math.max(
     Date.parse(bundle.manifest.createdAt),
@@ -503,7 +512,7 @@ export async function runAcquisitionWorker(
     writeJsonAtomic(file, status);
   } catch (error) {
     clearInterval(lockHeartbeat);
-    fs.rmSync(lockFile, { force: true });
+    releaseRunLock(lockFile, lockOwner);
     throw error;
   }
 
@@ -614,7 +623,7 @@ export async function runAcquisitionWorker(
     status.currentPhase = null;
     status.completedAt = now().toISOString();
     persist();
-    fs.rmSync(lockFile, { force: true });
+    releaseRunLock(lockFile, lockOwner);
   }
 
   if (status.state !== 'succeeded') {
