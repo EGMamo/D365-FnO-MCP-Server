@@ -24,6 +24,23 @@ public class ServerUrlTests
         Assert.False(ServerUrl.IsInsecure("http://127.0.0.1:3000"));
         Assert.False(ServerUrl.IsInsecure("https://app.example.net"));
     }
+
+    [Theory]
+    [InlineData("https://app.example.net/mcp", "https://app.example.net")]
+    [InlineData("http://localhost:3000", "http://localhost:3000")]
+    [InlineData("http://127.0.0.1:3000/mcp", "http://127.0.0.1:3000")]
+    [InlineData("http://[::1]:3000", "http://[::1]:3000")]
+    public void AcceptsHttpsAndLoopbackHttp(string input, string expected) =>
+        Assert.Equal(expected, ServerUrl.NormalizeSecure(input));
+
+    [Theory]
+    [InlineData("http://app.example.net")]
+    [InlineData("http://10.0.0.5:3000/mcp")]
+    public void RejectsPlainHttpToRemoteHosts(string input)
+    {
+        Assert.Throws<FormatException>(() => ServerUrl.NormalizeSecure(input));
+        Assert.Throws<FormatException>(() => ServerUrl.McpEndpoint(input));
+    }
 }
 
 public class PackagesDirectoryLocatorTests
@@ -52,6 +69,32 @@ public class PackagesDirectoryLocatorTests
                 @"K:\AosService\PackagesLocalDirectory",
             },
             found);
+    }
+
+    [Fact]
+    public void OrdersUnifiedInstallsByVersionNumberNotText()
+    {
+        string root = Path.Combine("appdata", "Microsoft", "Dynamics365");
+        string[] versions = { "10.0.999.20", "10.0.2095.13", "preview", "10.0.10000.1" };
+        var dirs = new HashSet<string>(versions.Select(v => Path.Combine(root, v, "PackagesLocalDirectory"))) { root };
+
+        IReadOnlyList<string> found = PackagesDirectoryLocator.Candidates(
+            "appdata",
+            _ => versions.Select(v => Path.Combine(root, v)),
+            dirs.Contains);
+
+        Assert.Equal(
+            new[] { "10.0.10000.1", "10.0.2095.13", "10.0.999.20", "preview" },
+            found.Select(path => Path.GetFileName(Path.GetDirectoryName(path))));
+    }
+
+    [Fact]
+    public void ReportsAnSdkVersionOnlyForVersionFolders()
+    {
+        Assert.Equal("10.0.2095.13", PackagesDirectoryLocator.SdkVersion(Path.Combine("appdata", "Dynamics365", "10.0.2095.13", "PackagesLocalDirectory")));
+        Assert.Null(PackagesDirectoryLocator.SdkVersion(Path.Combine("K:", "AosService", "PackagesLocalDirectory")));
+        Assert.Null(PackagesDirectoryLocator.SdkVersion(@"K:\AosService\PackagesLocalDirectory"));
+        Assert.Null(PackagesDirectoryLocator.SdkVersion(null));
     }
 }
 

@@ -37,16 +37,9 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: '24'
-          cache: npm
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '8.0.x'
-      # The end-to-end tests run the built server and CLI.
-      - run: npm ci
-      - run: npm run build
       - run: dotnet test vs-extension/tests/D365FnoMcp.Core.Tests
       - run: dotnet build vs-extension/src/D365FnoMcp.Extension -c Release
       - name: Upload the VSIX

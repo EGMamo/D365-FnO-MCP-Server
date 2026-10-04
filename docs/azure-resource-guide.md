@@ -308,7 +308,8 @@ reading authentication profiles or tokens. CLI-only acquisition might not
 create `XPPConfig`; the verifier also discovers compilers directly from
 versioned SDK directories. Run it first without arguments, then use
 `-ExecuteCompiler` to start each discovered compiler with `/?` and
-record whether it executes and exits under the host architecture:
+record whether it executes and exits under the host architecture. The verifier
+saves the `pac tool xpp list` output and exits 1 if that command fails:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\verify-windows-xpp.ps1
@@ -338,9 +339,14 @@ Microsoft confirms it is supported for unattended acquisition. Keep the
 client-metadata response and its short-lived SAS URL out of logs and reports.
 When AzCopy is present on `PATH`, the script uses its parallel Blob transfer
 engine and keeps its logs and job plans in a temporary directory that is
-removed after each asset. Otherwise it uses the built-in single-stream
-downloader. Existing files are reused only when their exact length matches the
-current service metadata; the script then hashes them into the combined proof.
+removed after each asset. AzCopy only accepts the pre-signed SAS inside the
+source URL, so the SAS is visible on AzCopy's command line while a transfer
+runs; error output is redacted. Keep AzCopy off `PATH` (and omit `-AzCopyPath`)
+to use the built-in single-stream downloader, which keeps the SAS inside the
+script's own process. Existing files are reused, and new downloads accepted,
+only when their exact length and, when the blob reports one, Content-MD5 match
+the current service metadata; the script then hashes them into the combined
+proof.
 
 Do not attempt to substitute a Linux container merely because `pac auth`
 works there. Only reconsider Linux if Microsoft documents a supported X++

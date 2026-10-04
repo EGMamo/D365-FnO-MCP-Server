@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -5,7 +7,8 @@ namespace D365FnoMcp.Core;
 
 /// <summary>
 /// Adds or replaces the extension-owned loopback gateway entry and preserves
-/// unrelated MCP servers and inputs.
+/// every other top-level key, MCP server and input. System.Text.Json cannot keep
+/// comments, so they survive only while the file needs no change, and in .bak.
 /// </summary>
 public static class McpJsonFile
 {
@@ -16,6 +19,8 @@ public static class McpJsonFile
     };
 
     private static readonly JsonSerializerOptions WriteOptions = new() { WriteIndented = true };
+
+    private static readonly TimeSpan LockTimeout = TimeSpan.FromSeconds(10);
 
     public static string Merge(string? existingJson, string serverName, Uri gatewayEndpoint, string bearerToken)
     {
@@ -34,10 +39,13 @@ public static class McpJsonFile
             : JsonNode.Parse(existingJson, documentOptions: ReadOptions) as JsonObject
                 ?? throw new FormatException("The existing .mcp.json is not a JSON object.");
 
-        JsonObject servers = root["servers"] as JsonObject ?? new JsonObject();
-        root["servers"] = servers;
-        RemoveRetiredInput(root["inputs"] as JsonArray, $"{serverName}-api-key");
-        servers[serverName] = new JsonObject
+        JsonObject servers = root["servers"] switch
+        {
+            null => new JsonObject(),
+            JsonObject existing => existing,
+            _ => throw new FormatException("The existing .mcp.json has a \"servers\" value that is not a JSON object."),
+        };
+        var entry = new JsonObject
         {
             ["type"] = "http",
             ["url"] = gatewayEndpoint.ToString(),
@@ -47,30 +55,76 @@ public static class McpJsonFile
             },
         };
 
+        bool removedInput = RemoveRetiredInput(root["inputs"] as JsonArray, $"{serverName}-api-key");
+        if (!removedInput && existingJson is not null && JsonNode.DeepEquals(servers[serverName], entry))
+        {
+            // Nothing of ours changes: hand back the file as it is, comments and formatting included.
+            return existingJson;
+        }
+
+        root["servers"] = servers;
+        servers[serverName] = entry;
+
         return root.ToJsonString(WriteOptions) + Environment.NewLine;
     }
 
+    /// <summary>
+    /// Merges the gateway entry into <paramref name="path"/>. The read-modify-write runs under a
+    /// machine-wide lock for that file, so Visual Studio instances never lose each other's (or the
+    /// user's) edits; the file is replaced atomically and left untouched when nothing changes. The
+    /// first time the extension changes an existing file, its previous content is kept in .bak;
+    /// later writes never replace that backup.
+    /// </summary>
     public static void Write(string path, string serverName, Uri gatewayEndpoint, string bearerToken)
     {
-        string? existing = File.Exists(path) ? File.ReadAllText(path) : null;
-        string merged = Merge(existing, serverName, gatewayEndpoint, bearerToken);
-        if (existing == merged)
+        string fullPath = Path.GetFullPath(path);
+        using Mutex fileLock = AcquireLock(fullPath);
+        try
         {
-            return;
-        }
+            string? existing = File.Exists(fullPath) ? File.ReadAllText(fullPath) : null;
+            string merged = Merge(existing, serverName, gatewayEndpoint, bearerToken);
+            if (existing == merged)
+            {
+                return;
+            }
 
-        if (existing is not null)
-        {
-            File.WriteAllText(path + ".bak", RedactOwnedSecrets(existing, serverName));
-        }
-        else
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
-        }
+            if (existing is null)
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
+            }
+            else if (!File.Exists(fullPath + ".bak"))
+            {
+                ReplaceAtomically(fullPath + ".bak", RedactOwnedSecrets(existing, serverName));
+            }
 
-        string temp = path + ".tmp";
-        File.WriteAllText(temp, merged);
-        File.Move(temp, path, overwrite: true);
+            ReplaceAtomically(fullPath, merged);
+        }
+        finally
+        {
+            fileLock.ReleaseMutex();
+        }
+    }
+
+    /// <summary>The URL of a server entry in an .mcp.json, or null when there is none or the file cannot be read.</summary>
+    public static Uri? ReadServerEndpoint(string path, string serverName)
+    {
+        try
+        {
+            if (!File.Exists(path))
+            {
+                return null;
+            }
+
+            JsonNode? root = JsonNode.Parse(File.ReadAllText(path), documentOptions: ReadOptions);
+            return root is JsonObject && root["servers"]?[serverName]?["url"] is JsonValue url &&
+                   url.TryGetValue(out string? text) && Uri.TryCreate(text, UriKind.Absolute, out Uri? uri)
+                ? uri
+                : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException)
+        {
+            return null;
+        }
     }
 
     public static string UserFilePath() =>
@@ -78,18 +132,66 @@ public static class McpJsonFile
 
     public static string SolutionFilePath(string solutionDirectory) => Path.Combine(solutionDirectory, ".mcp.json");
 
-    private static void RemoveRetiredInput(JsonArray? inputs, string inputId)
+    private static bool RemoveRetiredInput(JsonArray? inputs, string inputId)
     {
         if (inputs is null)
         {
-            return;
+            return false;
         }
 
+        bool removed = false;
         for (int i = inputs.Count - 1; i >= 0; i--)
         {
-            if (inputs[i] is JsonObject input && (string?)input["id"] == inputId)
+            if (inputs[i] is JsonObject input && input["id"] is JsonValue id && id.TryGetValue(out string? value) && value == inputId)
             {
                 inputs.RemoveAt(i);
+                removed = true;
+            }
+        }
+
+        return removed;
+    }
+
+    /// <summary>A named mutex per file path, shared by every process of this user session.</summary>
+    private static Mutex AcquireLock(string fullPath)
+    {
+        string key = OperatingSystem.IsWindows() ? fullPath.ToUpperInvariant() : fullPath;
+        string name = "D365FnoMcp.McpJson." + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key)));
+        var mutex = new Mutex(initiallyOwned: false, name);
+        try
+        {
+            if (!mutex.WaitOne(LockTimeout))
+            {
+                throw new IOException($"Timed out waiting for another Visual Studio instance to finish updating {fullPath}.");
+            }
+        }
+        catch (AbandonedMutexException)
+        {
+            // The previous owner exited mid-write; the file itself is only ever replaced atomically.
+        }
+        catch
+        {
+            mutex.Dispose();
+            throw;
+        }
+
+        return mutex;
+    }
+
+    /// <summary>Writes a sibling temporary file and moves it over <paramref name="path"/>, so readers never see half a file.</summary>
+    private static void ReplaceAtomically(string path, string contents)
+    {
+        string temp = $"{path}.{Guid.NewGuid():N}.tmp";
+        try
+        {
+            File.WriteAllText(temp, contents);
+            File.Move(temp, path, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(temp))
+            {
+                File.Delete(temp);
             }
         }
     }

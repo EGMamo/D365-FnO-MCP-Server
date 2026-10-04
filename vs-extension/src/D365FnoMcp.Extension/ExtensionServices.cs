@@ -42,13 +42,8 @@ internal sealed class ExtensionServices : IWorkspaceContextProvider, IAsyncDispo
                 return this.gateway;
             }
 
-            string? packages = PackagesDirectoryLocator.Detect();
-            string? sdkVersion = packages is null ? null : Directory.GetParent(packages)?.Name;
-            var created = new McpGateway(this.GatewayHttp, this);
-            await created.StartAsync(serverUrl, apiKey, sdkVersion, cancellationToken);
-            this.gateway = created;
-            this.Log($"Workspace gateway listening at {created.Endpoint}.");
-            return created;
+            this.gateway = await this.StartGatewayAsync(serverUrl, apiKey, cancellationToken);
+            return this.gateway;
         }
         finally
         {
@@ -56,23 +51,26 @@ internal sealed class ExtensionServices : IWorkspaceContextProvider, IAsyncDispo
         }
     }
 
+    /// <summary>Starts a gateway for new settings; the running one is stopped only once the new one listens.</summary>
     public async Task<McpGateway> RestartGatewayAsync(string serverUrl, string apiKey, CancellationToken cancellationToken)
     {
         await this.gatewayLock.WaitAsync(cancellationToken);
         try
         {
-            if (this.gateway is not null)
+            McpGateway created = await this.StartGatewayAsync(serverUrl, apiKey, cancellationToken);
+            McpGateway? previous = this.gateway;
+            this.gateway = created;
+            if (previous is not null)
             {
-                await this.gateway.DisposeAsync();
-                this.gateway = null;
+                await previous.DisposeAsync();
             }
+
+            return created;
         }
         finally
         {
             this.gatewayLock.Release();
         }
-
-        return await this.EnsureGatewayAsync(serverUrl, apiKey, cancellationToken);
     }
 
     public async Task WriteOutputAsync(string text, CancellationToken cancellationToken)
@@ -94,8 +92,7 @@ internal sealed class ExtensionServices : IWorkspaceContextProvider, IAsyncDispo
 
     public async Task<WorkspaceContext> GetAsync(CancellationToken cancellationToken)
     {
-        string? packages = PackagesDirectoryLocator.Detect();
-        string? sdkVersion = packages is null ? null : Directory.GetParent(packages)?.Name;
+        string? sdkVersion = PackagesDirectoryLocator.SdkVersion(PackagesDirectoryLocator.Detect());
         string? solutionDirectory = null;
         try
         {
@@ -150,6 +147,24 @@ internal sealed class ExtensionServices : IWorkspaceContextProvider, IAsyncDispo
         }
     }
 
+    private async Task<McpGateway> StartGatewayAsync(string serverUrl, string apiKey, CancellationToken cancellationToken)
+    {
+        string? sdkVersion = PackagesDirectoryLocator.SdkVersion(PackagesDirectoryLocator.Detect());
+        var created = new McpGateway(this.GatewayHttp, this);
+        try
+        {
+            await created.StartAsync(serverUrl, apiKey, sdkVersion, cancellationToken);
+        }
+        catch
+        {
+            await created.DisposeAsync();
+            throw;
+        }
+
+        this.Log($"Workspace gateway listening at {created.Endpoint}.");
+        return created;
+    }
+
     private async Task StartConfiguredGatewayAsync()
     {
         ExtensionSettings settings = this.Settings.Load();
@@ -167,6 +182,17 @@ internal sealed class ExtensionServices : IWorkspaceContextProvider, IAsyncDispo
         try
         {
             McpGateway active = await this.EnsureGatewayAsync(settings.ServerUrl, apiKey, CancellationToken.None);
+
+            // Another Visual Studio instance that is still running owns the entry; taking it over at
+            // startup would cut that instance off. Configure Connection still replaces it on request.
+            Uri? current = McpJsonFile.ReadServerEndpoint(settings.McpConfigurationPath, settings.McpServerName);
+            if (current is not null && current != active.Endpoint &&
+                await McpGateway.IsRunningAtAsync(this.GatewayHttp, current, CancellationToken.None))
+            {
+                this.Log($"Left '{settings.McpServerName}' in {settings.McpConfigurationPath} pointing at the gateway of another running Visual Studio instance ({current}).");
+                return;
+            }
+
             McpJsonFile.Write(settings.McpConfigurationPath, settings.McpServerName, active.Endpoint!, active.BearerToken);
             this.Log($"Refreshed '{settings.McpServerName}' in {settings.McpConfigurationPath}.");
         }

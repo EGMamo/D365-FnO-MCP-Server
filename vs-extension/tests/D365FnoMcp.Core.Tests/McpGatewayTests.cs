@@ -120,4 +120,27 @@ public class McpGatewayTests
         Assert.Equal("SalesModel", (string?)body["result"]!["structuredContent"]!["model"]);
         Assert.Equal(0, upstream.RequestCount);
     }
+
+    [Fact]
+    public async Task RecognizesARunningGatewayOnlyWhileItListens()
+    {
+        await using var gateway = new McpGateway(new HttpClient(new Upstream()), new ContextProvider());
+        await gateway.StartAsync("https://app.example.net", "upstream-secret", null, CancellationToken.None);
+        Uri endpoint = gateway.Endpoint!;
+        using var http = new HttpClient();
+
+        Assert.True(await McpGateway.IsRunningAtAsync(http, endpoint, CancellationToken.None));
+
+        await gateway.DisposeAsync();
+        Assert.False(await McpGateway.IsRunningAtAsync(http, endpoint, CancellationToken.None));
+        Assert.False(await McpGateway.IsRunningAtAsync(http, new Uri("https://app.example.net/mcp"), CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task RefusesAPlainHttpRemoteUpstream()
+    {
+        await using var gateway = new McpGateway(new HttpClient(new Upstream()), new ContextProvider());
+        await Assert.ThrowsAsync<FormatException>(() =>
+            gateway.StartAsync("http://app.example.net", "upstream-secret", null, CancellationToken.None));
+    }
 }

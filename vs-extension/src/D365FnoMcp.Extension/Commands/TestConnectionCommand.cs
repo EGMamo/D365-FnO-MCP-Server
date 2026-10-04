@@ -33,7 +33,7 @@ internal sealed class TestConnectionCommand : Command
 
         try
         {
-            ServerUrl.Normalize(settings.ServerUrl);
+            ServerUrl.NormalizeSecure(settings.ServerUrl);
         }
         catch (FormatException ex)
         {
