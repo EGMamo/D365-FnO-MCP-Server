@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import {
   artifactBundleDirectory,
   createArtifactBundle,
@@ -215,8 +216,17 @@ function validateCommands(commands: AcquisitionCommand[], label: string): void {
   }
 }
 
+const RUN_LOCK_HEARTBEAT_INTERVAL_MS = 5_000;
+const RUN_LOCK_STALE_AFTER_MS = 30_000;
+
+interface RunLockOwner {
+  pid: number;
+  instanceId: string;
+  heartbeatAt: string;
+}
+
 function isProcessRunning(pid: number): boolean {
-  if (!Number.isSafeInteger(pid) || pid <= 0) return true;
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
   try {
     process.kill(pid, 0);
     return true;
@@ -225,30 +235,71 @@ function isProcessRunning(pid: number): boolean {
   }
 }
 
-function acquireRunLock(file: string, runId: string): void {
+function writeRunLock(file: string, owner: RunLockOwner, flag: 'wx' | 'w' = 'w'): void {
+  fs.writeFileSync(file, JSON.stringify(owner), {
+    encoding: 'utf8',
+    flag,
+    mode: 0o600,
+  });
+}
+
+function acquireRunLock(file: string, runId: string): RunLockOwner {
+  const owner = { pid: process.pid, instanceId: randomUUID(), heartbeatAt: new Date().toISOString() };
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      fs.writeFileSync(file, JSON.stringify({ pid: process.pid }), {
-        encoding: 'utf8',
-        flag: 'wx',
-        mode: 0o600,
-      });
-      return;
+      writeRunLock(file, owner, 'wx');
+      return owner;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-      let owner: { pid?: number };
+      let existing: Partial<RunLockOwner>;
       try {
-        owner = JSON.parse(fs.readFileSync(file, 'utf8')) as { pid?: number };
+        existing = JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<RunLockOwner>;
       } catch {
-        throw new Error(`Acquisition run ${runId} has an unreadable lock file.`);
+        fs.rmSync(file, { force: true });
+        continue;
       }
-      if (isProcessRunning(owner.pid ?? 0)) {
+      const heartbeat = Date.parse(existing.heartbeatAt ?? '');
+      const isLive =
+        typeof existing.instanceId === 'string' &&
+        existing.instanceId.length > 0 &&
+        isProcessRunning(existing.pid ?? 0) &&
+        Number.isFinite(heartbeat) &&
+        Date.now() - heartbeat < RUN_LOCK_STALE_AFTER_MS;
+      if (isLive) {
         throw new Error(`Acquisition run ${runId} is already in progress.`);
       }
       fs.rmSync(file, { force: true });
     }
   }
   throw new Error(`Could not acquire the lock for acquisition run ${runId}.`);
+}
+
+function refreshRunLock(file: string, owner: RunLockOwner): void {
+  try {
+    const current = JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<RunLockOwner>;
+    if (current.instanceId !== owner.instanceId) return;
+    writeRunLock(file, { ...owner, heartbeatAt: new Date().toISOString() });
+  } catch {
+    // The owner will fail on its next guarded operation if the lock disappears.
+  }
+}
+
+function bundleTimestamp(bundle: ValidatedArtifactBundle): number {
+  return Math.max(
+    Date.parse(bundle.manifest.createdAt),
+    Date.parse(bundle.manifest.builtAt),
+    Date.parse(bundle.manifest.publishedAt)
+  );
+}
+
+function rejectOlderBundle(candidate: ValidatedArtifactBundle, active: ValidatedArtifactBundle | null): void {
+  if (!active) return;
+  if (bundleTimestamp(candidate) <= bundleTimestamp(active)) {
+    throw new Error(
+      `Refusing to promote artifact ${candidate.manifest.bundleId}: it is not newer than ` +
+        `the active bundle ${active.manifest.bundleId}.`
+    );
+  }
 }
 
 export function validateAcquisitionWorkerConfig(config: AcquisitionWorkerConfig): void {
@@ -371,6 +422,10 @@ export class LocalArtifactPublisher implements ArtifactPublisher {
     }
     signal.throwIfAborted();
     const pointers = readArtifactPointers(this.storeRoot);
+    const active = pointers.active
+      ? validateArtifactBundle(artifactBundleDirectory(this.storeRoot, pointers.active.bundleId), policy)
+      : null;
+    rejectOlderBundle(bundle, active);
     const promoted = promoteArtifactBundle(
       this.storeRoot,
       bundle.manifest.bundleId,
@@ -428,7 +483,9 @@ export async function runAcquisitionWorker(
   if (previous?.state === 'succeeded') return previous;
 
   const lockFile = path.join(runDirectory, '.lock');
-  acquireRunLock(lockFile, config.runId);
+  const lockOwner = acquireRunLock(lockFile, config.runId);
+  const lockHeartbeat = setInterval(() => refreshRunLock(lockFile, lockOwner), RUN_LOCK_HEARTBEAT_INTERVAL_MS);
+  lockHeartbeat.unref();
   let status: AcquisitionRunStatus;
   try {
     fs.rmSync(workDirectory, { recursive: true, force: true });
@@ -445,6 +502,7 @@ export async function runAcquisitionWorker(
     };
     writeJsonAtomic(file, status);
   } catch (error) {
+    clearInterval(lockHeartbeat);
     fs.rmSync(lockFile, { force: true });
     throw error;
   }
@@ -551,6 +609,7 @@ export async function runAcquisitionWorker(
       status.error = safeError(cleanupError);
     }
     clearTimeout(timeout);
+    clearInterval(lockHeartbeat);
     options.signal?.removeEventListener('abort', abortFromCaller);
     status.currentPhase = null;
     status.completedAt = now().toISOString();

@@ -339,10 +339,31 @@ export class AzureBlobArtifactWriter {
     promotedAt = new Date().toISOString()
   ): Promise<ArtifactPointerSnapshot> {
     this.assertLeaseHealthy();
-    await this.validateRemoteBundle(bundleId, policy);
+    const candidate = await this.validateRemoteBundle(bundleId, policy);
     const current = await this.store.readPointers();
     assertExpectedRevision(current, expectedRevision);
     if (current.pointers.active?.bundleId === bundleId) return current;
+    const active = current.pointers.active
+      ? await this.validateRemoteBundle(current.pointers.active.bundleId, policy)
+      : null;
+    if (active) {
+      const candidateTime = Math.max(
+        Date.parse(candidate.manifest.createdAt),
+        Date.parse(candidate.manifest.builtAt),
+        Date.parse(candidate.manifest.publishedAt)
+      );
+      const activeTime = Math.max(
+        Date.parse(active.manifest.createdAt),
+        Date.parse(active.manifest.builtAt),
+        Date.parse(active.manifest.publishedAt)
+      );
+      if (candidateTime <= activeTime) {
+        throw new Error(
+          `Refusing to promote artifact ${candidate.manifest.bundleId}: it is not newer than ` +
+            `the active bundle ${active.manifest.bundleId}.`
+        );
+      }
+    }
     const next: ArtifactPointers = {
       contract: ARTIFACT_CONTRACT_NAME,
       contractVersion: ARTIFACT_CONTRACT_VERSION,
@@ -404,10 +425,10 @@ export class AzureBlobArtifactWriter {
   private async validateRemoteBundle(
     bundleId: string,
     policy: ArtifactCompatibilityPolicy
-  ): Promise<void> {
+  ): Promise<ValidatedArtifactBundle> {
     const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'd365-azure-artifact-'));
     try {
-      await this.store.materializeBundle(bundleId, { localStoreRoot: temporary, policy });
+      return await this.store.materializeBundle(bundleId, { localStoreRoot: temporary, policy });
     } finally {
       fs.rmSync(temporary, { recursive: true, force: true });
     }
