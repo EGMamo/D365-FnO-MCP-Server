@@ -132,6 +132,10 @@ describe('task guidance', () => {
       'create product receipts',
       'the packing slip id',
     ]);
+    // Trailing punctuation moves embedding scores, so it is dropped; a one-clause request stays one entry.
+    expect(splitTask('enables automated Sales Order creation from an Excel file.')).toEqual([
+      'enables automated Sales Order creation from an Excel file',
+    ]);
   });
 
   it('falls back to keywords without the model and attaches task topics once per session', async () => {
@@ -144,6 +148,8 @@ describe('task guidance', () => {
       fs.writeFileSync(path.join(kbDir, '02-colors.md'), '---\nnote: Color groups.\n---\n# Color groups\n');
       const filter = await KnowledgeFilter.create(kbDir);
       const session = new KnowledgeSession();
+      const gap = await filter.guidance('generate an electronic reporting format.');
+      expect(gap).toMatchObject({ coverage: 'none', uncovered: ['generate an electronic reporting format'] });
       const guidance = await filter.guidance('batch that posts arrival journals and creates product receipts', session);
       expect(guidance).toMatchObject({ coverage: 'strong', matchedBy: 'keywords', topics: [{ topic: 'd365kb://01-receipts' }] });
 
@@ -190,6 +196,9 @@ describe.skipIf(!modelDir)('knowledge embeddings (needs npm run fetch-model)', (
     expect(covered.topics[0].topic).toBe('d365kb://25-arrival-journals-to-product-receipts');
     const gap = await filter.guidance('generate an electronic reporting format for the Brazilian tax authority');
     expect(gap.coverage).not.toBe('strong');
+    const excel = await filter.guidance('enables automated Sales Order creation from an Excel file.');
+    expect(excel.coverage).toBe('strong');
+    expect(excel.topics[0].topic).toBe('d365kb://26-sales-orders-from-excel');
   }, 120_000);
 
   it('blocks a draft that restates an existing topic in different words', async () => {
