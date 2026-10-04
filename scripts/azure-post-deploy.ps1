@@ -299,26 +299,33 @@ if (-not (Test-Path 'F:\')) {
 }
 New-Item -ItemType Directory -Force F:\worker, F:\worker\runs, F:\worker\bin, F:\worker\tools | Out-Null
 
-# Node.js 24 (latest 24.x)
+# Node.js 24 (latest 24.x). Run Command uses Windows PowerShell 5.1, which does not enumerate a
+# JSON array from Invoke-RestMethod, so pick the installer from the release's checksum list.
 if (-not (Test-Path 'C:\Program Files\nodejs\node.exe') -or -not ((& 'C:\Program Files\nodejs\node.exe' --version) -like 'v24.*')) {
-    $ver = (Invoke-RestMethod https://nodejs.org/dist/index.json | Where-Object version -like 'v24.*' | Select-Object -First 1).version
-    Invoke-WebRequest "https://nodejs.org/dist/$ver/node-$ver-x64.msi" -OutFile "$env:TEMP\node.msi"
+    $nodeDist = 'https://nodejs.org/dist/latest-v24.x'
+    Invoke-WebRequest "$nodeDist/SHASUMS256.txt" -OutFile "$env:TEMP\node-sums.txt" -UseBasicParsing
+    $entry = [regex]::Match((Get-Content "$env:TEMP\node-sums.txt" -Raw), '(?m)^([0-9a-f]{64})\s+(node-v24\.\d+\.\d+-x64\.msi)\s*$')
+    if (-not $entry.Success) { throw "No Node.js 24 x64 installer is listed in $nodeDist/SHASUMS256.txt." }
+    $msi = $entry.Groups[2].Value
+    Write-Output "Downloading $msi"
+    Invoke-WebRequest "$nodeDist/$msi" -OutFile "$env:TEMP\node.msi" -UseBasicParsing
+    if ((Get-FileHash "$env:TEMP\node.msi" -Algorithm SHA256).Hash -ne $entry.Groups[1].Value) { throw "Checksum mismatch for $msi." }
     $p = Start-Process msiexec.exe -Wait -PassThru -ArgumentList "/i `"$env:TEMP\node.msi`" /qn /norestart"
-    if ($p.ExitCode -ne 0) { throw "Node.js install failed ($($p.ExitCode))." }
+    if ($p.ExitCode -notin 0, 3010) { throw "Node.js install failed ($($p.ExitCode))." }
 }
 $env:Path = "C:\Program Files\nodejs;$env:Path"
 Write-Output "node $(node --version)"
 
 # Power Platform CLI (.NET Framework build, needed for 'pac tool xpp')
 if (-not (Get-Command pac -ErrorAction SilentlyContinue)) {
-    Invoke-WebRequest https://aka.ms/PowerAppsCLI -OutFile "$env:TEMP\pac.msi"
+    Invoke-WebRequest https://aka.ms/PowerAppsCLI -OutFile "$env:TEMP\pac.msi" -UseBasicParsing
     $p = Start-Process msiexec.exe -Wait -PassThru -ArgumentList "/i `"$env:TEMP\pac.msi`" /qn /norestart"
-    if ($p.ExitCode -ne 0) { throw "PAC CLI install failed ($($p.ExitCode))." }
+    if ($p.ExitCode -notin 0, 3010) { throw "PAC CLI install failed ($($p.ExitCode))." }
 }
 
 # AzCopy, used by acquire-ude-assets.ps1 for the large asset downloads
 if (-not (Test-Path F:\worker\tools\azcopy.exe)) {
-    Invoke-WebRequest https://aka.ms/downloadazcopy-v10-windows -OutFile "$env:TEMP\azcopy.zip"
+    Invoke-WebRequest https://aka.ms/downloadazcopy-v10-windows -OutFile "$env:TEMP\azcopy.zip" -UseBasicParsing
     Expand-Archive "$env:TEMP\azcopy.zip" "$env:TEMP\azcopy" -Force
     Copy-Item (Get-ChildItem "$env:TEMP\azcopy" -Recurse -Filter azcopy.exe | Select-Object -First 1).FullName F:\worker\tools\azcopy.exe
 }
@@ -328,15 +335,17 @@ if ($machinePath -notlike '*F:\worker\tools*') {
 }
 
 # Worker build from master (public repository)
-Invoke-WebRequest https://github.com/EGMamo/D365-FnO-MCP-Server/archive/refs/heads/master.zip -OutFile "$env:TEMP\src.zip"
+Invoke-WebRequest https://github.com/EGMamo/D365-FnO-MCP-Server/archive/refs/heads/master.zip -OutFile "$env:TEMP\src.zip" -UseBasicParsing
 Remove-Item F:\worker\src, F:\worker\app -Recurse -Force -ErrorAction SilentlyContinue
 Expand-Archive "$env:TEMP\src.zip" F:\worker\src -Force
 Move-Item F:\worker\src\D365-FnO-MCP-Server-master F:\worker\app
 Remove-Item F:\worker\src -Recurse -Force
 Set-Location F:\worker\app
-& npm ci --no-audit --no-fund 2>&1 | Select-Object -Last 5
+# cmd merges npm's stderr: in Windows PowerShell 5.1 a redirected stderr line (an npm warning)
+# is a terminating error under ErrorActionPreference Stop.
+& cmd.exe /c 'npm ci --no-audit --no-fund 2>&1' | Select-Object -Last 5
 if ($LASTEXITCODE -ne 0) { throw 'npm ci failed.' }
-& npm run build 2>&1 | Select-Object -Last 5
+& cmd.exe /c 'npm run build 2>&1' | Select-Object -Last 5
 if ($LASTEXITCODE -ne 0) { throw 'npm run build failed.' }
 & node dist\src\index.js --version
 if ($LASTEXITCODE -ne 0) { throw 'The worker build does not start.' }
