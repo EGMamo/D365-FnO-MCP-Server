@@ -222,6 +222,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `prepare-bundle` crashed with exit code 134 (JavaScript heap out of memory) on a full X++ SDK:
+  the index pass's cleanup loaded every label row in every language into memory to find stale
+  ones. SQLite now finds and deletes stale objects and labels itself, so memory no longer grows
+  with the number of labels.
 - `get_task_guidance` matched a one-line request to an unrelated topic because a trailing period
   shifted the embedding score; clauses are now matched without trailing punctuation, and a request
   that does not split into clauses is reported as uncovered when no topic reaches the threshold.

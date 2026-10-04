@@ -539,57 +539,69 @@ export interface PruneStats {
   xrefs: number;
 }
 
+/** Loads `paths` into a new temporary table, so a statement can compare indexed rows with them. */
+function createTempPathTable(db: Database, table: string, paths: Iterable<string>): void {
+  db.exec(`DROP TABLE IF EXISTS temp.${table}; CREATE TEMP TABLE ${table} (path TEXT PRIMARY KEY) WITHOUT ROWID`);
+  const insert = db.prepare(`INSERT OR IGNORE INTO temp.${table} (path) VALUES (?)`);
+  transaction(db, () => {
+    for (const p of paths) insert.run(p);
+  })();
+}
+
 /**
  * Remove objects/labels whose backing files were not seen during an index run,
  * plus any xrefs left dangling by those deletions.
+ *
+ * SQLite finds the stale rows itself. A full PackagesLocalDirectory has tens of
+ * millions of labels across its languages, more rows than fit in the JavaScript
+ * heap.
  */
 export function prune(db: Database, seenObjectFiles: Set<string>, seenLabelFiles: Set<string>): PruneStats {
-  const stale = db
-    .prepare(`SELECT id, type, name, file_path FROM ax_objects`)
-    .all() as { id: number; type: string; name: string; file_path: string }[];
+  createTempPathTable(db, 'prune_seen_objects', seenObjectFiles);
+  createTempPathTable(db, 'prune_seen_labels', seenLabelFiles);
+  try {
+    const objects = transaction(db, () => {
+      db.prepare(
+        `DELETE FROM ax_xref WHERE EXISTS (
+           SELECT 1 FROM ax_objects o
+           WHERE o.type = ax_xref.from_type AND o.name = ax_xref.from_name
+             AND o.file_path NOT IN (SELECT path FROM temp.prune_seen_objects)
+         )`
+      ).run();
+      return Number(
+        db.prepare(`DELETE FROM ax_objects WHERE file_path NOT IN (SELECT path FROM temp.prune_seen_objects)`).run()
+          .changes
+      );
+    })();
 
-  const doomed = stale.filter((row) => !seenObjectFiles.has(row.file_path));
+    // Labels with an empty source_file predate source tracking; leave them alone.
+    const labels = transaction(db, () => {
+      const deleted = db
+        .prepare(
+          `DELETE FROM ax_labels
+           WHERE source_file <> '' AND source_file NOT IN (SELECT path FROM temp.prune_seen_labels)`
+        )
+        .run();
+      db.prepare(
+        `DELETE FROM ax_label_sources WHERE source_file NOT IN (SELECT path FROM temp.prune_seen_labels)`
+      ).run();
+      return Number(deleted.changes);
+    })();
 
-  const deleteObject = db.prepare(`DELETE FROM ax_objects WHERE id = ?`);
-  const deleteXrefs = db.prepare(`DELETE FROM ax_xref WHERE from_type = ? AND from_name = ?`);
-  const run = transaction(db, (rows: typeof doomed) => {
-    for (const row of rows) {
-      deleteObject.run(row.id);
-      deleteXrefs.run(row.type, row.name);
-    }
-  });
-  run(doomed);
+    // Xrefs pointing at objects that no longer exist stay valid as "unresolved"
+    // references, but xrefs *from* deleted objects are meaningless.
+    const orphaned = db
+      .prepare(
+        `DELETE FROM ax_xref WHERE NOT EXISTS (
+           SELECT 1 FROM ax_objects o WHERE o.type = ax_xref.from_type AND o.name = ax_xref.from_name
+         )`
+      )
+      .run();
 
-  // Labels with an empty source_file predate source tracking; leave them alone.
-  const labelRows = db
-    .prepare(`SELECT id, source_file FROM ax_labels WHERE source_file <> ''`)
-    .all() as { id: number; source_file: string }[];
-  const doomedLabels = labelRows.filter((row) => !seenLabelFiles.has(row.source_file));
-  const deleteLabel = db.prepare(`DELETE FROM ax_labels WHERE id = ?`);
-  const labelSourceRows = db
-    .prepare(`SELECT source_file FROM ax_label_sources`)
-    .all() as { source_file: string }[];
-  const doomedLabelSources = labelSourceRows.filter((row) => !seenLabelFiles.has(row.source_file));
-  const deleteLabelSource = db.prepare(`DELETE FROM ax_label_sources WHERE source_file = ?`);
-  const runLabels = transaction(db, (rows: typeof doomedLabels) => {
-    for (const row of rows) {
-      deleteLabel.run(row.id);
-    }
-    for (const row of doomedLabelSources) deleteLabelSource.run(row.source_file);
-  });
-  runLabels(doomedLabels);
-
-  // Xrefs pointing at objects that no longer exist stay valid as "unresolved"
-  // references, but xrefs *from* deleted objects are meaningless.
-  const orphaned = db
-    .prepare(
-      `DELETE FROM ax_xref WHERE NOT EXISTS (
-         SELECT 1 FROM ax_objects o WHERE o.type = ax_xref.from_type AND o.name = ax_xref.from_name
-       )`
-    )
-    .run();
-
-  return { objects: doomed.length, labels: doomedLabels.length, xrefs: Number(orphaned.changes) };
+    return { objects, labels, xrefs: Number(orphaned.changes) };
+  } finally {
+    db.exec('DROP TABLE IF EXISTS temp.prune_seen_objects; DROP TABLE IF EXISTS temp.prune_seen_labels');
+  }
 }
 
 export function deleteXrefsFrom(db: Database, fromType: string, fromName: string) {

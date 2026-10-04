@@ -5,7 +5,7 @@ import path from 'path';
 import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
 import type { Database } from '../src/indexer/db.js';
-import { openDb, getObjectByName, searchSymbols, resolveLabelByLanguage, setMeta, getMeta, META_KEYS, type Xref } from '../src/indexer/db.js';
+import { openDb, prune, getObjectByName, searchSymbols, resolveLabelByLanguage, setMeta, getMeta, META_KEYS, type Xref } from '../src/indexer/db.js';
 import { buildIndex, getIndexStats } from '../src/indexer/buildIndex.js';
 import { setSourceFileReads } from '../src/indexer/sourceFiles.js';
 import { logger } from '../src/utils/logger.js';
@@ -135,6 +135,45 @@ describe('Indexer DB Tests', () => {
     } finally {
       db.close();
       fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('prunes rows whose files were not seen, inside SQLite', () => {
+    const db = openDb(':memory:');
+    try {
+      db.exec(`
+        INSERT INTO ax_objects (id, type, name, package, file_path) VALUES
+          (1, 'Class', 'Kept', 'Pkg', '/pkg/AxClass/Kept.xml'),
+          (2, 'Class', 'Gone', 'Pkg', '/pkg/AxClass/Gone.xml');
+        INSERT INTO ax_methods (object_id, name) VALUES (2, 'run');
+        INSERT INTO ax_xref (from_type, from_name, to_type, to_name) VALUES
+          ('Class', 'Kept', 'Class', 'Gone'),
+          ('Class', 'Gone', 'Class', 'Kept'),
+          ('Table', 'NeverIndexed', 'Class', 'Kept');
+        INSERT INTO ax_labels (label_id, language, value, source_file) VALUES
+          ('A1', 'en-US', 'Kept label', '/labels/A.en-US.label.txt'),
+          ('B1', 'en-US', 'Gone label', '/labels/B.en-US.label.txt'),
+          ('Legacy1', 'en-US', 'Untracked label', '');
+        INSERT INTO ax_label_sources (source_file, label_count) VALUES
+          ('/labels/A.en-US.label.txt', 1),
+          ('/labels/B.en-US.label.txt', 1);
+      `);
+
+      const stats = prune(db, new Set(['/pkg/AxClass/Kept.xml']), new Set(['/labels/A.en-US.label.txt']));
+
+      expect(stats).toEqual({ objects: 1, labels: 1, xrefs: 1 });
+      const names = (rows: unknown[]) => rows.map((r) => Object.values(r as object).join('>'));
+      expect(names(db.prepare(`SELECT name FROM ax_objects`).all())).toEqual(['Kept']);
+      expect(db.prepare(`SELECT COUNT(*) AS n FROM ax_methods`).get()).toEqual({ n: 0 });
+      // Xrefs *to* a deleted object stay as unresolved references.
+      expect(names(db.prepare(`SELECT from_name, to_name FROM ax_xref`).all())).toEqual(['Kept>Gone']);
+      expect(names(db.prepare(`SELECT label_id FROM ax_labels ORDER BY label_id`).all())).toEqual(['A1', 'Legacy1']);
+      expect(names(db.prepare(`SELECT source_file FROM ax_label_sources`).all())).toEqual([
+        '/labels/A.en-US.label.txt',
+      ]);
+      expect(db.prepare(`SELECT COUNT(*) AS n FROM temp.sqlite_master`).get()).toEqual({ n: 0 });
+    } finally {
+      db.close();
     }
   });
 });
