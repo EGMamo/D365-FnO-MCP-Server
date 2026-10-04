@@ -15,7 +15,9 @@ a tenant, subscription or resource name: they take them from parameters or the A
   -ResourceGroup <resource-group> -Location <region> -EnvironmentName <env> -AlertEmail <address>
 
 # Operator steps after the first deployment (see below). Reads every name from the deployment outputs.
-./scripts/azure-post-deploy.ps1 -ResourceGroup <resource-group>
+# Without -DataverseUrl and -WorkerApplicationId it stops after setting up the worker VM.
+./scripts/azure-post-deploy.ps1 -ResourceGroup <resource-group> -DataverseUrl https://<org>.crm.dynamics.com `
+  -WorkerApplicationId <app id>
 ```
 
 `azure-deploy.ps1` writes `infra/main.<env>.local.bicepparam` (git-ignored, no secret values), keeps
@@ -130,9 +132,13 @@ healthy after the swap, the workflow swaps back.
 Rollback paths:
 
 - **Image:** swap the slots again; the previous image is still in `staging`.
-- **Index:** run `d365-fno-mcp-server artifact rollback --expected-revision <n>` on the worker VM
-  (it reaches Storage privately), then restart the web app so each instance pulls the previous
-  bundle. Restarting `staging` first and swapping keeps the API available during the change.
+- **Index:** run `node F:\worker\app\dist\src\index.js artifact rollback --expected-revision <n>`
+  on the worker VM through Run Command (`az vm start`, then `az vm run-command invoke
+  --command-id RunPowerShellScript --scripts @rollback.ps1`), with `D365_ARTIFACT_ACCOUNT_URL`,
+  `D365_ARTIFACT_CONTAINER` and `D365_ARTIFACT_MANAGED_IDENTITY_CLIENT_ID` set in the script from
+  the deployment outputs; it reaches Storage privately. Then restart the web app so each instance
+  pulls the previous bundle. Restarting `staging` first and swapping keeps the API available during
+  the change.
 
 Infrastructure-only redeploys must pass the currently deployed image as `apiImage`, or the web app
 and slot are reset to that parameter's value.
@@ -146,23 +152,63 @@ it, runs this through managed Run Command with run ID `scheduled-<yyyyMMddTHHmmZ
 node <workerRoot>\app\dist\src\index.js acquire --config <workerRoot>\acquisition.json --run-id <run id>
 ```
 
-then deallocates the VM whatever the outcome and fails its own run if acquisition failed. The
-worker's Blob acquisition lease remains the guard against overlapping runs.
+then deallocates the VM whatever the outcome, and fails its own run (raising the worker-run alert)
+if acquisition or the deallocation failed. The worker's Blob acquisition lease remains the guard
+against overlapping runs.
+
+A new environment is created with the schedule off (`workerSchedulerEnabled = false`), so nothing
+runs before the worker is prepared. `azure-post-deploy.ps1` turns it on after the first acquisition
+succeeds, and `azure-deploy.ps1` keeps it on for later redeploys. A hand-run redeploy must pass
+`workerSchedulerEnabled = true` once the schedule is on, or it is turned off again. The trigger has
+a fixed past start time, so saving or enabling the workflow does not start a run.
+
+To see recent runs and why one failed:
+
+```powershell
+az rest --method get --url "/subscriptions/{subscriptionId}/resourceGroups/<group>/providers/Microsoft.Logic/workflows/<scheduler>/runs?api-version=2019-05-01&`$top=5" `
+  --query "value[].{run:name, status:properties.status, start:properties.startTime, error:properties.error.message}" -o table
+az rest --method get --url "/subscriptions/{subscriptionId}/resourceGroups/<group>/providers/Microsoft.Logic/workflows/<scheduler>/runs/<run>/actions?api-version=2019-05-01" `
+  --query "value[].{action:name, status:properties.status, code:properties.code}" -o table
+```
+
+`<scheduler>` is the deployment's `schedulerName` output. The worker's own report for a run is
+`<workerRoot>\runs\scheduled-<time>\status.json`, with step output in the `logs` folder next to it.
 
 ## Operator steps outside the template
 
-These are deliberately not automated and must not be done implicitly by the template. `scripts/azure-post-deploy.ps1 -ResourceGroup <group>` runs them from an
-operator machine, reading every name from this deployment's outputs (`Get-Help` lists its steps):
+These are deliberately not done by the template. `scripts/azure-post-deploy.ps1` runs them from an
+operator machine, reading every name from this deployment's outputs (`Get-Help` lists its steps).
+Every VM step goes through Run Command, so the worker needs no RDP, Bastion or inbound rule.
 
-1. Create the `mcp-api-keys` secret in the API vault and the Power Platform credential in the
+```powershell
+./scripts/azure-post-deploy.ps1 -ResourceGroup <group> -DataverseUrl https://<org>.crm.dynamics.com `
+  -WorkerApplicationId <app id>
+```
+
+1. Create the `mcp-api-keys` secret in the API vault and the Power Platform client secret in the
    worker vault. Never put secret values in parameter files, source control, logs or chat.
-2. Initialize and format the worker data disk, install Node.js 24, the .NET Framework PAC CLI and a
-   release build of this repository under `workerRoot\app`, and write `workerRoot\acquisition.json`
-   with `destination.accountUrl`, `containerName` and `managedIdentityClientId` from the deployment
-   outputs.
-3. Configure the GitHub `production` environment with the outputs listed in `deploy.yml`.
-4. Publish and promote a first bundle before the API can become healthy; until then it fails
-   closed.
+2. Initialize and format the worker data disk and install Node.js 24, AzCopy and a build of the
+   current `master` commit of `-Repository` (default this repository) under `F:\worker\app`
+   (`SetupWorker`). Rerun it to pick up worker changes. The scripts assume the default
+   `workerRoot` of `F:\worker`.
+3. Check that the worker can read the secret, sign in to Dataverse, read the Finance and
+   Operations version and resolve the X++ SDK downloads, then write `F:\worker\acquisition.json`
+   with the destination from the deployment outputs (`PrepareWorker`).
+4. Publish, promote and verify a first bundle (`FirstAcquisition`); until then the API fails
+   closed. Then re-enable the scheduler.
+5. Configure the GitHub `production` environment with the outputs listed in `deploy.yml` and run
+   the Deploy workflow.
+
+Two things only you can do, before `PrepareWorker`:
+
+- Create a dedicated app registration for the worker, store its client secret with
+  `SeedWorkerSecret`, and add it as an application user with a security role in the Power Platform
+  environment (Power Platform admin center, the environment, Settings > Users + permissions >
+  Application users). Give it Basic User; if `PrepareWorker` reports a missing privilege, add it
+  through a custom role. Avoid System Administrator, because code on the worker can read this
+  secret.
+- Decide how to import the cross-reference (XRef) data. The worker downloads and hashes the
+  backup for provenance, but restoring it needs a SQL Server, so bundles have no XRef usages yet.
 
 ## Validation
 

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { ConfigError, loadConfig } from '../src/configLoader.js';
+import { DEFAULT_REQUIRED_CAPABILITIES } from '../src/indexer/capabilityCoverage.js';
 
 const key = (char: string) => char.repeat(40);
 
@@ -87,5 +88,21 @@ describe('loadConfig', () => {
     expect(config.artifactSource).toBe('azure-blob');
     expect(config.artifactAccountUrl).toBe('https://account.blob.core.windows.net');
     expect(config.artifactManagedIdentityClientId).toBe('');
+  });
+
+  it('requires the indexer-complete artifact capabilities unless D365_ARTIFACT_REQUIRED_CAPABILITIES overrides them', () => {
+    expect(loadConfig({ MCP_API_KEY: key('a') }).artifactRequiredCapabilities).toEqual([
+      ...DEFAULT_REQUIRED_CAPABILITIES,
+    ]);
+    expect(loadConfig({
+      MCP_API_KEY: key('a'),
+      D365_ARTIFACT_REQUIRED_CAPABILITIES: 'securityGraphs, codeMetadata',
+    }).artifactRequiredCapabilities).toEqual(['securityGraphs', 'codeMetadata']);
+    expect(issuesOf({
+      MCP_API_KEY: key('a'),
+      D365_ARTIFACT_REQUIRED_CAPABILITIES: 'codeMetadata,everything',
+    })).toEqual([
+      expect.stringMatching(/D365_ARTIFACT_REQUIRED_CAPABILITIES: .*unknown capabilities: everything/),
+    ]);
   });
 });

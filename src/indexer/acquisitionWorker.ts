@@ -14,14 +14,18 @@ import {
   promoteArtifactBundle,
   readArtifactPointers,
 } from './artifactPointers.js';
-import type {
-  ArtifactCompatibilityPolicy,
-  ArtifactValidationReport,
+import {
+  ARTIFACT_CAPABILITY_NAMES,
+  type ArtifactCompatibilityPolicy,
+  type ArtifactValidationReport,
 } from './artifactContract.js';
 import {
   AzureBlobArtifactStore,
   type ArtifactPointerSnapshot,
 } from './azureBlobArtifactStore.js';
+import { DEFAULT_REQUIRED_CAPABILITIES } from './capabilityCoverage.js';
+import { INDEX_SCHEMA_VERSION } from './db.js';
+import { VERSION } from '../version.js';
 
 export const ACQUISITION_PHASES = [
   'acquire',
@@ -50,7 +54,8 @@ export interface AcquisitionWorkerConfig {
   bundleOptionsFile: string;
   acquire: AcquisitionCommand[];
   build: AcquisitionCommand[];
-  policy: ArtifactCompatibilityPolicy;
+  /** Omitted fields default to this build's server version, index schema and complete capabilities. */
+  policy?: Partial<ArtifactCompatibilityPolicy>;
   timeoutMs: number;
   retainWorkDirectory?: boolean;
 }
@@ -61,6 +66,11 @@ export interface AcquisitionRunContext {
   sourceDatabase: string;
   bundleOptionsFile: string;
   signal: AbortSignal;
+}
+
+export interface AcquisitionStepContext extends AcquisitionRunContext {
+  /** Receives the step's stdout and stderr; under the run directory so it outlives cleanup. */
+  logFile: string;
 }
 
 export interface AcquisitionPhaseRecord {
@@ -100,7 +110,7 @@ export interface AcquisitionWorkerDependencies {
   now?: () => Date;
   executeCommand?: (
     command: AcquisitionCommand,
-    context: AcquisitionRunContext
+    context: AcquisitionStepContext
   ) => Promise<void>;
   createBundle?: (
     sourceDatabase: string,
@@ -311,6 +321,19 @@ function rejectOlderBundle(candidate: ValidatedArtifactBundle, active: Validated
   }
 }
 
+/** The configured compatibility policy with every omitted field set to what this build serves. */
+export function resolveAcquisitionPolicy(
+  policy: Partial<ArtifactCompatibilityPolicy> = {}
+): ArtifactCompatibilityPolicy {
+  return {
+    ...policy,
+    serverVersion: policy.serverVersion ?? VERSION,
+    minimumIndexSchemaVersion: policy.minimumIndexSchemaVersion ?? INDEX_SCHEMA_VERSION,
+    maximumIndexSchemaVersion: policy.maximumIndexSchemaVersion ?? INDEX_SCHEMA_VERSION,
+    requiredCapabilities: policy.requiredCapabilities ?? DEFAULT_REQUIRED_CAPABILITIES,
+  };
+}
+
 export function validateAcquisitionWorkerConfig(config: AcquisitionWorkerConfig): void {
   if (!config || typeof config !== 'object') throw new Error('Worker configuration must be an object.');
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(config.runId)) {
@@ -319,7 +342,12 @@ export function validateAcquisitionWorkerConfig(config: AcquisitionWorkerConfig)
   if (!config.runsRoot?.trim()) throw new Error('runsRoot is required.');
   if (!Array.isArray(config.acquire)) throw new Error('acquire must be an array.');
   if (!Array.isArray(config.build)) throw new Error('build must be an array.');
-  if (!config.policy || typeof config.policy !== 'object') throw new Error('policy is required.');
+  if (
+    config.policy !== undefined &&
+    (!config.policy || typeof config.policy !== 'object' || Array.isArray(config.policy))
+  ) {
+    throw new Error('policy must be an object.');
+  }
   const validationRoot = path.join(path.parse(path.resolve(config.runsRoot)).root, 'run-work');
   resolveWithin(validationRoot, config.sourceDatabase, 'sourceDatabase');
   resolveWithin(validationRoot, config.bundleOptionsFile, 'bundleOptionsFile');
@@ -330,14 +358,19 @@ export function validateAcquisitionWorkerConfig(config: AcquisitionWorkerConfig)
   if (!config.build.length) throw new Error('At least one build command is required.');
   validateCommands(config.acquire, 'acquire');
   validateCommands(config.build, 'build');
-  if (!config.policy.serverVersion) throw new Error('policy.serverVersion is required.');
-  if (!Array.isArray(config.policy.requiredCapabilities)) {
+  const policy = resolveAcquisitionPolicy(config.policy);
+  if (!policy.serverVersion) throw new Error('policy.serverVersion is required.');
+  if (!Array.isArray(policy.requiredCapabilities)) {
     throw new Error('policy.requiredCapabilities must be an array.');
   }
+  const capabilities = new Set<string>(ARTIFACT_CAPABILITY_NAMES);
+  if (policy.requiredCapabilities.some((capability) => !capabilities.has(capability))) {
+    throw new Error('policy.requiredCapabilities contains an unknown capability.');
+  }
   if (
-    !Number.isSafeInteger(config.policy.minimumIndexSchemaVersion) ||
-    !Number.isSafeInteger(config.policy.maximumIndexSchemaVersion) ||
-    config.policy.minimumIndexSchemaVersion > config.policy.maximumIndexSchemaVersion
+    !Number.isSafeInteger(policy.minimumIndexSchemaVersion) ||
+    !Number.isSafeInteger(policy.maximumIndexSchemaVersion) ||
+    policy.minimumIndexSchemaVersion > policy.maximumIndexSchemaVersion
   ) {
     throw new Error('The index schema compatibility range is invalid.');
   }
@@ -351,42 +384,63 @@ function expand(value: string, context: AcquisitionRunContext): string {
     .replaceAll('${BUNDLE_OPTIONS_FILE}', context.bundleOptionsFile);
 }
 
+/** `<run>/logs/<phase>-<position>-<step name>.log`; retries of a run append to the same file. */
+export function acquisitionStepLogFile(
+  runDirectory: string,
+  phase: AcquisitionPhase,
+  index: number,
+  name: string
+): string {
+  const safeName = name.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[-.]+|[-.]+$/g, '').slice(0, 80);
+  return path.join(runDirectory, 'logs', `${phase}-${index + 1}-${safeName || 'step'}.log`);
+}
+
 export async function executeAcquisitionCommand(
   command: AcquisitionCommand,
-  context: AcquisitionRunContext
+  context: AcquisitionStepContext
 ): Promise<void> {
   context.signal.throwIfAborted();
   const cwd = command.cwd
     ? resolveWithin(context.workDirectory, command.cwd, `${command.name}.cwd`)
     : context.workDirectory;
   fs.mkdirSync(cwd, { recursive: true });
-  const child = spawn(command.executable, (command.args ?? []).map((arg) => expand(arg, context)), {
-    cwd,
-    env: {
-      ...process.env,
-      ...Object.fromEntries(
-        Object.entries(command.env ?? {}).map(([key, value]) => [key, expand(value, context)])
-      ),
-    },
-    signal: context.signal,
-    stdio: 'ignore',
-    windowsHide: true,
-  });
-  await new Promise<void>((resolve, reject) => {
-    child.once('error', reject);
-    child.once('exit', (code, signal) => {
-      if (code === 0) resolve();
-      else {
-        reject(
-          new Error(
-            `Command step "${command.name}" failed with ${
-              signal ? `signal ${signal}` : `exit code ${code ?? 'unknown'}`
-            }.`
-          )
-        );
-      }
+  fs.mkdirSync(path.dirname(context.logFile), { recursive: true });
+  // Step output can name internal hosts or echo inputs. The mode keeps the log private on POSIX;
+  // on Windows it inherits the runs root's ACL, which the worker setup limits to SYSTEM and
+  // Administrators. Steps must not print credentials either way.
+  const log = fs.openSync(context.logFile, 'a', 0o600);
+  try {
+    fs.writeSync(log, `[${new Date().toISOString()}] ${command.name}: started\n`);
+    const child = spawn(command.executable, (command.args ?? []).map((arg) => expand(arg, context)), {
+      cwd,
+      env: {
+        ...process.env,
+        ...Object.fromEntries(
+          Object.entries(command.env ?? {}).map(([key, value]) => [key, expand(value, context)])
+        ),
+      },
+      signal: context.signal,
+      stdio: ['ignore', log, log],
+      windowsHide: true,
     });
-  });
+    await new Promise<void>((resolve, reject) => {
+      child.once('error', reject);
+      child.once('exit', (code, signal) => {
+        if (code === 0) resolve();
+        else {
+          reject(
+            new Error(
+              `Command step "${command.name}" failed with ${
+                signal ? `signal ${signal}` : `exit code ${code ?? 'unknown'}`
+              }. Output: ${context.logFile}`
+            )
+          );
+        }
+      });
+    });
+  } finally {
+    fs.closeSync(log);
+  }
 }
 
 function parseBundleOptions(file: string): CreateArtifactBundleOptions {
@@ -395,13 +449,17 @@ function parseBundleOptions(file: string): CreateArtifactBundleOptions {
 }
 
 async function runCommands(
+  phase: AcquisitionPhase,
   commands: AcquisitionCommand[],
   context: AcquisitionRunContext,
   execute: NonNullable<AcquisitionWorkerDependencies['executeCommand']>
 ): Promise<void> {
-  for (const command of commands) {
+  for (const [index, command] of commands.entries()) {
     context.signal.throwIfAborted();
-    await execute(command, context);
+    await execute(command, {
+      ...context,
+      logFile: acquisitionStepLogFile(context.runDirectory, phase, index, command.name),
+    });
   }
 }
 
@@ -478,6 +536,7 @@ export async function runAcquisitionWorker(
   dependencies: AcquisitionWorkerDependencies = {}
 ): Promise<AcquisitionRunStatus> {
   validateAcquisitionWorkerConfig(config);
+  const policy = resolveAcquisitionPolicy(config.policy);
   const now = dependencies.now ?? (() => new Date());
   const execute = dependencies.executeCommand ?? executeAcquisitionCommand;
   const createBundle = dependencies.createBundle ?? createArtifactBundle;
@@ -563,8 +622,8 @@ export async function runAcquisitionWorker(
   };
 
   try {
-    await phase('acquire', () => runCommands(config.acquire, context, execute));
-    await phase('build', () => runCommands(config.build, context, execute));
+    await phase('acquire', () => runCommands('acquire', config.acquire, context, execute));
+    await phase('build', () => runCommands('build', config.build, context, execute));
     await phase('bundle', () => {
       bundle = createBundle(
         context.sourceDatabase,
@@ -575,7 +634,7 @@ export async function runAcquisitionWorker(
     });
     await phase('validate', () => {
       if (!bundle) throw new Error('Artifact bundle was not created.');
-      bundle = validateBundle(bundle.directory, config.policy);
+      bundle = validateBundle(bundle.directory, policy);
       status.validation = {
         status: bundle.validationReport.status,
         checks: bundle.validationReport.checks,
@@ -583,7 +642,7 @@ export async function runAcquisitionWorker(
     });
     await phase('publish', async () => {
       if (!bundle) throw new Error('Validated artifact bundle is unavailable.');
-      const result = await publisher.publish(bundle, config.policy, controller.signal);
+      const result = await publisher.publish(bundle, policy, controller.signal);
       status.pointerRevision = result.revision;
     });
     completedPhases = true;

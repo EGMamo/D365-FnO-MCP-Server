@@ -9,9 +9,9 @@ read-only MCP API. Developer workstations do not build or upload production inde
 Scheduled Azure worker
   Entra workload identity / service principal
        |
-       | pac CLI: download approved D365 SDK assets
+       | Dev Tools service: download the X++ SDK and assets for the environment's version
        v
-isolated candidate directory
+per-version source cache -> new run work directory
   parse -> build SQLite -> import approved data -> validate
        |
        | emit immutable, content-addressed bundle
@@ -31,8 +31,8 @@ endpoint.
 
 1. Authenticate noninteractively. Prefer managed identity where the acquisition endpoint supports
    it; otherwise store the Entra application secret in Key Vault and grant only the worker access.
-2. Download SDK assets into a new private candidate directory and record non-secret source
-   provenance.
+2. Download SDK assets once per version into the worker's private cache and record non-secret
+   source provenance. Each run builds its candidate in a new work directory.
 3. Build a new SQLite database. Never update the active database in place.
 4. Validate SQLite integrity, schema version, required metadata, object counts, source-path
    sanitization, four-part D365 application version, capability completeness and source hashes.
@@ -51,7 +51,7 @@ endpoint.
 Run one private worker cycle with:
 
 ```powershell
-d365-fno-mcp-server acquire --config C:\worker\acquisition.json --run-id scheduled-2026-10-04
+node F:\worker\app\dist\src\index.js acquire --config F:\worker\acquisition.json --run-id scheduled-2026-10-04
 ```
 
 The scheduler supplies a stable, unique run ID. Reusing an ID after success is a no-op; reusing one
@@ -62,53 +62,67 @@ individual validation checks and the promoted pointer revision. The run's `work`
 removed after success, failure, cancellation or timeout unless `retainWorkDirectory` is explicitly
 enabled for a secured diagnostic environment.
 
-The JSON configuration has this shape:
+`scripts/azure-post-deploy.ps1 -Step PrepareWorker` writes the configuration for the Azure worker.
+It has this shape:
 
 ```json
 {
-  "runsRoot": "C:\\worker\\runs",
-  "sourceDatabase": "candidate\\d365_index.db",
+  "runsRoot": "F:\\worker\\runs",
+  "sourceDatabase": "d365_index.db",
   "bundleOptionsFile": "bundle-options.json",
-  "timeoutMs": 7200000,
+  "timeoutMs": 19800000,
   "acquire": [
     {
-      "name": "acquire-ude-assets",
-      "executable": "pwsh.exe",
-      "args": ["-NoProfile", "-File", "C:\\worker\\scripts\\acquire-ude-assets.ps1", "-OutputDirectory", "${WORK_DIR}\\assets"]
+      "name": "acquire-ude-sources",
+      "executable": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      "args": ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+        "-File", "F:\\worker\\app\\scripts\\worker\\acquire-ude-sources.ps1",
+        "-TenantId", "<tenant>", "-ApplicationId", "<app>",
+        "-DataverseEnvironmentUri", "https://contoso.crm.dynamics.com",
+        "-SecretName", "power-platform-client-secret", "-CacheRoot", "F:\\worker\\cache",
+        "-SourcesFile", "${WORK_DIR}\\sources.json"]
     }
   ],
   "build": [
     {
-      "name": "build-index",
-      "executable": "d365-fno-mcp-server.cmd",
-      "args": ["index", "--force", "--packages-dir", "${WORK_DIR}\\assets\\PackagesLocalDirectory", "--db-path", "${SOURCE_DB}"]
-    },
-    {
-      "name": "import-xref",
-      "executable": "d365-fno-mcp-server.cmd",
-      "args": ["index-xref", "--db-path", "${SOURCE_DB}"]
+      "name": "prepare-bundle",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "args": ["F:\\worker\\app\\dist\\src\\index.js", "prepare-bundle",
+        "--sources", "${WORK_DIR}\\sources.json", "--db-path", "${SOURCE_DB}",
+        "--bundle-options", "${BUNDLE_OPTIONS_FILE}"]
     }
   ],
-  "policy": {
-    "serverVersion": "0.1.0",
-    "minimumIndexSchemaVersion": 3,
-    "maximumIndexSchemaVersion": 3,
-    "requiredCapabilities": ["codeMetadata", "dataModelMetadata", "securityGraphs"]
-  },
   "destination": {
     "type": "azure-blob",
     "accountUrl": "https://example.blob.core.windows.net",
-    "containerName": "d365-artifacts"
+    "containerName": "d365-artifacts",
+    "managedIdentityClientId": "<worker identity client id>"
   }
 }
 ```
 
+`acquire-ude-sources.ps1` reads the Power Platform client secret from the worker Key Vault with the
+worker's managed identity, asks Dataverse for the environment's Finance and Operations version, and
+downloads the X++ SDK (`systemmetadata`, the package `pac tool xpp install` uses), the Visual Studio
+tools VSIX and the cross-reference backup for that version from the Dev Tools service. It keeps the
+extracted SDK per version under `F:\worker\cache\<version>\PackagesLocalDirectory`, so a run for an
+unchanged version downloads nothing, and writes `sources.json` with each file's size and SHA-256.
+`prepare-bundle` indexes that SDK and writes the bundle options with that provenance. Nothing needs
+PAC, RDP or a signed-in user. The cross-reference backup is recorded but not imported: restoring it
+needs a SQL Server the worker does not have, so bundles carry no XRef usages yet.
+
+Without `policy`, the worker applies the API's startup checks: this server's version, its index
+schema version, and the capabilities the indexer covers completely (none yet, see
+`src/indexer/capabilityCoverage.ts`).
+
 Command placeholders are limited to `${RUN_DIR}`, `${WORK_DIR}`, `${SOURCE_DB}` and
-`${BUNDLE_OPTIONS_FILE}`. The acquisition/build process must write the source database and a
-`CreateArtifactBundleOptions` JSON document at the configured relative paths. Use command
-environment variables for credentials; never put secrets, connection strings, SAS URLs or tokens
-in arguments or the bundle-options document. The worker discards child output and reports only
-step names and exit status, so command output cannot leak credentials into worker logs.
+`${BUNDLE_OPTIONS_FILE}`. A custom pipeline (`-Step UploadConfig -AcquisitionConfig <file>`) must
+write the source database and a `CreateArtifactBundleOptions` JSON document at the configured
+relative paths. Commands run without a shell, so name an `.exe` (`powershell.exe`, `node.exe`)
+rather than a `.cmd` wrapper. Read credentials at run time from the worker Key Vault (for example
+with `F:\worker\bin\Get-WorkerSecret.ps1`); never put secrets, connection strings, SAS URLs or
+tokens in arguments, `env` values (stored literally in the file) or the bundle-options document. Each step's output is kept in `<runsRoot>\<runId>\logs`; `SetupWorker`
+limits the worker folder to SYSTEM and Administrators, and steps must still not print credentials.
 
 `destination.type` may be `local` with `storeRoot`, or `azure-blob` with `accountUrl`,
 `containerName`, and optional `managedIdentityClientId`. Azure publication obtains the existing
