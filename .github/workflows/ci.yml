@@ -68,8 +68,11 @@ jobs:
           set -euo pipefail
           KEY=$(openssl rand -hex 32)
           docker run -d --name mcp-empty -e MCP_API_KEYS="ci=$KEY" d365-fno-mcp-server:ci
-          sleep 2
-          if docker inspect -f '{{.State.Running}}' mcp-empty | grep -q true; then
+          for _ in $(seq 1 30); do
+            if [ "$(docker inspect -f '{{.State.Running}}' mcp-empty)" != "true" ]; then break; fi
+            sleep 1
+          done
+          if [ "$(docker inspect -f '{{.State.Running}}' mcp-empty)" = "true" ]; then
             echo "The container must fail closed when the artifact store is empty."
             exit 1
           fi
