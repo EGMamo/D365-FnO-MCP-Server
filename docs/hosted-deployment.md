@@ -177,5 +177,7 @@ fails closed through both the revision check and Azure Blob conditional ETag wri
 `DefaultAzureCredential`; set `D365_ARTIFACT_MANAGED_IDENTITY_CLIENT_ID` only when a user-assigned
 managed identity is required.
 
-The Azure resource template must be revised together with the acquisition worker. Do not deploy the
-legacy SAS/manifest topology from an older checkout.
+`infra/main.bicep` provisions the API (with a staging slot), the scheduled Windows worker, the
+artifact store, registry, vaults, identities, monitoring and private networking; see
+[infra/README.md](../infra/README.md). Do not deploy the legacy SAS/manifest topology from an older
+checkout.

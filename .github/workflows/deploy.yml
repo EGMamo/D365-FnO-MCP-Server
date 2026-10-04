@@ -1,10 +1,15 @@
 name: Deploy
 
-# Builds the server image, pushes it to Azure Container Registry, points the
-# App Service web app at it and waits for the artifact-backed server to come up.
-# The web app either mounts the promoted immutable artifact store at
-# D365_ARTIFACT_STORE_PATH or sets D365_ARTIFACT_SOURCE=azure-blob to pull the
-# active bundle at startup; /health returns 200 only once the index is open.
+# Builds the server image, pushes it to Azure Container Registry, starts it in
+# the App Service staging slot, waits for that slot to materialize and validate
+# the active artifact bundle onto instance-local disk, smoke-tests it and only
+# then swaps it into production. Infrastructure comes from infra/main.bicep.
+#
+# The environment needs these values, all non-secret outputs of infra/main.bicep:
+#   secrets.AZURE_CLIENT_ID  deployClientId (federated identity; no client secret)
+#   secrets.AZURE_TENANT_ID, secrets.AZURE_SUBSCRIPTION_ID
+#   vars.RESOURCE_GROUP, vars.WEBAPP_NAME, vars.ACR_NAME
+#   secrets.MCP_SMOKE_API_KEY  one entry of the API's MCP_API_KEYS secret
 
 on:
   push:
@@ -19,8 +24,13 @@ permissions:
   id-token: write
   contents: read
 
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
 env:
   IMAGE_NAME: d365-fno-mcp-server
+  SLOT: staging
 
 jobs:
   deploy:
@@ -39,6 +49,48 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      - name: Resolve hosts
+        id: hosts
+        run: |
+          echo "production=$(az webapp show -g "${{ vars.RESOURCE_GROUP }}" -n "${{ vars.WEBAPP_NAME }}" --query defaultHostName -o tsv)" >> "$GITHUB_OUTPUT"
+          echo "staging=$(az webapp show -g "${{ vars.RESOURCE_GROUP }}" -n "${{ vars.WEBAPP_NAME }}" --slot "$SLOT" --query defaultHostName -o tsv)" >> "$GITHUB_OUTPUT"
+
+      - name: Verify artifact-backed slot configuration
+        run: |
+          SETTINGS="$(az webapp config appsettings list \
+            --resource-group "${{ vars.RESOURCE_GROUP }}" \
+            --name "${{ vars.WEBAPP_NAME }}" --slot "$SLOT" \
+            --query "[].{name:name,value:value}" -o json)"
+          node -e '
+            const settings = new Map(JSON.parse(process.argv[1]).map(({name, value}) => [name, value]));
+            const required = [
+              "D365_ARTIFACT_STORE_PATH",
+              "D365_INDEX_DB_PATH",
+              "D365_ARTIFACT_ACCOUNT_URL",
+              "D365_ARTIFACT_CONTAINER",
+              "MCP_API_KEYS",
+            ];
+            for (const name of required) {
+              if (!settings.get(name)) {
+                console.error(`Missing required App Service setting: ${name}`);
+                process.exitCode = 1;
+              }
+            }
+            // The live SQLite copy must be on instance-local disk, never the /home share.
+            if (settings.get("WEBSITES_ENABLE_APP_SERVICE_STORAGE") !== "false") {
+              console.error("WEBSITES_ENABLE_APP_SERVICE_STORAGE must be false.");
+              process.exitCode = 1;
+            }
+            if (settings.get("D365_ARTIFACT_SOURCE") !== "azure-blob") {
+              console.error("D365_ARTIFACT_SOURCE must be azure-blob so each instance pulls its bundle at startup.");
+              process.exitCode = 1;
+            }
+            if (settings.get("D365_ENABLE_WRITE_TOOLS") !== "0") {
+              console.error("D365_ENABLE_WRITE_TOOLS must be 0 for the hosted API.");
+              process.exitCode = 1;
+            }
+          ' "$SETTINGS"
+
       - name: Sign in to the container registry
         id: acr
         run: |
@@ -46,23 +98,6 @@ jobs:
           echo "server=$(az acr show --name "${{ vars.ACR_NAME }}" --query loginServer -o tsv)" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@v4
-
-      - name: Verify artifact-backed app configuration
-        run: |
-          SETTINGS="$(az webapp config appsettings list \
-            --resource-group "${{ vars.RESOURCE_GROUP }}" \
-            --name "${{ vars.WEBAPP_NAME }}" \
-            --query "[?name=='D365_ARTIFACT_STORE_PATH' || name=='D365_INDEX_DB_PATH'].{name:name,value:value}" \
-            -o json)"
-          node -e '
-            const settings = new Map(JSON.parse(process.argv[1]).map(({name, value}) => [name, value]));
-            for (const name of ["D365_ARTIFACT_STORE_PATH", "D365_INDEX_DB_PATH"]) {
-              if (!settings.get(name)) {
-                console.error(`Missing required App Service setting: ${name}`);
-                process.exitCode = 1;
-              }
-            }
-          ' "$SETTINGS"
 
       - name: Build and push the image
         uses: docker/build-push-action@v7
@@ -73,32 +108,59 @@ jobs:
             ${{ steps.acr.outputs.server }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}
             ${{ steps.acr.outputs.server }}/${{ env.IMAGE_NAME }}:latest
 
-      - name: Point the web app at the new image
+      - name: Start the new image in the staging slot
         run: |
           az webapp config container set \
-            --resource-group "${{ vars.RESOURCE_GROUP }}" --name "${{ vars.WEBAPP_NAME }}" \
+            --resource-group "${{ vars.RESOURCE_GROUP }}" --name "${{ vars.WEBAPP_NAME }}" --slot "$SLOT" \
             --container-image-name "${{ steps.acr.outputs.server }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}"
-          az webapp restart --resource-group "${{ vars.RESOURCE_GROUP }}" --name "${{ vars.WEBAPP_NAME }}"
+          az webapp restart --resource-group "${{ vars.RESOURCE_GROUP }}" --name "${{ vars.WEBAPP_NAME }}" --slot "$SLOT"
 
-      - name: Wait for artifact validation and server startup
+      # /health is readiness: it answers 503 until the slot has downloaded,
+      # verified and activated the active bundle locally (/live is liveness only).
+      - name: Wait for the staging slot to activate its bundle
         run: |
-          URL="https://${{ vars.WEBAPP_NAME }}.azurewebsites.net"
-          for _ in $(seq 1 60); do
+          URL="https://${{ steps.hosts.outputs.staging }}"
+          for _ in $(seq 1 180); do
             if curl -fsS "$URL/health" >/dev/null 2>&1; then
               curl -fsS "$URL/health"; echo
               exit 0
             fi
             sleep 10
           done
-          echo "The artifact-backed server did not become healthy within 10 minutes." >&2
+          echo "The staging slot did not become healthy within 30 minutes." >&2
           exit 1
 
-      - name: Smoke test with the CI key
+      - name: Smoke test the staging slot
+        env:
+          SMOKE_KEY: ${{ secrets.MCP_SMOKE_API_KEY }}
         run: |
-          URL="https://${{ vars.WEBAPP_NAME }}.azurewebsites.net"
-          curl -fsS -X POST "$URL/mcp" \
-            -H "X-API-Key: ${{ secrets.MCP_SMOKE_API_KEY }}" \
+          curl -fsS -X POST "https://${{ steps.hosts.outputs.staging }}/mcp" \
+            -H "X-API-Key: $SMOKE_KEY" \
             -H 'Content-Type: application/json' \
             -H 'Accept: application/json, text/event-stream' \
             -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"deploy-smoke","version":"0"}}}' \
             | grep -q '"serverInfo"'
+
+      # Swap warm-up pings /health on the staging instances again
+      # (WEBSITE_SWAP_WARMUP_PING_PATH) and aborts the swap if they are not ready.
+      - name: Swap staging into production
+        run: |
+          az webapp deployment slot swap \
+            --resource-group "${{ vars.RESOURCE_GROUP }}" --name "${{ vars.WEBAPP_NAME }}" \
+            --slot "$SLOT" --target-slot production
+
+      - name: Verify production, or swap back
+        run: |
+          URL="https://${{ steps.hosts.outputs.production }}"
+          for _ in $(seq 1 30); do
+            if curl -fsS "$URL/health" >/dev/null 2>&1; then
+              curl -fsS "$URL/health"; echo
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Production did not report healthy after the swap; swapping back." >&2
+          az webapp deployment slot swap \
+            --resource-group "${{ vars.RESOURCE_GROUP }}" --name "${{ vars.WEBAPP_NAME }}" \
+            --slot "$SLOT" --target-slot production
+          exit 1

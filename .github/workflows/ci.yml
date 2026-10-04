@@ -50,6 +50,25 @@ jobs:
           path: vs-extension/src/D365FnoMcp.Extension/bin/Release/**/*.vsix
           if-no-files-found: error
 
+  infra:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: az bicep install
+      # bicepconfig.json raises the security rules to errors; any remaining
+      # warning also fails the job so the templates stay lint-clean.
+      - name: Build and lint the Bicep templates
+        env:
+          D365_WORKER_ADMIN_PASSWORD: ci-placeholder-not-a-secret
+        run: |
+          set -euo pipefail
+          cd infra
+          az bicep build --file main.bicep --stdout > /dev/null 2> build.log || { cat build.log; exit 1; }
+          az bicep build-params --file main.dev.bicepparam --stdout > /dev/null 2>> build.log || { cat build.log; exit 1; }
+          az bicep lint --file main.bicep 2>> build.log || { cat build.log; exit 1; }
+          cat build.log
+          if grep -E 'Warning|Error' build.log; then exit 1; fi
+
   docker:
     runs-on: ubuntu-latest
     steps:
