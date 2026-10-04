@@ -259,7 +259,8 @@ request first (the server's instructions tell it to). The request is matched cla
 for each part. The result lists the topics that apply, a coverage rating (`strong`, `partial` or
 `none`) and the clauses no topic covers, which tells you where the knowledge base has a gap. The
 request is kept for the MCP session: later index and generator calls get the task's topics attached
-once, on the tools those topics name.
+once, on the tools those topics name. The embedding model reads English only, so the client passes
+the request in English and translates one written in another language.
 
 The filter only removes, reorders or adds notes. It never adds or renames objects, so every name in
 a result still comes from the index. The tool's own JSON stays the first content item, and the

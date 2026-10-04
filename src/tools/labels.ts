@@ -21,11 +21,18 @@ export function registerLabelsTools(server: McpServer, db: Database) {
 
   server.tool(
     'search_labels',
-    'Search for labels by value',
-    { query: z.string(), limit: z.number().int().min(1).max(500).default(20) },
-    async ({ query, limit }) => {
-      const labels = db.prepare(`SELECT label_id, value FROM ax_labels WHERE value LIKE ? ESCAPE '\\' LIMIT ?`)
-        .all(likeContains(query), limit);
+    'Search for labels by value, optionally scoped to one language',
+    { query: z.string(), language: z.string().optional(), limit: z.number().int().min(1).max(500).default(20) },
+    async ({ query, language, limit }) => {
+      let sql = `SELECT label_id, language, value FROM ax_labels WHERE value LIKE ? ESCAPE '\\'`;
+      const params: (string | number)[] = [likeContains(query)];
+      if (language) {
+        sql += ` AND language = ? COLLATE NOCASE`;
+        params.push(language);
+      }
+      sql += ` LIMIT ?`;
+      params.push(limit);
+      const labels = db.prepare(sql).all(...params);
       return { content: [{ type: 'text', text: JSON.stringify(labels, null, 2) }] };
     }
   );

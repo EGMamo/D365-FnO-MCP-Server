@@ -150,7 +150,7 @@ export function registerKnowledgeResources(server: McpServer, kbDir: string | nu
 
 export const TASK_GUIDANCE_HINT =
   'For a multi-step request (a feature, batch job, integration or fix), call get_task_guidance with the ' +
-  "user's request first: it returns the knowledge base topics that apply and the parts no topic covers, and " +
+  "user's request, in English, first: it returns the knowledge base topics that apply and the parts no topic covers, and " +
   'later tool results in this session carry the matching topic notes.';
 
 /**
@@ -173,7 +173,10 @@ export function registerTaskGuidanceTool(
         .trim()
         .min(10, 'Describe the request in at least a few words.')
         .max(4000)
-        .describe("The user's request in their own words, e.g. 'batch job that posts arrival journals and creates product receipts'."),
+        .describe(
+          "The user's request in English, e.g. 'batch job that posts arrival journals and creates product receipts'. " +
+            'The knowledge base matches English text only, so translate a request written in another language first.'
+        ),
     },
     { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     async ({ task }) => {

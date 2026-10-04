@@ -953,7 +953,9 @@ export function searchLabelsFts(
     return db.prepare(sql).all(...params) as unknown as LabelHit[];
   };
 
-  if (!/[A-Za-z0-9]/.test(query)) return likeSearch();
+  // Any letter or digit, not only ASCII: LIKE ignores case for ASCII alone, so a Cyrillic or
+  // Greek query has to reach FTS5 (whose tokenizer folds case in every script) to match.
+  if (!/[\p{L}\p{N}]/u.test(query)) return likeSearch();
 
   try {
     const ftsQuery = `"${query.replace(/"/g, '""')}"`;
