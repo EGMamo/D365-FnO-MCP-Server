@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   filter too.
 - Knowledge topic 25: posting arrival journals and product receipts in batch (API names marked for
   verification against an index).
+- Knowledge topic 26: creating sales orders from an Excel file, standard import first, then the
+  custom X++ pattern (API names marked for verification against an index).
 - `digest` blocks drafts that repeat an existing topic in different words (meaning-based check with
   the same model) and validates topic headers. New `knowledge-check` command validates headers and
   caches topic vectors.
@@ -189,6 +191,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `get_task_guidance` matched a one-line request to an unrelated topic because a trailing period
+  shifted the embedding score; clauses are now matched without trailing punctuation, and a request
+  that does not split into clauses is reported as uncovered when no topic reaches the threshold.
 - `azure-post-deploy.ps1 -Step SetupWorker` no longer fails with a 404 on the Node.js download:
   the VM script (Windows PowerShell 5.1) picks the Node 24 x64 installer from the release's
   `SHASUMS256.txt` and verifies its checksum, and npm warnings on stderr no longer stop the build.

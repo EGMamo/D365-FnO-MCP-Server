@@ -78,11 +78,13 @@ export interface TaskGuidance {
 
 /** The request plus its clauses, so each part of a multi-step request is matched on its own. */
 export function splitTask(task: string): string[] {
+  // Trailing punctuation alone shifts MiniLM scores by up to 0.1, so every clause is embedded bare.
+  const tidy = (text: string) => text.replace(/\s+/g, ' ').trim().replace(/[.!?:]+$/, '').trim();
   const clauses = task
     .split(/[,;.\n]|\b(?:and then|and|then|using|with|so that|where|which)\b/i)
-    .map((clause) => clause.replace(/\s+/g, ' ').trim())
+    .map(tidy)
     .filter((clause) => clause.split(' ').length >= 3);
-  return [task.replace(/\s+/g, ' ').trim(), ...new Set(clauses)];
+  return [...new Set([tidy(task), ...clauses])];
 }
 
 function isRow(value: unknown): value is Row {
@@ -152,7 +154,8 @@ export class KnowledgeFilter {
       for (const [i, clause] of clauses.entries()) {
         const matches = scoreQuery(await this.embedQuery(clause), this.vectors);
         for (const match of matches) scores.set(match.slug, Math.max(scores.get(match.slug) ?? 0, match.score));
-        if (i > 0 && (matches[0]?.score ?? 0) < TASK_TOPIC_SCORE) uncovered.push(clause);
+        // The whole request counts as a part only when it doesn't split into clauses.
+        if ((i > 0 || clauses.length === 1) && (matches[0]?.score ?? 0) < TASK_TOPIC_SCORE) uncovered.push(clause);
       }
     } else {
       // Without the model: shared words between the request and each topic's title and note.
@@ -171,6 +174,8 @@ export class KnowledgeFilter {
       .filter((entry) => entry.score >= cutoff)
       .sort((a, b) => b.score - a.score)
       .slice(0, MAX_TASK_TOPICS);
+    // Nothing covers the request: every part of it is uncovered, with or without the model.
+    if (best < TASK_TOPIC_SCORE && uncovered.length === 0) uncovered.push(...(clauses.length > 1 ? clauses.slice(1) : clauses));
     if (session) session.task = { text, scores: new Map(ranked.map(({ topic, score }) => [topic.slug, score])) };
     return {
       task: text,
