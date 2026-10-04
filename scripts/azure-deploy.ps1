@@ -49,9 +49,11 @@ param(
     [string]$Location,
 
     # Tenant to sign in to. Defaults to the Azure CLI's current tenant.
+    [ValidatePattern('^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$', ErrorMessage = '{0} is not a valid tenant ID (expected a GUID like 00000000-0000-0000-0000-000000000000). Run az account list -o table to see yours.')]
     [string]$TenantId,
 
     # Subscription to deploy into. Defaults to the Azure CLI's current subscription.
+    [ValidatePattern('^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$', ErrorMessage = '{0} is not a valid subscription ID (expected a GUID like 00000000-0000-0000-0000-000000000000). Run az account list -o table to see yours.')]
     [string]$SubscriptionId,
 
     [ValidatePattern('^[a-z0-9]{1,10}$')]
@@ -139,7 +141,13 @@ if (-not $account -or ($TenantId -and $account.tenantId -ne $TenantId)) {
     if ($TenantId) { Invoke-Az login --tenant $TenantId --output none | Out-Null }
     else { Invoke-Az login --output none | Out-Null }
 }
-if ($SubscriptionId) { Invoke-Az account set --subscription $SubscriptionId | Out-Null }
+if ($SubscriptionId) {
+    $visible = Invoke-Az account list --query "[?id=='$SubscriptionId'] | length(@)" -o tsv
+    if ($visible -ne '1') {
+        throw "Subscription $SubscriptionId is not visible to $((Invoke-Az account show --query user.name -o tsv)). Check the ID with az account list -o table, or sign in to its tenant with -TenantId."
+    }
+    Invoke-Az account set --subscription $SubscriptionId | Out-Null
+}
 $account = Invoke-Az account show -o json | ConvertFrom-Json
 if ($TenantId -and $account.tenantId -ne $TenantId) {
     throw "Subscription '$($account.name)' is in tenant $($account.tenantId), not $TenantId."
