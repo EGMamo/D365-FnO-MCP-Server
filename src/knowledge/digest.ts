@@ -2,6 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { Database } from '../indexer/db.js';
 import { listKnowledgeEntries } from '../tools/knowledge.js';
+import { SEMANTIC_DUPLICATE_SCORE, SEMANTIC_RELATED_SCORE, type SemanticMatch } from './semantic.js';
+import { splitFrontMatter, stripFrontMatter } from './topics.js';
 
 export type IssueLevel = 'error' | 'warning';
 
@@ -50,6 +52,13 @@ export interface DigestReport {
    * `duplicates` alone will miss it.
    */
   existingTopics: ExistingTopicSummary[];
+  /**
+   * Overlap by meaning, from the local embedding model, at or above the "related" score. Empty
+   * when the model was not available (see `semanticCheck`).
+   */
+  semanticDuplicates: SemanticMatch[];
+  /** Whether the meaning-based duplicate check ran. */
+  semanticCheck: 'ran' | 'skipped';
 }
 
 export interface DigestOptions {
@@ -71,6 +80,11 @@ export interface DigestOptions {
   force?: boolean;
   /** Jaccard similarity at/above which an existing topic is reported as a possible duplicate. */
   duplicateThreshold?: number;
+  /**
+   * Meaning-based scores of the draft against every existing topic, computed by the caller with
+   * the embedding model (see `scoreDraftByMeaning`). Omit when the model is not available.
+   */
+  semanticScores?: SemanticMatch[];
 }
 
 const REQUIRED_SECTIONS = ['Pattern'];
@@ -367,20 +381,47 @@ export function digestKnowledge(options: DigestOptions): DigestReport {
     dryRun = false,
     force = false,
     duplicateThreshold = DEFAULT_DUPLICATE_THRESHOLD,
+    semanticScores,
   } = options;
 
-  const title = extractTitle(content) ?? 'Untitled';
-  const structureIssues = validateStructure(content);
+  // The optional YAML header drives the knowledge filter; validate it, then check the prose.
+  const headerIssues: DigestIssue[] = [];
+  let body = content;
+  try {
+    body = splitFrontMatter(content).body;
+  } catch (err) {
+    body = stripFrontMatter(content);
+    headerIssues.push({ level: 'error', message: err instanceof Error ? err.message : String(err) });
+  }
+
+  const title = extractTitle(body) ?? 'Untitled';
+  const structureIssues = [...headerIssues, ...validateStructure(body)];
   const sensitiveIssues = scanSensitiveContent(content);
 
   const existing = listKnowledgeEntries(kbDir).map((e) => ({
     slug: e.slug,
     title: e.title,
-    content: fs.readFileSync(e.filePath, 'utf8'),
+    content: stripFrontMatter(fs.readFileSync(e.filePath, 'utf8')),
   }));
-  const duplicates = findDuplicates(content, existing, duplicateThreshold);
+  const duplicates = findDuplicates(body, existing, duplicateThreshold);
+  const semanticDuplicates = (semanticScores ?? [])
+    .filter((match) => match.score >= SEMANTIC_RELATED_SCORE)
+    .map((match) => ({ ...match, score: Math.round(match.score * 100) / 100 }));
 
   const issues: DigestIssue[] = [...structureIssues, ...sensitiveIssues];
+  for (const match of semanticDuplicates) {
+    issues.push(
+      match.score >= SEMANTIC_DUPLICATE_SCORE
+        ? {
+            level: 'error',
+            message: `Says the same as existing topic "${match.slug}" (meaning match ${(match.score * 100).toFixed(0)}%). Extend that topic instead, or use --force to add anyway.`,
+          }
+        : {
+            level: 'warning',
+            message: `Overlaps existing topic "${match.slug}" in meaning (${(match.score * 100).toFixed(0)}%). Check whether it belongs there.`,
+          }
+    );
+  }
   for (const dup of duplicates) {
     if (dup.score >= NEAR_DUPLICATE_SCORE) {
       issues.push({
@@ -395,7 +436,7 @@ export function digestKnowledge(options: DigestOptions): DigestReport {
     }
   }
 
-  const feasibility = checkFeasibility(content, db);
+  const feasibility = checkFeasibility(body, db);
   const existingTopics: ExistingTopicSummary[] = existing.map((e) => ({
     slug: e.slug,
     title: e.title,
@@ -406,7 +447,9 @@ export function digestKnowledge(options: DigestOptions): DigestReport {
   // Missing title / required sections are always hard-blocking — `force` only overrides a
   // near-duplicate match, matching the documented CLI/tool behavior.
   const hasRequiredStructureError = structureIssues.some((i) => i.level === 'error');
-  const hasNearDuplicateError = duplicates.some((d) => d.score >= NEAR_DUPLICATE_SCORE);
+  const hasNearDuplicateError =
+    duplicates.some((d) => d.score >= NEAR_DUPLICATE_SCORE) ||
+    semanticDuplicates.some((d) => d.score >= SEMANTIC_DUPLICATE_SCORE);
   const written = !dryRun && !hasSensitiveError && !hasRequiredStructureError && (!hasNearDuplicateError || force);
 
   const slugBase = slugOverride ? slugify(slugOverride) : slugify(title);
@@ -454,5 +497,16 @@ export function digestKnowledge(options: DigestOptions): DigestReport {
     filePath = path.join(kbDir, `${slug}.md`);
   }
 
-  return { slug, title, filePath, written: actuallyWritten, issues, duplicates, feasibility, existingTopics };
+  return {
+    slug,
+    title,
+    filePath,
+    written: actuallyWritten,
+    issues,
+    duplicates,
+    feasibility,
+    existingTopics,
+    semanticDuplicates,
+    semanticCheck: semanticScores ? 'ran' : 'skipped',
+  };
 }

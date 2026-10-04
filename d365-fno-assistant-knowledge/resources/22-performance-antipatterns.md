@@ -1,3 +1,10 @@
+---
+appliesTo:
+  tools: [list_trace_sessions, find_n_plus_one, find_slow_sql, get_top_methods, search_trace]
+match:
+  tools: [find_n_plus_one, find_slow_sql, get_top_methods]
+note: "Capture one slow scenario in Trace Parser first. Fix N+1 with joins or set-based operations, check indexes for slow SQL, and set CacheLookup to fit the table group."
+---
 # X++ Performance Anti-Patterns and Trace Analysis
 
 > How to find the usual X++ performance problems in Trace Parser data and fix them in code.

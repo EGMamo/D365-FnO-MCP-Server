@@ -12,6 +12,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Release VS extension` workflow: an `extension-v<version>` tag, or a manual run on `master`,
   builds the Visual Studio extension with that version and publishes a GitHub release with the
   VSIX and its SHA-256 checksum. `docs/visual-studio-extension.md` now covers installing it.
+- Knowledge filter: index tool results pass through the knowledge base, which drops rows topics
+  mark as noise (build-output mirrors), moves preferred rows first and attaches matching topic
+  notes as a second content item. Topics gain an optional YAML header (`appliesTo`, `match`,
+  `filter`, `rank`, `note`); all 24 shipped topics have one. Matching by meaning uses a local
+  all-MiniLM-L6-v2 embedding model run through ONNX Runtime WebAssembly (`fetch-model`, included in
+  the Docker image); without it the filter runs on header rules. `D365_KNOWLEDGE_FILTER=0` turns it off.
+- `get_task_guidance` tool: matches a whole request against the knowledge base clause by clause,
+  rates coverage, lists the parts no topic covers, and keeps the task for the session so later
+  index and generator results carry the task's topics once. Generator tools now pass through the
+  filter too.
+- Knowledge topic 25: posting arrival journals and product receipts in batch (API names marked for
+  verification against an index).
+- Knowledge topic 26: creating sales orders from an Excel file, standard import first, then the
+  custom X++ pattern (API names marked for verification against an index).
+- `digest` blocks drafts that repeat an existing topic in different words (meaning-based check with
+  the same model) and validates topic headers. New `knowledge-check` command validates headers and
+  caches topic vectors.
+
 - Storage and Key Vault firewalls list the app and worker subnets (with service endpoints) next
   to their private endpoints, so deployments pass "require VNet ACLs" policies.
   `azure-deploy.ps1` prints denied resources and failed operations when a deployment fails.
@@ -150,6 +168,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- The `digest_knowledge` MCP tool. Only the server owner adds knowledge, with `digest` in the
+  repository, so no MCP client can change what other clients read.
 - stdio transport and keyless local sessions. The server now exposes only authenticated Streamable
   HTTP, and `MCP_API_KEYS` (or `MCP_API_KEY`) is mandatory.
 - Retired developer-built index distribution: `publish-index`, `pull-index`, `upload-index`,
@@ -174,6 +194,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `get_task_guidance` matched a one-line request to an unrelated topic because a trailing period
+  shifted the embedding score; clauses are now matched without trailing punctuation, and a request
+  that does not split into clauses is reported as uncovered when no topic reaches the threshold.
 - `azure-post-deploy.ps1 -Step SetupWorker` no longer fails with a 404 on the Node.js download:
   the VM script (Windows PowerShell 5.1) picks the Node 24 x64 installer from the release's
   `SHASUMS256.txt` and verifies its checksum, and npm warnings on stderr no longer stop the build.

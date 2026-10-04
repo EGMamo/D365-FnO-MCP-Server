@@ -1,3 +1,9 @@
+---
+appliesTo:
+  tools: [get_form_datasources]
+  objectTypes: [Form]
+note: "Pick a form pattern and subpattern first; ArrangeMethod, ColumnsMode and the sizing properties then control the responsive layout."
+---
 # Form Patterns & UI Layout
 
 > How the web client builds forms, which pattern to pick, and the layout properties that actually

@@ -3,8 +3,8 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { z } from 'zod';
-import type { Database } from '../indexer/db.js';
-import { digestKnowledge } from '../knowledge/digest.js';
+import { stripFrontMatter } from '../knowledge/topics.js';
+import type { KnowledgeFilter, KnowledgeSession } from '../knowledge/filter.js';
 
 const KB_DIR_NAME = 'd365-fno-assistant-knowledge';
 const RESOURCE_SUBDIR = 'resources';
@@ -52,7 +52,7 @@ export function listKnowledgeEntries(kbDir: string | null = findKnowledgeDir()):
       const slug = file.slice(0, -3);
       let title = slug;
       try {
-        title = firstHeading(fs.readFileSync(filePath, 'utf8'), slug);
+        title = firstHeading(stripFrontMatter(fs.readFileSync(filePath, 'utf8')), slug);
       } catch {
         // Unreadable file: fall back to the slug as the display title.
       }
@@ -67,7 +67,7 @@ export function readKnowledgeEntry(
 ): { entry: KnowledgeEntry; content: string } | null {
   const entry = listKnowledgeEntries(kbDir).find((e) => e.slug === slug);
   if (!entry) return null;
-  return { entry, content: fs.readFileSync(entry.filePath, 'utf8') };
+  return { entry, content: stripFrontMatter(fs.readFileSync(entry.filePath, 'utf8')) };
 }
 
 const SYSTEM_PROMPT = [
@@ -79,8 +79,7 @@ const SYSTEM_PROMPT = [
   'Prefer extension patterns (Chain of Command, table/form extensions) over over-layering.',
 ].join(' ');
 
-export function registerKnowledgeResources(server: McpServer): void {
-  const kbDir = findKnowledgeDir();
+export function registerKnowledgeResources(server: McpServer, kbDir: string | null = findKnowledgeDir()): void {
 
   server.resource(
     'd365-knowledge-base',
@@ -149,73 +148,44 @@ export function registerKnowledgeResources(server: McpServer): void {
   );
 }
 
-export interface KnowledgeDigestOptions {
-  /** Master feature flag: reuses the write-tools flag since this writes files under the repo. */
-  enableWriteTools: boolean;
-}
+export const TASK_GUIDANCE_HINT =
+  'For a multi-step request (a feature, batch job, integration or fix), call get_task_guidance with the ' +
+  "user's request first: it returns the knowledge base topics that apply and the parts no topic covers, and " +
+  'later tool results in this session carry the matching topic notes.';
 
 /**
- * Registers `digest_knowledge`: lets an assistant hand over a sanitized draft article and have
- * it validated (structure, sanitization, lexical duplicate detection, identifier feasibility
- * against the indexed AOT metadata) and, if it passes, added to the knowledge base as a new
- * numbered file. Every existing topic's title + scenario summary is always returned in the report
- * so the caller can judge *conceptual* duplication itself — the same pattern written up in
- * different words — which no wording-overlap heuristic can reliably catch.
+ * Registers `get_task_guidance`: the client hands over the user's whole request, gets the topics
+ * that apply (matched clause by clause) plus the parts no topic covers, and the request is kept
+ * for the session so later index results are annotated with the topics the task needs.
  */
-export function registerKnowledgeDigestTool(
+export function registerTaskGuidanceTool(
   server: McpServer,
-  db: Database | null,
-  options: KnowledgeDigestOptions
+  currentFilter: () => KnowledgeFilter | null,
+  session: KnowledgeSession
 ): void {
-  if (options.enableWriteTools !== true) return;
-
-  const kbDir = findKnowledgeDir();
-
   server.tool(
-    'digest_knowledge',
-    'Validate a draft D365 F&O knowledge base article (structure, sanitization, lexical wording-overlap ' +
-      'check, and identifier feasibility against the indexed metadata) and, if it passes, add it to the ' +
-      'knowledge base as a new numbered markdown file. Sensitive-content findings always block the write. ' +
-      'IMPORTANT: the returned report includes every existing topic\'s title and one-line scenario summary ' +
-      '(`existingTopics`) — before calling this tool, or before trusting a clean report, compare the draft ' +
-      'against that list yourself for CONCEPTUAL duplication (the same underlying pattern described in ' +
-      'different words). The `duplicates` field only catches near-identical phrasing and will miss that.',
+    'get_task_guidance',
+    `Match a whole D365 F&O development request against the knowledge base before planning it. ${TASK_GUIDANCE_HINT} ` +
+      'Read the returned topics with their d365kb:// URIs. For parts listed under "uncovered", rely on the index tools only and say the knowledge base has no guidance for them.',
     {
-      content: z.string().min(1).max(200_000).describe('Full markdown content of the draft article, already sanitized.'),
-      slug: z.string().optional().describe('Optional filename slug override (kebab-case, no number prefix).'),
-      dryRun: z.boolean().optional().describe('When true, only validate; never write the file.'),
-      force: z
-        .boolean()
-        .optional()
-        .describe(
-          'Write even when a near-duplicate match is found. Missing required sections and sensitive-content errors always block, regardless of force.'
-        ),
+      task: z
+        .string()
+        .trim()
+        .min(10, 'Describe the request in at least a few words.')
+        .max(4000)
+        .describe("The user's request in their own words, e.g. 'batch job that posts arrival journals and creates product receipts'."),
     },
-    async ({ content, slug, dryRun, force }) => {
-      if (!kbDir) {
+    { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    async ({ task }) => {
+      const filter = currentFilter();
+      if (!filter) {
         return {
-          content: [
-            { type: 'text' as const, text: 'Knowledge base resources directory not found in this installation.' },
-          ],
+          content: [{ type: 'text' as const, text: 'The knowledge filter is not loaded yet or is turned off (D365_KNOWLEDGE_FILTER=0).' }],
           isError: true,
         };
       }
-
-      try {
-        const report = digestKnowledge({ content, kbDir, db, slugOverride: slug, dryRun, force });
-        const hasErrors = report.issues.some((issue) => issue.level === 'error');
-        const blocked = hasErrors && !report.written;
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify(report, null, 2) }],
-          isError: blocked,
-        };
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        return {
-          content: [{ type: 'text' as const, text: `Failed to digest knowledge entry: ${message}` }],
-          isError: true,
-        };
-      }
+      const guidance = await filter.guidance(task, session);
+      return { content: [{ type: 'text' as const, text: JSON.stringify(guidance, null, 2) }] };
     }
   );
 }

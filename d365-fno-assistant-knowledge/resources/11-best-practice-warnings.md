@@ -1,3 +1,10 @@
+---
+appliesTo:
+  tools: [get_bp_findings, check_xpp_best_practices]
+match:
+  tools: [get_bp_findings, check_xpp_best_practices]
+note: "Most BP messages are warnings that still matter; the quick reference maps each rule to its cause and fix."
+---
 # Best Practice (BP) Warnings — Quick Reference
 
 > Most BP messages are **warnings** (build still shows 0 errors) but keep them at zero.

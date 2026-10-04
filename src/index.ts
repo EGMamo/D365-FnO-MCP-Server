@@ -130,6 +130,14 @@ export async function run(argv: string[]): Promise<CliResult> {
         }),
       };
     }
+    case 'fetch-model': {
+      const { fetchModelCommand } = await import('./cli/fetch-model-command.js');
+      return { code: await fetchModelCommand({ dir: flagString(flags, 'dir') }) };
+    }
+    case 'knowledge-check': {
+      const { knowledgeCheckCommand } = await import('./cli/knowledge-check-command.js');
+      return { code: await knowledgeCheckCommand({ kbDir: flagString(flags, 'kb-dir') }) };
+    }
     case 'setup': {
       const { setupCommand } = await import('./cli/setup.js');
       const code = await setupCommand({
