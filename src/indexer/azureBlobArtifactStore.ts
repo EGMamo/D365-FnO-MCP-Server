@@ -128,6 +128,13 @@ function contentType(file: string): string {
 export class AzureBlobArtifactStore {
   constructor(private readonly container: ArtifactBlobContainer) {}
 
+  async uploadBundle(
+    directory: string,
+    policy: ArtifactCompatibilityPolicy
+  ): Promise<ValidatedArtifactBundle> {
+    return new AzureBlobArtifactWriter(this, this.container, () => undefined).uploadBundle(directory, policy);
+  }
+
   async verifyContainer(): Promise<void> {
     await this.container.getProperties();
   }
@@ -467,6 +474,7 @@ export class AzureBlobArtifactWriter {
     const checkedPointers = parseArtifactPointers(pointers);
     const blob = this.container.getBlob(ARTIFACT_POINTERS_FILE);
     try {
+      this.assertLeaseHealthy();
       await blob.uploadBuffer(Buffer.from(canonicalJson(checkedPointers)), {
         conditions: expectedEtag === null ? { ifNoneMatch: '*' } : { ifMatch: expectedEtag },
         contentType: 'application/json',

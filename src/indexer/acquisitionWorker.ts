@@ -445,10 +445,10 @@ export class AzureArtifactPublisher implements ArtifactPublisher {
     signal: AbortSignal
   ): Promise<{ revision: number }> {
     signal.throwIfAborted();
+    await this.store.uploadBundle(bundle.directory, policy);
+    signal.throwIfAborted();
     let promoted: ArtifactPointerSnapshot | undefined;
     await this.store.withAcquisitionLease(async (writer) => {
-      signal.throwIfAborted();
-      await writer.uploadBundle(bundle.directory, policy);
       signal.throwIfAborted();
       const current = await this.store.readPointers();
       promoted = await writer.promote(
