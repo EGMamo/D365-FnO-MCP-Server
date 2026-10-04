@@ -135,6 +135,45 @@ function Test-VmPassword([string]$Value) {
     return @($classes).Count -ge 3
 }
 
+# Prints the innermost errors of a failed deployment, including preflight policy denials, and the
+# failed operations of it and its nested module deployments.
+function Write-DeploymentFailure([string]$Name) {
+    Write-Host "`nDeployment '$Name' failed:" -ForegroundColor Red
+    $errorJson = & az deployment group show -g $ResourceGroup -n $Name --query properties.error -o json 2>$null
+    if ($LASTEXITCODE -ne 0 -or -not $errorJson -or $errorJson -eq 'null') {
+        Write-Host "No error details recorded; run: az deployment group show -g $ResourceGroup -n $Name"
+    }
+    else {
+        $leaves = [Collections.Generic.List[object]]::new()
+        $walk = {
+            param($node)
+            $children = @(@($node.PSObject.Properties['details']?.Value) | Where-Object { $_ })
+            if ($children.Count -eq 0) { $leaves.Add($node) } else { foreach ($child in $children) { & $walk $child } }
+        }
+        & $walk ($errorJson | ConvertFrom-Json)
+        foreach ($leaf in $leaves) {
+            $target = $leaf.PSObject.Properties['target']?.Value
+            Write-Host "- $($leaf.code)$(if ($target) { " on $target" }): $($leaf.message)"
+        }
+    }
+
+    $pending = [Collections.Generic.Queue[string]]::new()
+    $pending.Enqueue($Name)
+    $seen = @{}
+    while ($pending.Count -gt 0) {
+        $current = $pending.Dequeue()
+        if ($seen.ContainsKey($current)) { continue }
+        $seen[$current] = $true
+        $opsJson = & az deployment operation group list -g $ResourceGroup -n $current `
+            --query "[?properties.provisioningState=='Failed'].{type:properties.targetResource.resourceType, name:properties.targetResource.resourceName, code:properties.statusMessage.error.code, message:properties.statusMessage.error.message}" -o json 2>$null
+        if ($LASTEXITCODE -ne 0 -or -not $opsJson) { continue }
+        foreach ($op in @($opsJson | ConvertFrom-Json)) {
+            if ($op.type -eq 'Microsoft.Resources/deployments') { $pending.Enqueue($op.name); continue }
+            Write-Host "- $($op.type) '$($op.name)': $($op.code): $($op.message)"
+        }
+    }
+}
+
 # -- 1. Tools and context ------------------------------------------------------------------------
 Write-Step 'Checking tools and Azure context'
 if (-not (Get-Command az -ErrorAction SilentlyContinue)) { throw 'Install the Azure CLI first.' }
@@ -276,7 +315,12 @@ try {
     Write-Step 'Deploying'
     $deploymentName = "$WorkloadName-$EnvironmentName-$((Get-Date).ToUniversalTime().ToString('yyyyMMddHHmm'))"
     Write-Host "Deployment '$deploymentName' (a first deployment takes about 20-30 minutes)..."
-    $result = Invoke-Az deployment group create -g $ResourceGroup -n $deploymentName -p $paramPath -o json | ConvertFrom-Json
+    $json = & az deployment group create -g $ResourceGroup -n $deploymentName -p $paramPath -o json --only-show-errors 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        Write-DeploymentFailure $deploymentName
+        throw "Deployment '$deploymentName' failed. Fix the errors above and run the script again; it redeploys incrementally over the resources that were created."
+    }
+    $result = $json | ConvertFrom-Json
 }
 finally {
     if (-not $passwordWasSet) { [Environment]::SetEnvironmentVariable($PasswordVariable, $null) }

@@ -55,6 +55,32 @@ with public access disabled and integrates the API with the VNet. ACR stays publ
 authenticated pushes from GitHub-hosted runners unless `registryPublicNetworkAccess` is `false`; the
 API still pulls over the private endpoint.
 
+The app and worker subnets also carry `Microsoft.Storage` and `Microsoft.KeyVault` service
+endpoints, and the storage account and both vaults list those subnets in their firewall VNet rules.
+The private endpoints remain the access path; the VNet rules exist because some organizations deny
+storage accounts and vaults that have none (for example a "storage accounts require VNet ACLs"
+policy). `storageAllowedIpRanges` adds IP rules to the storage firewall when private networking is
+off.
+
+### Organization policies
+
+Deployments into a governed subscription can be denied by policy at preflight. The template already
+meets the common baselines (TLS 1.2, HTTPS only, no Shared Key or public blob access, RBAC vaults
+with purge protection, no VM public IP, Trusted Launch, local auth off for monitoring). Settings that
+stricter policies may still reject, and the parameter that changes them:
+
+| Resource | Setting a policy may deny | Option |
+| --- | --- | --- |
+| Container registry | Public network access for GitHub-hosted pushes | `registryPublicNetworkAccess=false` with a self-hosted runner in the VNet |
+| Web app | Public network access (the API is internet-facing) | `allowedIngressCidrs` to restrict callers; a policy exemption otherwise |
+| Worker VM | No encryption at host or customer-managed disk keys | Needs the `EncryptionAtHost` feature registered; not set by default |
+| Any resource | Required tags | `-Tags @{ key = 'value' }` on `azure-deploy.ps1` |
+| Any resource | Allowed regions or VM sizes | `-Location`, `workerVmSize` |
+
+`azure-deploy.ps1` prints each denied resource and the policy's message when a deployment fails.
+A failed deployment can leave some resources behind; rerunning the script redeploys incrementally
+over them.
+
 ## Least-privilege roles
 
 | Identity | Role | Scope |

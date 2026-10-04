@@ -11,6 +11,9 @@ param name string
 param secretReaderPrincipalIds array
 
 param enablePrivateNetworking bool
+
+@description('Subnets (with the Microsoft.KeyVault service endpoint) allowed in the vault firewall, alongside the private endpoint.')
+param allowedSubnetIds array
 param privateEndpointSubnetId string
 param vaultDnsZoneId string
 param workspaceId string
@@ -32,6 +35,8 @@ resource vault 'Microsoft.KeyVault/vaults@2023-07-01' = {
     networkAcls: {
       defaultAction: enablePrivateNetworking ? 'Deny' : 'Allow'
       bypass: 'AzureServices'
+      virtualNetworkRules: [for subnetId in allowedSubnetIds: { id: subnetId, ignoreMissingVnetServiceEndpoint: false }]
+      ipRules: []
     }
   }
 }

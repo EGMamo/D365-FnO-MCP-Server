@@ -106,6 +106,9 @@ resource vnet 'Microsoft.Network/virtualNetworks@2024-05-01' = {
           addressPrefix: appSubnetPrefix
           natGateway: { id: nat.id }
           defaultOutboundAccess: false
+          // Lets Storage and Key Vault firewalls name this subnet in their VNet rules,
+          // which some organizations' policies require alongside private endpoints.
+          serviceEndpoints: [{ service: 'Microsoft.Storage' }, { service: 'Microsoft.KeyVault' }]
           delegations: [
             {
               name: 'app-service'
@@ -129,6 +132,9 @@ resource vnet 'Microsoft.Network/virtualNetworks@2024-05-01' = {
           addressPrefix: workerSubnetPrefix
           natGateway: { id: nat.id }
           defaultOutboundAccess: false
+          // Lets Storage and Key Vault firewalls name this subnet in their VNet rules,
+          // which some organizations' policies require alongside private endpoints.
+          serviceEndpoints: [{ service: 'Microsoft.Storage' }, { service: 'Microsoft.KeyVault' }]
           networkSecurityGroup: { id: workerNsg.id }
         }
       }
