@@ -11,7 +11,7 @@ param location string
 param tags object
 param namePrefix string
 
-@description('App Service plan SKU. Premium v3 gives the local disk and memory a full SQLite copy needs, and slots.')
+@description('App Service plan SKU. Premium v3 gives the local disk and memory a full SQLite copy needs, and slots. P0v3 (4 GB) is the smallest; the staging slot shares its memory during a deployment.')
 param planSku string
 
 @description('Instances. Stay at 1 until MCP session routing across replicas is proven.')

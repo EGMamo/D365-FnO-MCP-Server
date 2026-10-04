@@ -20,9 +20,13 @@ param location string = resourceGroup().location
 
 param tags object = {}
 
+@description('standard: production sizing. cheapest: the lowest-cost settings that keep the same architecture, for dev and test (P0v3 plan, Standard SSD worker disks, Basic ACR without a private endpoint, availability test from 2 locations every 15 minutes). Explicit SKU parameters below override the profile.')
+@allowed(['standard', 'cheapest'])
+param costProfile string = 'standard'
+
 // ── API ────────────────────────────────────────────────────────────────────
-@description('App Service plan SKU. Must support slots and hold a full local SQLite copy.')
-param apiPlanSku string = 'P1v3'
+@description('App Service plan SKU. Must support slots and hold a full local SQLite copy. Empty uses the cost profile: P1v3 (standard) or P0v3 (cheapest).')
+param apiPlanSku string = ''
 
 @minValue(1)
 param apiInstanceCount int = 1
@@ -58,6 +62,9 @@ param sourceRetentionDays int = 0
 param workerVmSize string = 'Standard_D8s_v5'
 @minValue(128)
 param workerDataDiskSizeGb int = 512
+@description('Worker OS and data disk type. Empty uses the cost profile: Premium_LRS (standard) or StandardSSD_LRS (cheapest). Disks bill while the VM is deallocated.')
+@allowed(['', 'Premium_LRS', 'StandardSSD_LRS'])
+param workerDiskType string = ''
 param workerAdminUsername string = 'workeradmin'
 @secure()
 @description('Local administrator password for the worker VM. Supply it at deployment time from a secure source; never commit it.')
@@ -98,6 +105,12 @@ param freshnessWindow string = 'P2D'
 param authFailureThreshold int = 50
 
 var namePrefix = '${workloadName}-${environmentName}'
+var cheapest = costProfile == 'cheapest'
+var effectiveApiPlanSku = empty(apiPlanSku) ? (cheapest ? 'P0v3' : 'P1v3') : apiPlanSku
+var effectiveWorkerDiskType = empty(workerDiskType) ? (cheapest ? 'StandardSSD_LRS' : 'Premium_LRS') : workerDiskType
+// Premium ACR exists only for its private endpoint. The cheapest profile uses Basic and pulls over
+// the registry's public endpoint with the API identity (anonymous pull and the admin user stay off).
+var registryPrivateEndpoint = enablePrivateNetworking && !cheapest
 // Storage account and registry names allow only lowercase letters and digits.
 var compactName = toLower(replace(replace('${workloadName}${environmentName}', '-', ''), '_', ''))
 var suffix = take(uniqueString(resourceGroup().id, namePrefix), 6)
@@ -206,13 +219,13 @@ module registry 'modules/registry.bicep' = {
     location: location
     tags: allTags
     name: take('cr${compactName}${suffix}', 50)
-    sku: enablePrivateNetworking ? 'Premium' : 'Basic'
-    publicNetworkAccess: enablePrivateNetworking ? registryPublicNetworkAccess : true
+    sku: registryPrivateEndpoint ? 'Premium' : 'Basic'
+    publicNetworkAccess: registryPrivateEndpoint ? registryPublicNetworkAccess : true
     apiPrincipalId: identities.outputs.apiPrincipalId
     deployPrincipalId: identities.outputs.deployPrincipalId
-    enablePrivateEndpoint: enablePrivateNetworking
+    enablePrivateEndpoint: registryPrivateEndpoint
     privateEndpointSubnetId: privateEndpointSubnetId
-    registryDnsZoneId: enablePrivateNetworking ? network.outputs.registryDnsZoneId : ''
+    registryDnsZoneId: registryPrivateEndpoint ? network.outputs.registryDnsZoneId : ''
     workspaceId: monitoring.outputs.workspaceId
   }
 }
@@ -223,7 +236,7 @@ module api 'modules/apiApp.bicep' = {
     location: location
     tags: allTags
     namePrefix: namePrefix
-    planSku: apiPlanSku
+    planSku: effectiveApiPlanSku
     instanceCount: apiInstanceCount
     apiIdentityId: identities.outputs.apiIdentityId
     apiClientId: identities.outputs.apiClientId
@@ -251,6 +264,7 @@ module worker 'modules/worker.bicep' = {
     workerIdentityId: identities.outputs.workerIdentityId
     vmSize: workerVmSize
     dataDiskSizeGb: workerDataDiskSizeGb
+    diskType: effectiveWorkerDiskType
     adminUsername: workerAdminUsername
     adminPassword: workerAdminPassword
     workerRoot: workerRoot
@@ -276,6 +290,7 @@ module alerts 'modules/alerts.bicep' = {
     schedulerId: worker.outputs.schedulerId
     freshnessWindow: freshnessWindow
     authFailureThreshold: authFailureThreshold
+    availabilityTestCheap: cheapest
   }
 }
 
@@ -295,3 +310,6 @@ output workerKeyVaultName string = workerVault.outputs.name
 output workerVmName string = worker.outputs.vmName
 output schedulerName string = worker.outputs.schedulerName
 output workerRunTimeoutHours int = workerRunTimeoutHours
+output costProfile string = costProfile
+output apiPlanSku string = effectiveApiPlanSku
+output workerDiskType string = effectiveWorkerDiskType

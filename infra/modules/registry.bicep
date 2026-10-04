@@ -31,12 +31,12 @@ resource registry 'Microsoft.ContainerRegistry/registries@2025-04-01' = {
   location: location
   tags: tags
   sku: { name: sku }
-  properties: {
+  // Network rules (and so the trusted-services bypass) are Premium-only.
+  properties: union({
     adminUserEnabled: false
     anonymousPullEnabled: false
     publicNetworkAccess: publicNetworkAccess ? 'Enabled' : 'Disabled'
-    networkRuleBypassOptions: 'AzureServices'
-  }
+  }, sku == 'Premium' ? { networkRuleBypassOptions: 'AzureServices' } : {})
 }
 
 resource apiPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = {

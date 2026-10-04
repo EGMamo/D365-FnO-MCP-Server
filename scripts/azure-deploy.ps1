@@ -12,12 +12,20 @@
       1. Signs in to -TenantId if needed (in a browser, or with -UseDeviceCode a device code),
          selects the subscription and shows the context.
       2. Registers the resource providers the template uses (needed on a new subscription).
-      3. Creates the resource group if it does not exist.
+      3. Creates the resource group if it does not exist. With -RemoveExistingResources it first
+         deletes every resource in the group except the Key Vaults, after showing them and asking
+         you to type the resource group name.
       4. Writes infra/main.<environment>.local.bicepparam (git-ignored, no secret values). On a
          redeploy it keeps the API image that is currently running and, once scheduled
          acquisition runs are on, keeps them on. A new environment starts with them off.
-      5. Runs what-if, asks for confirmation, then deploys.
-      6. Prints the outputs and, with -PostDeploy, runs scripts/azure-post-deploy.ps1.
+      5. Checks for existing resources that an in-place deployment cannot move to the chosen cost
+         profile (worker disk type, registry private endpoint). With -ReplaceIncompatible it
+         converts them after confirmation; without it, it stops and says what to do.
+      6. Runs what-if, asks for confirmation, then deploys.
+      7. Prints the outputs and, with -PostDeploy, runs scripts/azure-post-deploy.ps1.
+
+    -CostProfile picks the sizing: 'cheapest' (the default for environment names starting with
+    'dev') or 'standard' (the default otherwise). See costProfile in infra/main.bicep.
 
     The worker VM's local administrator password is read from D365_WORKER_ADMIN_PASSWORD when set,
     otherwise prompted without echo. It reaches the template only through that process environment
@@ -37,6 +45,15 @@
 
 .EXAMPLE
     ./scripts/azure-deploy.ps1 -ResourceGroup rg-d365mcp-prod -EnvironmentName prod -PostDeploy
+
+.EXAMPLE
+    # Move an existing dev environment to the cheapest profile, converting the worker disks and
+    # removing the registry's private endpoint.
+    ./scripts/azure-deploy.ps1 -ResourceGroup rg-d365mcp-dev -EnvironmentName dev -CostProfile cheapest -ReplaceIncompatible
+
+.EXAMPLE
+    # Start over: delete everything in the group except the Key Vaults, then deploy fresh.
+    ./scripts/azure-deploy.ps1 -ResourceGroup rg-d365mcp-dev -EnvironmentName dev -RemoveExistingResources
 #>
 #Requires -Version 7.2
 [CmdletBinding()]
@@ -79,6 +96,22 @@ param(
     # readEnvironmentVariable('D365_WORKER_ADMIN_PASSWORD').
     [string]$ParameterFile,
 
+    # Sizing profile. Defaults to 'cheapest' for environment names starting with 'dev' and to
+    # 'standard' otherwise. Ignored with -ParameterFile, which sets costProfile itself.
+    [ValidateSet('standard', 'cheapest')]
+    [string]$CostProfile,
+
+    # Convert existing resources whose new settings cannot be applied in place: worker disks whose
+    # type changes (the VM must be deallocated; disk contents are kept) and the registry private
+    # endpoint that blocks a Premium to Basic downgrade (images are kept). Asks first.
+    [switch]$ReplaceIncompatible,
+
+    # Delete every resource in the resource group except the Key Vaults before deploying. Shows the
+    # list and requires typing the resource group name; -Yes does not skip that. Bundles, images and
+    # worker disks are lost; the vaults and their secrets are kept because purge protection
+    # reserves vault names for 90 days after deletion.
+    [switch]$RemoveExistingResources,
+
     # Sign in with a device code (az login --use-device-code) instead of opening a browser.
     [switch]$UseDeviceCode,
 
@@ -96,6 +129,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 3.0
+
+if ($RemoveExistingResources -and $WhatIfOnly) { throw '-RemoveExistingResources deletes resources, so it cannot be combined with -WhatIfOnly.' }
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $Template = Join-Path $RepoRoot 'infra/main.bicep'
@@ -195,6 +230,40 @@ function Write-DeploymentFailure([string]$Name) {
     foreach ($hint in $hints) { Write-Host "`nWhat to do: $hint" -ForegroundColor Yellow }
 }
 
+# Deletes the given resources, cheapest dependents first, retrying what still has dependents.
+function Remove-GroupResources([object[]]$Resources) {
+    $rank = @{
+        'microsoft.insights/metricalerts' = 0; 'microsoft.insights/scheduledqueryrules' = 0
+        'microsoft.insights/webtests' = 0; 'microsoft.insights/actiongroups' = 1
+        'microsoft.logic/workflows' = 1; 'microsoft.compute/virtualmachines' = 2; 'microsoft.web/sites' = 2
+        'microsoft.network/privateendpoints' = 3; 'microsoft.network/networkinterfaces' = 4
+        'microsoft.compute/disks' = 4; 'microsoft.web/serverfarms' = 4
+        'microsoft.network/privatednszones/virtualnetworklinks' = 5; 'microsoft.insights/datacollectionrules' = 5
+        'microsoft.insights/components' = 6; 'microsoft.network/virtualnetworks' = 7
+        'microsoft.network/privatednszones' = 8; 'microsoft.network/natgateways' = 8
+        'microsoft.network/networksecuritygroups' = 8; 'microsoft.network/publicipaddresses' = 9
+        'microsoft.operationalinsights/workspaces' = 9
+    }
+    $remaining = @($Resources | Sort-Object { $r = $rank[$_.type.ToLowerInvariant()]; if ($null -eq $r) { 5 } else { $r } })
+    for ($pass = 1; $pass -le 5 -and $remaining.Count -gt 0; $pass++) {
+        # A deleted app's subnet link or a deleted VM's NIC can take a minute to release.
+        if ($pass -gt 1) { Write-Host "Retrying $($remaining.Count) resource(s) that still had dependents..."; Start-Sleep -Seconds 60 }
+        $failed = @()
+        foreach ($resource in $remaining) {
+            # Children (slots, VM extensions) go with their parent.
+            & az resource show --ids $resource.id --output none 2>$null
+            if ($LASTEXITCODE -ne 0) { continue }
+            Write-Host "Deleting $($resource.type) '$($resource.name)'..."
+            & az resource delete --ids $resource.id --output none 2>$null
+            if ($LASTEXITCODE -ne 0) { $failed += $resource }
+        }
+        $remaining = $failed
+    }
+    if ($remaining.Count -gt 0) {
+        throw "Could not delete: $(($remaining | ForEach-Object { "$($_.type) '$($_.name)'" }) -join ', '). Delete them in the portal and run the script again."
+    }
+}
+
 # -- 1. Tools and context ------------------------------------------------------------------------
 Write-Step 'Checking tools and Azure context'
 if (-not (Get-Command az -ErrorAction SilentlyContinue)) { throw 'Install the Azure CLI first.' }
@@ -257,6 +326,29 @@ else {
     Write-Host "Created $ResourceGroup in $Location."
 }
 
+if ($RemoveExistingResources -and $exists) {
+    Write-Step 'Removing existing resources'
+    $all = @(Invoke-Az resource list -g $ResourceGroup --query '[].{id:id, name:name, type:type}' -o json | ConvertFrom-Json)
+    $kept = @($all | Where-Object { $_.type -eq 'Microsoft.KeyVault/vaults' })
+    $doomed = @($all | Where-Object { $_.type -ne 'Microsoft.KeyVault/vaults' })
+    if ($doomed.Count -eq 0) {
+        Write-Host 'Nothing to delete.'
+    }
+    else {
+        Write-Host "These $($doomed.Count) resources in $ResourceGroup will be deleted:"
+        $doomed | Sort-Object type, name | ForEach-Object { Write-Host ("  {0,-55} {1}" -f $_.type, $_.name) }
+        foreach ($vault in $kept) { Write-Host "Kept: Key Vault '$($vault.name)' and its secrets (purge protection reserves the name for 90 days)." }
+        Write-Warning 'This loses the artifact bundles and source assets in storage, the images in the registry and the worker disks. After the deployment, run azure-post-deploy.ps1 again (the identities, and so the GitHub variables, change), deploy the API image and run a first acquisition.'
+        $typed = Read-Host "Type the resource group name ($ResourceGroup) to delete them"
+        if ($typed -cne $ResourceGroup) { throw 'Stopped: the name did not match, nothing was deleted.' }
+        Remove-GroupResources $doomed
+        Write-Host "Deleted $($doomed.Count) resources."
+    }
+}
+elseif ($RemoveExistingResources) {
+    Write-Host 'The resource group is new; nothing to remove.'
+}
+
 $me = & az ad signed-in-user show --query id -o tsv 2>$null
 if ($LASTEXITCODE -eq 0 -and $me) {
     $roles = Invoke-Az role assignment list --assignee $me --all --include-inherited --include-groups `
@@ -274,6 +366,9 @@ if ($ParameterFile) {
     Write-Host "Using $paramPath."
 }
 else {
+    if (-not $CostProfile) { $CostProfile = if ($EnvironmentName -like 'dev*') { 'cheapest' } else { 'standard' } }
+    Write-Host "Cost profile: $CostProfile."
+
     # Infrastructure redeploys must keep the running image, or the app is reset to the default tag.
     $apiImage = $null
     $siteName = "app-$WorkloadName-$EnvironmentName"
@@ -303,6 +398,7 @@ else {
         "param environmentName = $(ConvertTo-BicepString $EnvironmentName)",
         "param workloadName = $(ConvertTo-BicepString $WorkloadName)",
         "param location = $(ConvertTo-BicepString $Location)",
+        "param costProfile = $(ConvertTo-BicepString $CostProfile)",
         "param tags = {`n$tagLines`n}",
         "param allowedIngressCidrs = $(ConvertTo-BicepArray $AllowedIngressCidrs)",
         "param alertEmailReceivers = $(ConvertTo-BicepArray $AlertEmail)",
@@ -331,13 +427,76 @@ if (-not $passwordWasSet) {
 }
 
 try {
-    # -- 5. What-if and deployment ---------------------------------------------------------------
+    # -- 5. Existing resources the new settings cannot update in place ----------------------------
+    Write-Step 'Checking existing resources against the new settings'
+    # Literal values from the parameter file; anything else falls back to the template default.
+    $paramText = Get-Content -LiteralPath $paramPath -Raw
+    $paramValue = {
+        param($name, $default)
+        if ($paramText -match "(?m)^\s*param\s+$name\s*=\s*'?([\w.-]*)'?\s*(//.*)?$" -and $Matches[1]) { $Matches[1] } else { $default }
+    }
+    $targetCheapest = (& $paramValue 'costProfile' 'standard') -eq 'cheapest'
+    $targetDiskType = & $paramValue 'workerDiskType' $(if ($targetCheapest) { 'StandardSSD_LRS' } else { 'Premium_LRS' })
+    $targetPremiumRegistry = (& $paramValue 'enablePrivateNetworking' 'true') -ne 'false' -and -not $targetCheapest
+
+    function Assert-WorkerDeallocated {
+        $power = Invoke-Az vm get-instance-view -g $ResourceGroup -n $vmName --query "instanceView.statuses[?starts_with(code, 'PowerState/')].code | [0]" -o tsv
+        if ($power -ne 'PowerState/deallocated') {
+            throw "$vmName is $($power -replace 'PowerState/', ''), and its disks can only change type while it is deallocated. An acquisition run may be in progress: wait for the scheduler to deallocate it (or run az vm deallocate -g $ResourceGroup -n $vmName when no run is active), then run the script again."
+        }
+    }
+
+    $conversions = @()
+    $prefix = "$WorkloadName-$EnvironmentName"
+    $vmName = "vm-worker-$prefix"
+    $disks = @(Invoke-Az disk list -g $ResourceGroup --query "[?name=='osdisk-worker-$prefix' || name=='datadisk-worker-$prefix'].{id:id, name:name, sku:sku.name}" -o json | ConvertFrom-Json)
+    $disksToConvert = @($disks | Where-Object { $_.sku -ne $targetDiskType })
+    foreach ($disk in $disksToConvert) { $conversions += "Change disk '$($disk.name)' from $($disk.sku) to $targetDiskType (contents kept; the VM must be deallocated)" }
+
+    $registryEndpoints = @()
+    if (-not $targetPremiumRegistry) {
+        $registry = @(Invoke-Az acr list -g $ResourceGroup --query '[].{name:name, sku:sku.name, endpoints:privateEndpointConnections[].privateEndpoint.id}' -o json | ConvertFrom-Json) | Select-Object -First 1
+        if ($registry -and $registry.sku -eq 'Premium' -and $registry.endpoints) {
+            $registryEndpoints = @($registry.endpoints)
+            $conversions += "Delete the private endpoint(s) of registry '$($registry.name)' so it can move from Premium to Basic (images kept; the API then pulls over the registry's public endpoint)"
+        }
+    }
+
+    if ($conversions.Count -eq 0) {
+        Write-Host 'Everything can be updated in place.'
+    }
+    else {
+        $conversions | ForEach-Object { Write-Host "- $_" }
+        if ($ReplaceIncompatible -and $disksToConvert.Count -gt 0) { Assert-WorkerDeallocated }
+        if (-not $ReplaceIncompatible) {
+            $message = 'These existing resources cannot move to the new settings in place. Run the script again with -ReplaceIncompatible to convert them, or with -RemoveExistingResources to start over.'
+            if ($WhatIfOnly) { Write-Warning $message } else { throw $message }
+        }
+    }
+
+    # -- 6. What-if and deployment ---------------------------------------------------------------
     if (-not $SkipWhatIf) {
         Write-Step 'What-if'
         Invoke-Az deployment group what-if -g $ResourceGroup -p $paramPath --result-format ResourceIdOnly | Write-Host
         Write-Host 'Nested modules that depend on values from other modules show as unevaluated; role assignments show as unsupported. Both are expected.'
         if ($WhatIfOnly) { return }
         Confirm-Continue 'Deploy these changes?'
+    }
+
+    if ($conversions.Count -gt 0) {
+        Write-Step 'Converting existing resources'
+        Confirm-Continue 'Apply the conversions listed above?'
+        if ($disksToConvert.Count -gt 0) {
+            Assert-WorkerDeallocated
+            foreach ($disk in $disksToConvert) {
+                Write-Host "Converting $($disk.name) to $targetDiskType..."
+                Invoke-Az disk update --ids $disk.id --sku $targetDiskType --output none | Out-Null
+            }
+        }
+        foreach ($endpoint in $registryEndpoints) {
+            Write-Host "Deleting private endpoint $(Split-Path -Leaf $endpoint)..."
+            Invoke-Az network private-endpoint delete --ids $endpoint --output none | Out-Null
+        }
     }
 
     Write-Step 'Deploying'
@@ -354,7 +513,7 @@ finally {
     if (-not $passwordWasSet) { [Environment]::SetEnvironmentVariable($PasswordVariable, $null) }
 }
 
-# -- 6. Outputs and hand-off ---------------------------------------------------------------------
+# -- 7. Outputs and hand-off ---------------------------------------------------------------------
 Write-Step 'Outputs'
 $outputs = $result.properties.outputs
 foreach ($property in $outputs.PSObject.Properties) {

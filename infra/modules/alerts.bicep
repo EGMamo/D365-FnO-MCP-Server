@@ -20,6 +20,9 @@ param freshnessWindow string
 @description('401 responses per 15 minutes that count as repeated authentication failures.')
 param authFailureThreshold int
 
+@description('Run the /health availability test from 2 locations every 15 minutes instead of 3 every 5 minutes. Standard tests bill per run.')
+param availabilityTestCheap bool
+
 var actions = [{ actionGroupId: actionGroupId }]
 
 // ── API ────────────────────────────────────────────────────────────────────
@@ -81,6 +84,11 @@ resource serverErrors 'Microsoft.Insights/metricAlerts@2018-03-01' = {
   }
 }
 
+var testLocations = [
+  { Id: 'emea-nl-ams-azr' }
+  { Id: 'us-va-ash-azr' }
+  { Id: 'apac-sg-sin-azr' }
+]
 var webTestName = 'webtest-api-health-${namePrefix}'
 
 resource availabilityTest 'Microsoft.Insights/webtests@2022-06-15' = {
@@ -92,15 +100,11 @@ resource availabilityTest 'Microsoft.Insights/webtests@2022-06-15' = {
     SyntheticMonitorId: webTestName
     Name: 'API /health'
     Enabled: true
-    Frequency: 300
+    Frequency: availabilityTestCheap ? 900 : 300
     Timeout: 30
     Kind: 'standard'
     RetryEnabled: true
-    Locations: [
-      { Id: 'us-va-ash-azr' }
-      { Id: 'emea-nl-ams-azr' }
-      { Id: 'apac-sg-sin-azr' }
-    ]
+    Locations: take(testLocations, availabilityTestCheap ? 2 : 3)
     Request: {
       RequestUrl: 'https://${siteHostName}/health'
       HttpVerb: 'GET'
@@ -123,8 +127,9 @@ resource availability 'Microsoft.Insights/metricAlerts@2018-03-01' = {
     severity: 1
     enabled: true
     scopes: [availabilityTest.id, appInsightsId]
-    evaluationFrequency: 'PT1M'
-    windowSize: 'PT5M'
+    evaluationFrequency: availabilityTestCheap ? 'PT5M' : 'PT1M'
+    // At least one test interval, so every window holds a result from each location.
+    windowSize: availabilityTestCheap ? 'PT15M' : 'PT5M'
     criteria: {
       'odata.type': 'Microsoft.Azure.Monitor.WebtestLocationAvailabilityCriteria'
       webTestId: availabilityTest.id

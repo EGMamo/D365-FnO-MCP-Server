@@ -26,6 +26,9 @@ param vmSize string
 @minValue(128)
 param dataDiskSizeGb int
 
+@description('Storage type of the OS and data disks: Premium_LRS or StandardSSD_LRS.')
+param diskType string
+
 param adminUsername string
 @secure()
 param adminPassword string
@@ -103,7 +106,7 @@ resource vm 'Microsoft.Compute/virtualMachines@2024-07-01' = {
       osDisk: {
         name: 'osdisk-worker-${namePrefix}'
         createOption: 'FromImage'
-        managedDisk: { storageAccountType: 'Premium_LRS' }
+        managedDisk: { storageAccountType: diskType }
         deleteOption: 'Delete'
       }
       dataDisks: [
@@ -112,7 +115,7 @@ resource vm 'Microsoft.Compute/virtualMachines@2024-07-01' = {
           lun: 0
           createOption: 'Empty'
           diskSizeGB: dataDiskSizeGb
-          managedDisk: { storageAccountType: 'Premium_LRS' }
+          managedDisk: { storageAccountType: diskType }
           deleteOption: 'Detach'
         }
       ]
