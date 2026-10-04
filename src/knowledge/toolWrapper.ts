@@ -1,7 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { logger } from '../utils/logger.js';
-import type { KnowledgeFilter } from './filter.js';
+import type { KnowledgeFilter, KnowledgeSession } from './filter.js';
 
 type ToolCallback = (...args: unknown[]) => CallToolResult | Promise<CallToolResult>;
 
@@ -13,7 +13,8 @@ type ToolCallback = (...args: unknown[]) => CallToolResult | Promise<CallToolRes
 export function registerWithKnowledgeFilter(
   server: McpServer,
   currentFilter: () => KnowledgeFilter | null,
-  register: () => void
+  register: () => void,
+  session?: KnowledgeSession
 ): void {
   const original = server.tool.bind(server) as (...args: unknown[]) => unknown;
   const patched = (...args: unknown[]) => {
@@ -28,7 +29,7 @@ export function registerWithKnowledgeFilter(
         // Tools with an input schema receive (args, extra); tools without one receive (extra).
         const toolArgs = callArgs.length > 1 ? callArgs[0] : {};
         try {
-          return await filter.apply(name, toolArgs, result);
+          return await filter.apply(name, toolArgs, result, session);
         } catch (error) {
           logger.warn('Knowledge filter failed; returning the unfiltered result', {
             tool: name,

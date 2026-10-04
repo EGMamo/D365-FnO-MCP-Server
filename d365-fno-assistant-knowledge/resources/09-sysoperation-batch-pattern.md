@@ -1,6 +1,6 @@
 ---
 appliesTo:
-  tools: [analyze_batch_class, get_class_hierarchy, search_symbols]
+  tools: [analyze_batch_class, get_class_hierarchy, search_symbols, create_sys_operation, create_runbase_batch]
 match:
   names: ['*Controller', '*Contract', '*Service']
 note: "SysOperation = DataContract + Service + Controller. The controller's new() must be protected (BPErrorClassNewNotProtected) and getFirstQuery() returns the contract query."

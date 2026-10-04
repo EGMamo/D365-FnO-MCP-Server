@@ -4,6 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { z } from 'zod';
 import { stripFrontMatter } from '../knowledge/topics.js';
+import type { KnowledgeFilter, KnowledgeSession } from '../knowledge/filter.js';
 
 const KB_DIR_NAME = 'd365-fno-assistant-knowledge';
 const RESOURCE_SUBDIR = 'resources';
@@ -143,6 +144,48 @@ export function registerKnowledgeResources(server: McpServer, kbDir: string | nu
           { role: 'user' as const, content: { type: 'text' as const, text: `${SYSTEM_PROMPT}\n\n${body}` } },
         ],
       };
+    }
+  );
+}
+
+export const TASK_GUIDANCE_HINT =
+  'For a multi-step request (a feature, batch job, integration or fix), call get_task_guidance with the ' +
+  "user's request first: it returns the knowledge base topics that apply and the parts no topic covers, and " +
+  'later tool results in this session carry the matching topic notes.';
+
+/**
+ * Registers `get_task_guidance`: the client hands over the user's whole request, gets the topics
+ * that apply (matched clause by clause) plus the parts no topic covers, and the request is kept
+ * for the session so later index results are annotated with the topics the task needs.
+ */
+export function registerTaskGuidanceTool(
+  server: McpServer,
+  currentFilter: () => KnowledgeFilter | null,
+  session: KnowledgeSession
+): void {
+  server.tool(
+    'get_task_guidance',
+    `Match a whole D365 F&O development request against the knowledge base before planning it. ${TASK_GUIDANCE_HINT} ` +
+      'Read the returned topics with their d365kb:// URIs. For parts listed under "uncovered", rely on the index tools only and say the knowledge base has no guidance for them.',
+    {
+      task: z
+        .string()
+        .trim()
+        .min(10, 'Describe the request in at least a few words.')
+        .max(4000)
+        .describe("The user's request in their own words, e.g. 'batch job that posts arrival journals and creates product receipts'."),
+    },
+    { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    async ({ task }) => {
+      const filter = currentFilter();
+      if (!filter) {
+        return {
+          content: [{ type: 'text' as const, text: 'The knowledge filter is not loaded yet or is turned off (D365_KNOWLEDGE_FILTER=0).' }],
+          isError: true,
+        };
+      }
+      const guidance = await filter.guidance(task, session);
+      return { content: [{ type: 'text' as const, text: JSON.stringify(guidance, null, 2) }] };
     }
   );
 }

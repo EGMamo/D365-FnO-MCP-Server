@@ -116,6 +116,7 @@ describe('compiled MCP server over http', () => {
     const listedTools = (await client.listTools()).tools;
     const tools = listedTools.map((tool) => tool.name);
     expect(tools).toContain('get_visual_studio_workspace');
+    expect(tools).toContain('get_task_guidance');
     expect(tools).not.toContain('write_table_extension');
     expect(tools).not.toContain('digest_knowledge');
     const symbolSearch = listedTools.find((tool) => tool.name === 'search_symbols');

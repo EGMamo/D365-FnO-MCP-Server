@@ -18,8 +18,13 @@ import { registerTelemetryTools } from '../tools/telemetry.js';
 import { registerCodeQualityTools } from '../tools/codeQuality.js';
 import { registerGeneratorTools } from '../tools/generators.js';
 import { registerWriterTools } from '../tools/writers.js';
-import { findKnowledgeDir, registerKnowledgeResources } from '../tools/knowledge.js';
-import { startKnowledgeFilter } from '../knowledge/filter.js';
+import {
+  findKnowledgeDir,
+  registerKnowledgeResources,
+  registerTaskGuidanceTool,
+  TASK_GUIDANCE_HINT,
+} from '../tools/knowledge.js';
+import { KnowledgeSession, startKnowledgeFilter } from '../knowledge/filter.js';
 import { registerWithKnowledgeFilter } from '../knowledge/toolWrapper.js';
 import { registerWorkspaceTools } from '../tools/workspace.js';
 
@@ -99,8 +104,9 @@ export async function startServer(): Promise<void> {
     }
     const server = new McpServer(
       { name: 'd365-fno-mcp-server', version: VERSION },
-      { instructions: instructions.text }
+      { instructions: config.knowledgeFilter ? `${instructions.text}\n\n${TASK_GUIDANCE_HINT}` : instructions.text }
     );
+    const knowledgeSession = new KnowledgeSession();
 
     registerWithKnowledgeFilter(server, knowledgeFilter.current, () => {
       registerMetadataTools(server, db, { sourceFilesAvailable });
@@ -111,8 +117,9 @@ export async function startServer(): Promise<void> {
       registerTelemetryTools(server, db);
       registerCodeQualityTools(server, db);
       registerReleasePlanTools(server, db);
-    });
-    registerGeneratorTools(server, db);
+      registerGeneratorTools(server, db);
+    }, knowledgeSession);
+    if (config.knowledgeFilter) registerTaskGuidanceTool(server, knowledgeFilter.current, knowledgeSession);
     registerWriterTools(server, db, {
       enableWriteTools: config.enableWriteTools,
       projectDir: config.projectDir,

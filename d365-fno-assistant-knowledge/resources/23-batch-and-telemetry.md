@@ -1,6 +1,6 @@
 ---
 appliesTo:
-  tools: [analyze_batch_class, generate_kql_query]
+  tools: [analyze_batch_class, generate_kql_query, create_sys_operation, create_runbase_batch]
 match:
   tools: [analyze_batch_class]
 note: "Use SysOperation for new batch work and make retryable batches idempotent before setting BatchRetryable. Batch telemetry events can be queried with KQL."

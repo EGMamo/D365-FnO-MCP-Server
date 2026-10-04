@@ -19,6 +19,11 @@ const MAX_SEMANTIC_NOTES = 2;
 /** Calibrated on the shipped topics: specific queries score 0.35-0.6 on their topic, noise < 0.3. */
 const SEMANTIC_NOTE_SCORE = 0.38;
 const MAX_QUERY_NAMES = 10;
+/** Whole requests score lower than short queries; clauses of a request reach 0.45+ on their topic. */
+const TASK_TOPIC_SCORE = 0.33;
+const TASK_STRONG_SCORE = 0.45;
+const MAX_TASK_TOPICS = 5;
+const MAX_TASK_CHARS = 4000;
 const QUERY_CACHE_SIZE = 256;
 
 /** Argument names that say which object type a tool is about. */
@@ -39,7 +44,7 @@ export interface KnowledgeNote {
   topic: string;
   title: string;
   note: string;
-  matchedBy: 'rule' | 'meaning';
+  matchedBy: 'rule' | 'meaning' | 'task';
   score?: number;
 }
 
@@ -50,6 +55,35 @@ export interface KnowledgeSection {
 }
 
 type Row = Record<string, unknown>;
+
+/**
+ * Per MCP session: the request the client registered with `get_task_guidance`, so later index
+ * calls are matched against the task as well as their own object names.
+ */
+export class KnowledgeSession {
+  task: { text: string; scores: Map<string, number> } | null = null;
+  /** Task notes already sent in this session; each is attached once, not on every call. */
+  readonly delivered = new Set<string>();
+}
+
+export interface TaskGuidance {
+  task: string;
+  /** strong: a topic clearly covers the request; partial: related topics only; none: no topic applies. */
+  coverage: 'strong' | 'partial' | 'none';
+  topics: Array<{ topic: string; title: string; note: string; score: number }>;
+  /** Parts of the request no topic covers; ground these in the index tools alone. */
+  uncovered: string[];
+  matchedBy: 'meaning' | 'keywords';
+}
+
+/** The request plus its clauses, so each part of a multi-step request is matched on its own. */
+export function splitTask(task: string): string[] {
+  const clauses = task
+    .split(/[,;.\n]|\b(?:and then|and|then|using|with|so that|where|which)\b/i)
+    .map((clause) => clause.replace(/\s+/g, ' ').trim())
+    .filter((clause) => clause.split(' ').length >= 3);
+  return [task.replace(/\s+/g, ' ').trim(), ...new Set(clauses)];
+}
 
 function isRow(value: unknown): value is Row {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -105,7 +139,54 @@ export class KnowledgeFilter {
     return this.vectors !== null;
   }
 
-  async apply(tool: string, args: unknown, result: CallToolResult): Promise<CallToolResult> {
+  /**
+   * Matches a whole request against the topics, clause by clause, records it on `session` and
+   * reports which parts of it no topic covers.
+   */
+  async guidance(task: string, session?: KnowledgeSession): Promise<TaskGuidance> {
+    const text = task.slice(0, MAX_TASK_CHARS);
+    const clauses = splitTask(text);
+    const scores = new Map<string, number>();
+    const uncovered: string[] = [];
+    if (this.vectors) {
+      for (const [i, clause] of clauses.entries()) {
+        const matches = scoreQuery(await this.embedQuery(clause), this.vectors);
+        for (const match of matches) scores.set(match.slug, Math.max(scores.get(match.slug) ?? 0, match.score));
+        if (i > 0 && (matches[0]?.score ?? 0) < TASK_TOPIC_SCORE) uncovered.push(clause);
+      }
+    } else {
+      // Without the model: shared words between the request and each topic's title and note.
+      const words = new Set(text.toLowerCase().match(/[a-z]{4,}/g) ?? []);
+      for (const topic of this.topics) {
+        const topicWords = new Set(`${topic.title} ${topic.header.note ?? topic.summary}`.toLowerCase().match(/[a-z]{4,}/g) ?? []);
+        const shared = [...words].filter((word) => topicWords.has(word)).length;
+        scores.set(topic.slug, words.size === 0 ? 0 : Math.min(1, shared / 4));
+      }
+    }
+    // When one topic clearly covers the request, keep only topics at least half as close.
+    const best = Math.max(0, ...scores.values());
+    const cutoff = Math.max(TASK_TOPIC_SCORE, best * 0.5);
+    const ranked = this.topics
+      .map((topic) => ({ topic, score: scores.get(topic.slug) ?? 0 }))
+      .filter((entry) => entry.score >= cutoff)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, MAX_TASK_TOPICS);
+    if (session) session.task = { text, scores: new Map(ranked.map(({ topic, score }) => [topic.slug, score])) };
+    return {
+      task: text,
+      coverage: best >= TASK_STRONG_SCORE ? 'strong' : best >= TASK_TOPIC_SCORE ? 'partial' : 'none',
+      topics: ranked.map(({ topic, score }) => ({
+        topic: topic.uri,
+        title: topic.title,
+        note: topic.header.note ?? topic.summary,
+        score: Number(score.toFixed(3)),
+      })),
+      uncovered,
+      matchedBy: this.vectors ? 'meaning' : 'keywords',
+    };
+  }
+
+  async apply(tool: string, args: unknown, result: CallToolResult, session?: KnowledgeSession): Promise<CallToolResult> {
     if (result.isError || !Array.isArray(result.content) || this.topics.length === 0) return result;
     const index = result.content.findIndex((item) => item.type === 'text');
     if (index < 0) return result;
@@ -187,6 +268,18 @@ export class KnowledgeFilter {
         noted.add(topic.slug);
         added++;
       }
+    }
+    // Topics the session's task needs, on the calls their header names, once per session.
+    if (session?.task) {
+      for (const topic of candidates) {
+        if (section.notes.length >= MAX_NOTES) break;
+        const score = session.task.scores.get(topic.slug) ?? 0;
+        if (score < TASK_TOPIC_SCORE || noted.has(topic.slug) || session.delivered.has(topic.slug)) continue;
+        if (!topic.header.appliesTo?.tools?.includes(tool)) continue;
+        section.notes.push({ ...this.note(topic, 'task'), score: Number(score.toFixed(3)) });
+        noted.add(topic.slug);
+      }
+      for (const note of section.notes) session.delivered.add(note.topic.slice('d365kb://'.length));
     }
 
     if (section.notes.length === 0 && !section.filtered && !section.reordered) return result;

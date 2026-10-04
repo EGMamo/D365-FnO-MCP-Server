@@ -247,6 +247,14 @@ release-plan tool result passes through it before it reaches the client.
 - **Annotate** attaches up to three matching topics with a one-line note, found by the topic's
   header rules and, with the embedding model installed, by meaning.
 
+**Task guidance.** For a multi-step request, the client calls `get_task_guidance` with the user's
+request first (the server's instructions tell it to). The request is matched clause by clause, so
+"post the arrival journals and create product receipts using the packing slip id" finds the topics
+for each part. The result lists the topics that apply, a coverage rating (`strong`, `partial` or
+`none`) and the clauses no topic covers, which tells you where the knowledge base has a gap. The
+request is kept for the MCP session: later index and generator calls get the task's topics attached
+once, on the tools those topics name.
+
 The filter only removes, reorders or adds notes. It never adds or renames objects, so every name in
 a result still comes from the index. The tool's own JSON stays the first content item, and the
 knowledge section is a second item: `{"knowledge": {"notes": [...], "filtered": [...], "reordered": [...]}}`.
@@ -508,7 +516,7 @@ Write tools (only with `D365_ENABLE_WRITE_TOOLS=1`):
 `write_table_extension`, `apply_table_extension_change`
 
 Resources and prompts:
-`d365kb://{slug}` knowledge base topics, and the `d365_pattern_assistant` prompt. Index tool results also carry matching topic notes (see [Knowledge filter](#knowledge-filter)).
+`d365kb://{slug}` knowledge base topics, and the `d365_pattern_assistant` prompt. Index tool results also carry matching topic notes, and `get_task_guidance` matches a whole request against the knowledge base (see [Knowledge filter](#knowledge-filter)).
 
 ## Optional compiler cross-reference usage data
 

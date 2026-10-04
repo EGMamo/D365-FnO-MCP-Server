@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import { KnowledgeFilter } from '../src/knowledge/filter.js';
+import { KnowledgeFilter, KnowledgeSession, splitTask } from '../src/knowledge/filter.js';
 import { findEmbeddingModelDir, loadEmbedder } from '../src/knowledge/embedder.js';
 import { scoreDraftByMeaning } from '../src/knowledge/semantic.js';
 import { loadTopics, splitFrontMatter } from '../src/knowledge/topics.js';
@@ -124,6 +124,39 @@ describe('knowledge filter (rules)', () => {
   });
 });
 
+describe('task guidance', () => {
+  it('splits a multi-step request into clauses', () => {
+    expect(splitTask('post the arrival journals and create product receipts using the packing slip id')).toEqual([
+      'post the arrival journals and create product receipts using the packing slip id',
+      'post the arrival journals',
+      'create product receipts',
+      'the packing slip id',
+    ]);
+  });
+
+  it('falls back to keywords without the model and attaches task topics once per session', async () => {
+    const kbDir = fs.mkdtempSync(path.join(os.tmpdir(), 'd365-kb-task-'));
+    try {
+      fs.writeFileSync(
+        path.join(kbDir, '01-receipts.md'),
+        '---\nappliesTo:\n  tools: [search_symbols]\nnote: Post arrival journals before product receipts.\n---\n# Arrival journals and product receipts\n'
+      );
+      fs.writeFileSync(path.join(kbDir, '02-colors.md'), '---\nnote: Color groups.\n---\n# Color groups\n');
+      const filter = await KnowledgeFilter.create(kbDir);
+      const session = new KnowledgeSession();
+      const guidance = await filter.guidance('batch that posts arrival journals and creates product receipts', session);
+      expect(guidance).toMatchObject({ coverage: 'strong', matchedBy: 'keywords', topics: [{ topic: 'd365kb://01-receipts' }] });
+
+      const first = await filter.apply('search_symbols', { query: 'Vend' }, json([{ name: 'VendTable', type: 'Table' }]), session);
+      expect(knowledgeOf(first).notes).toEqual([expect.objectContaining({ topic: 'd365kb://01-receipts', matchedBy: 'task' })]);
+      const again = await filter.apply('search_symbols', { query: 'Vend' }, json([{ name: 'VendTable', type: 'Table' }]), session);
+      expect(again.content).toHaveLength(1);
+    } finally {
+      fs.rmSync(kbDir, { recursive: true, force: true });
+    }
+  });
+});
+
 const modelDir = findEmbeddingModelDir();
 
 describe.skipIf(!modelDir)('knowledge embeddings (needs npm run fetch-model)', () => {
@@ -147,6 +180,17 @@ describe.skipIf(!modelDir)('knowledge embeddings (needs npm run fetch-model)', (
       fs.rmSync(kbDir, { recursive: true, force: true });
     }
   }, 60_000);
+
+  it('finds the arrival journal topic for the full request and reports uncovered parts', async () => {
+    const filter = await KnowledgeFilter.create(findKnowledgeDir(), { embedder: await loadEmbedder(modelDir!) });
+    const covered = await filter.guidance(
+      'create a batch job that posts the arrival journals and creates product receipts for PO lines using the packing slip id as the product receipt number and the registered qty as the received qty'
+    );
+    expect(covered.coverage).toBe('strong');
+    expect(covered.topics[0].topic).toBe('d365kb://25-arrival-journals-to-product-receipts');
+    const gap = await filter.guidance('generate an electronic reporting format for the Brazilian tax authority');
+    expect(gap.coverage).not.toBe('strong');
+  }, 120_000);
 
   it('blocks a draft that restates an existing topic in different words', async () => {
     const kbDir = findKnowledgeDir()!;

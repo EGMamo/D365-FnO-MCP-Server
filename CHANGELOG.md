@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `filter`, `rank`, `note`); all 24 shipped topics have one. Matching by meaning uses a local
   all-MiniLM-L6-v2 embedding model run through ONNX Runtime WebAssembly (`fetch-model`, included in
   the Docker image); without it the filter runs on header rules. `D365_KNOWLEDGE_FILTER=0` turns it off.
+- `get_task_guidance` tool: matches a whole request against the knowledge base clause by clause,
+  rates coverage, lists the parts no topic covers, and keeps the task for the session so later
+  index and generator results carry the task's topics once. Generator tools now pass through the
+  filter too.
+- Knowledge topic 25: posting arrival journals and product receipts in batch (API names marked for
+  verification against an index).
 - `digest` blocks drafts that repeat an existing topic in different words (meaning-based check with
   the same model) and validates topic headers. New `knowledge-check` command validates headers and
   caches topic vectors.
