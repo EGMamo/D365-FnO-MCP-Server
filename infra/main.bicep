@@ -93,6 +93,8 @@ param freshnessWindow string = 'P2D'
 param authFailureThreshold int = 50
 
 var namePrefix = '${workloadName}-${environmentName}'
+// Storage account and registry names allow only lowercase letters and digits.
+var compactName = toLower(replace(replace('${workloadName}${environmentName}', '-', ''), '_', ''))
 var suffix = take(uniqueString(resourceGroup().id, namePrefix), 6)
 var allTags = union({ workload: workloadName, environment: environmentName }, tags)
 
@@ -139,7 +141,7 @@ module storage 'modules/storage.bicep' = {
   params: {
     location: location
     tags: allTags
-    accountName: take('st${toLower(workloadName)}${toLower(environmentName)}${suffix}', 24)
+    accountName: take('st${compactName}${suffix}', 24)
     artifactContainerName: artifactContainerName
     sourceContainerName: sourceContainerName
     operationsContainerName: operationsContainerName
@@ -191,7 +193,7 @@ module registry 'modules/registry.bicep' = {
   params: {
     location: location
     tags: allTags
-    name: 'cr${toLower(workloadName)}${toLower(environmentName)}${suffix}'
+    name: take('cr${compactName}${suffix}', 50)
     sku: enablePrivateNetworking ? 'Premium' : 'Basic'
     publicNetworkAccess: enablePrivateNetworking ? registryPublicNetworkAccess : true
     apiPrincipalId: identities.outputs.apiPrincipalId
