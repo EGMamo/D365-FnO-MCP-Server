@@ -68,6 +68,8 @@ param workerScheduleHoursUtc array = [2]
 @minValue(1)
 @maxValue(23)
 param workerRunTimeoutHours int = 6
+@description('Turn scheduled acquisition runs on. Leave false for a new environment: azure-post-deploy.ps1 turns them on after the first acquisition succeeds, and azure-deploy.ps1 keeps the current setting on redeploys.')
+param workerSchedulerEnabled bool = false
 
 // ── Networking ─────────────────────────────────────────────────────────────
 @description('Private endpoints for Storage, Key Vault and ACR with public access disabled, and VNet integration for the API. The VNet, worker subnet and NAT gateway are always created.')
@@ -254,6 +256,7 @@ module worker 'modules/worker.bicep' = {
     workerRoot: workerRoot
     scheduleHoursUtc: workerScheduleHoursUtc
     runTimeoutHours: workerRunTimeoutHours
+    schedulerEnabled: workerSchedulerEnabled
     workspaceId: monitoring.outputs.workspaceId
   }
 }
@@ -291,3 +294,4 @@ output apiKeyVaultName string = apiVault.outputs.name
 output workerKeyVaultName string = workerVault.outputs.name
 output workerVmName string = worker.outputs.vmName
 output schedulerName string = worker.outputs.schedulerName
+output workerRunTimeoutHours int = workerRunTimeoutHours

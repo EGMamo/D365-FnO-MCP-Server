@@ -154,6 +154,7 @@ export async function startServer(): Promise<void> {
       indexDbPath: config.indexDbPath,
       serverVersion: VERSION,
       indexSchemaVersion: INDEX_SCHEMA_VERSION,
+      requiredCapabilities: config.artifactRequiredCapabilities,
     };
     if (config.artifactSource === 'azure-blob') {
       logger.info('Materializing the active artifact bundle from Azure Blob Storage', {

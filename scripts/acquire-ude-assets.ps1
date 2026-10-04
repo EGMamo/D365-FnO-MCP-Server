@@ -16,7 +16,9 @@ param(
     [ValidatePattern("^\d+\.\d+\.\d+\.\d+$")]
     [string]$AppVersion,
 
-    [ValidateSet("finopsvsix22", "finopsvsix", "crossreference")]
+    # systemmetadata is the X++ SDK zip (PackagesLocalDirectory) that 'pac tool xpp install'
+    # downloads from the same Dev Tools endpoint.
+    [ValidateSet("systemmetadata", "finopsvsix22", "finopsvsix", "crossreference")]
     [string[]]$AssetNames = @("finopsvsix22", "crossreference"),
 
     [string]$OutputDirectory = "$env:USERPROFILE\Documents\D365SdkProof\UdeAssets",

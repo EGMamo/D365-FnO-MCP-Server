@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { safeSegment } from './workspace/safety.js';
 import { parseApiKeys, type ApiKeyEntry } from './server/apiKeys.js';
+import { parseRequiredCapabilities } from './indexer/capabilityCoverage.js';
 import { VERSION } from './version.js';
 
 /**
@@ -37,6 +38,8 @@ const configSchema = z.object({
   D365_ARTIFACT_ACCOUNT_URL: z.string().default(''),
   D365_ARTIFACT_CONTAINER: z.string().default(''),
   D365_ARTIFACT_MANAGED_IDENTITY_CLIENT_ID: z.string().default(''),
+  /** Comma-separated capabilities the active bundle must declare complete. Empty: the indexer's complete ones. */
+  D365_ARTIFACT_REQUIRED_CAPABILITIES: z.string().default(''),
   D365_ENABLE_WRITE_TOOLS: z.coerce.number().default(0),
   /** 1 (default) passes index tool results through the knowledge base filter; 0 returns raw results. */
   D365_KNOWLEDGE_FILTER: z.coerce.number().default(1),
@@ -115,6 +118,11 @@ const configSchemaWithGuards = configSchema.superRefine((env, ctx) => {
       issue('D365_ARTIFACT_CONTAINER', 'D365_ARTIFACT_CONTAINER is required when D365_ARTIFACT_SOURCE=azure-blob');
     }
   }
+  try {
+    parseRequiredCapabilities(env.D365_ARTIFACT_REQUIRED_CAPABILITIES);
+  } catch (err) {
+    issue('D365_ARTIFACT_REQUIRED_CAPABILITIES', err instanceof Error ? err.message : String(err));
+  }
   if (
     (env.D365_TARGET_PROJECT.trim().length > 0 || env.D365_TARGET_SOLUTION.trim().length > 0) &&
     env.D365_VISUAL_STUDIO_WORKSPACE_DIR.trim().length === 0
@@ -160,6 +168,7 @@ function buildConfig(env: ParsedEnv) {
     artifactAccountUrl: env.D365_ARTIFACT_ACCOUNT_URL.trim(),
     artifactContainer: env.D365_ARTIFACT_CONTAINER.trim(),
     artifactManagedIdentityClientId: env.D365_ARTIFACT_MANAGED_IDENTITY_CLIENT_ID.trim(),
+    artifactRequiredCapabilities: parseRequiredCapabilities(env.D365_ARTIFACT_REQUIRED_CAPABILITIES),
     enableWriteTools: env.D365_ENABLE_WRITE_TOOLS === 1,
     knowledgeFilter: env.D365_KNOWLEDGE_FILTER !== 0,
     projectDir: env.D365_PROJECT_DIR,

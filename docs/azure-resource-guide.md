@@ -32,7 +32,7 @@ acquisition and worker-integration gates described in Phase 0:
 | Resource group | One per environment | Lifecycle and RBAC boundary |
 | Azure App Service plan | Linux, one always-on instance | Hosts the read-only MCP API |
 | Azure App Service web app | Custom container | Downloads, verifies, and locally activates one index bundle before becoming ready |
-| Azure Windows VM | Worker host | Runs `pac tool xpp install`, SDK acquisition, indexing, validation, and promotion |
+| Azure Windows VM | Worker host | Runs SDK acquisition from the Dev Tools service (`scripts/worker/acquire-ude-sources.ps1`), indexing, validation, and promotion |
 | Azure Container Registry | Basic initially | Stores versioned API and worker images; disable anonymous/admin access |
 | Azure Storage account | Standard general-purpose v2, LRS initially | Stores immutable bundles, source artifacts, run reports, and the promotion pointer |
 | Azure Key Vault | RBAC authorization, purge protection | Holds Power Platform credentials and hosted API keys |
@@ -366,8 +366,9 @@ An authorized Entra administrator must:
    certificate/federated approach supported by the final worker.
 3. Add the service principal as an application user in the target Power
    Platform environment.
-4. Assign only the environment roles required for the selected `pac`
-   acquisition commands.
+4. Assign only the environment roles the worker needs to read the F&O version
+   and the Dev Tools downloads: start with Basic User and add privileges a
+   preflight error names (`azure-post-deploy.ps1 -Step PrepareWorker`).
 5. Confirm the application user can access the target D365 F&O environment
    and required package assets.
 6. Record an owner and rotation date.
@@ -477,9 +478,13 @@ same.
    - Emit a `started` run event.
 2. **Authenticate**
    - Obtain Azure tokens through managed identity.
-   - Resolve a Power Platform credential from Key Vault only if managed
-     identity cannot perform the required `pac` operation.
-   - Create an isolated, run-scoped `pac` authentication profile.
+   - Read the Power Platform client secret from the worker Key Vault with the
+     worker's managed identity and keep it in memory; no `pac` profile is
+     created. `scripts/worker/acquire-ude-sources.ps1` implements this and the
+     next step: it asks Dataverse for the environment's version and downloads
+     the X++ SDK (`systemmetadata`, the package `pac tool xpp install` uses),
+     the VSIX and the XRef backup from the Dev Tools service. The XPPConfig
+     discovery below applies to a `pac`-installed SDK, not to this flow.
 3. **Acquire sources**
    - Download the current D365 F&O SDK/package local directory.
    - Parse the generated
@@ -657,8 +662,8 @@ The POC is complete only when all checks pass:
       hosted startup seam are implemented and tested.
 - [x] The Azure Blob adapter preserves the implemented contract and passes
       create-only, ETag, lease, corruption, rollback, and retention tests.
-- [ ] `pac tool xpp install` runs noninteractively on the Windows worker with
-      the chosen identity.
+- [ ] The worker downloads the X++ SDK noninteractively with the chosen
+      identity (`PrepareWorker` preflight, then `FirstAcquisition`).
 - [ ] The worker acquires all required sources and records provenance.
 - [ ] A candidate build produces the required capability inventory.
 - [ ] Integrity and compatibility validation pass.

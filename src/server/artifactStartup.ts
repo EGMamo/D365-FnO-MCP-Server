@@ -1,11 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import {
-  ARTIFACT_CAPABILITY_NAMES,
-  type ArtifactCapabilityName,
-  type ArtifactCompatibilityPolicy,
-  type ArtifactManifest,
+import type {
+  ArtifactCapabilityName,
+  ArtifactCompatibilityPolicy,
+  ArtifactManifest,
 } from '../indexer/artifactContract.js';
+import { DEFAULT_REQUIRED_CAPABILITIES } from '../indexer/capabilityCoverage.js';
 import {
   activateValidatedArtifactBundle,
   artifactBundleDirectory,
@@ -24,6 +24,7 @@ export interface ArtifactStartupOptions {
   indexDbPath: string;
   serverVersion: string;
   indexSchemaVersion: number;
+  /** Capabilities the bundle must declare complete; defaults to the ones the indexer covers completely. */
   requiredCapabilities?: readonly ArtifactCapabilityName[];
 }
 
@@ -37,7 +38,7 @@ function startupPolicy(options: ArtifactStartupOptions): ArtifactCompatibilityPo
     serverVersion: options.serverVersion,
     minimumIndexSchemaVersion: options.indexSchemaVersion,
     maximumIndexSchemaVersion: options.indexSchemaVersion,
-    requiredCapabilities: options.requiredCapabilities ?? ARTIFACT_CAPABILITY_NAMES,
+    requiredCapabilities: options.requiredCapabilities ?? DEFAULT_REQUIRED_CAPABILITIES,
   };
 }
 

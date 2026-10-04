@@ -65,6 +65,11 @@ Commands:
   acquire                   Run one private acquisition/build/validation/publication cycle
       --config <file>       Worker JSON config (default D365_ACQUISITION_CONFIG)
       --run-id <id>         Stable run identifier for restart idempotency (default UTC timestamp)
+  prepare-bundle            Worker build step: index acquired UDE assets and write the bundle options
+      --sources <file>      sources.json written by the acquire step
+      --db-path <path>      New SQLite index to build (must not exist yet)
+      --bundle-options <path> CreateArtifactBundleOptions JSON to write (never overwritten)
+      --release-id <id>     Release identity for the manifest (default ude-<applicationVersion>)
   index [--force]           Run a foreground indexing pass
       --packages-dir <dir>  PackagesLocalDirectory to index (default D365_PACKAGES_DIR)
       --db-path <path>      SQLite index path (default D365_INDEX_DB_PATH or ./d365_index.db)

@@ -1,0 +1,114 @@
+name: Release VS extension
+
+# Builds the Visual Studio extension and publishes it as a GitHub release with the
+# VSIX and its SHA-256 checksum attached. Start it either way:
+#   - push a tag:  git tag extension-v0.2.0 && git push origin extension-v0.2.0
+#   - Actions > Release VS extension > Run workflow on master, with version 0.2.0
+#     (creates the extension-v0.2.0 tag on that commit)
+# The version is stamped into the VSIX. The tag prefix must not start with "v":
+# deploy.yml deploys the API on every v* tag.
+
+on:
+  push:
+    tags: ['extension-v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to release, for example 0.2.0
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-vs-extension
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Resolve the version
+        id: version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [ "$EVENT_NAME" = workflow_dispatch ]; then
+            if [ "$REF" != refs/heads/master ]; then
+              echo "::error::Run this workflow on master, not $REF."
+              exit 1
+            fi
+            version="${INPUT_VERSION#v}"
+          else
+            version="${REF_NAME#extension-v}"
+          fi
+          # Visual Studio needs a plain numeric version; pre-release suffixes are rejected.
+          if ! [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::'$version' is not a version like 1.2.3."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=extension-v$version" >> "$GITHUB_OUTPUT"
+
+      # The build runs NuGet package targets; keep the write token out of .git/config.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Check that the release does not exist yet
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "::error::Release $TAG already exists. Release a new version instead."
+            exit 1
+          fi
+          if [ "$EVENT_NAME" = workflow_dispatch ] && [ -n "$(git ls-remote --tags origin "refs/tags/$TAG")" ]; then
+            echo "::error::Tag $TAG already exists without a release. Re-run the workflow run for that tag, or pick a new version."
+            exit 1
+          fi
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '8.0.x'
+
+      - run: dotnet test vs-extension/tests/D365FnoMcp.Core.Tests
+
+      - name: Build the VSIX
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: dotnet build vs-extension/src/D365FnoMcp.Extension -c Release "-p:Version=$VERSION"
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          mkdir -p release
+          cp vs-extension/src/D365FnoMcp.Extension/bin/Release/net8.0-windows8.0/D365FnoMcp.Extension.vsix release/
+          cd release
+          sha256sum D365FnoMcp.Extension.vsix > D365FnoMcp.Extension.vsix.sha256
+          cat > notes.md <<EOF
+          Visual Studio extension $VERSION for Visual Studio 2022 17.14 or later and Visual Studio 2026.
+
+          To install, close Visual Studio, download \`D365FnoMcp.Extension.vsix\` and double-click it.
+          Then open **Extensions > D365 F&O MCP > Configure Connection...** in Visual Studio.
+
+          SHA-256: \`$(cut -d ' ' -f 1 D365FnoMcp.Extension.vsix.sha256)\`
+          EOF
+          gh release create "$TAG" D365FnoMcp.Extension.vsix D365FnoMcp.Extension.vsix.sha256 \
+            --title "VS extension $VERSION" --notes-file notes.md --target "$GITHUB_SHA" --latest

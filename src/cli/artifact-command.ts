@@ -3,12 +3,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { VERSION } from '../version.js';
 import { INDEX_SCHEMA_VERSION } from '../indexer/db.js';
-import {
-  ARTIFACT_CAPABILITY_NAMES,
-  type ArtifactCapabilityName,
-  type ArtifactCompatibilityPolicy,
-} from '../indexer/artifactContract.js';
+import type { ArtifactCompatibilityPolicy } from '../indexer/artifactContract.js';
 import { validateArtifactBundle } from '../indexer/artifactBundle.js';
+import { parseRequiredCapabilities } from '../indexer/capabilityCoverage.js';
 import {
   createAzureBlobArtifactStore,
   type AzureBlobArtifactStoreOptions,
@@ -55,16 +52,6 @@ function positiveInteger(value: string | undefined, label: string): number {
   return parsed;
 }
 
-function capabilities(value: string | undefined): ArtifactCapabilityName[] {
-  if (!value?.trim()) return [...ARTIFACT_CAPABILITY_NAMES];
-  const result = value.split(',').map((item) => item.trim()).filter(Boolean);
-  const allowed = new Set<string>(ARTIFACT_CAPABILITY_NAMES);
-  if (result.some((item) => !allowed.has(item))) {
-    throw new Error(`--required-capabilities contains an unknown capability.`);
-  }
-  return [...new Set(result)] as ArtifactCapabilityName[];
-}
-
 function policy(env: NodeJS.ProcessEnv): ArtifactCompatibilityPolicy {
   const minimum = Number(env.D365_ARTIFACT_MIN_INDEX_SCHEMA_VERSION ?? INDEX_SCHEMA_VERSION);
   const maximum = Number(env.D365_ARTIFACT_MAX_INDEX_SCHEMA_VERSION ?? INDEX_SCHEMA_VERSION);
@@ -75,7 +62,7 @@ function policy(env: NodeJS.ProcessEnv): ArtifactCompatibilityPolicy {
     serverVersion: env.D365_ARTIFACT_SERVER_VERSION?.trim() || VERSION,
     minimumIndexSchemaVersion: minimum,
     maximumIndexSchemaVersion: maximum,
-    requiredCapabilities: capabilities(env.D365_ARTIFACT_REQUIRED_CAPABILITIES),
+    requiredCapabilities: parseRequiredCapabilities(env.D365_ARTIFACT_REQUIRED_CAPABILITIES),
   };
 }
 

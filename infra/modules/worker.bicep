@@ -7,9 +7,10 @@
 // own Blob lease remains the guard against overlapping runs; the scheduler also
 // allows only one workflow run at a time.
 //
-// Installing Node.js, PAC, the worker build and acquisition.json on the VM is a
-// separate operator step (see infra/README.md); this template only provides
-// the host, identity, schedule and telemetry.
+// Installing Node.js, AzCopy, the worker build and acquisition.json on the VM is
+// a separate operator step (azure-post-deploy.ps1 SetupWorker and PrepareWorker,
+// see infra/README.md); this template only provides the host, identity,
+// schedule and telemetry.
 
 param location string
 param tags object
@@ -34,6 +35,9 @@ param workerRoot string
 
 @description('UTC hours at which the scheduler starts an acquisition run, for example [2].')
 param scheduleHoursUtc array
+
+@description('Whether scheduled runs are on. A new environment starts with them off until a first acquisition succeeds.')
+param schedulerEnabled bool
 
 @description('Upper bound for one acquisition run, in hours. Set it above the measured build duration.')
 @minValue(1)
@@ -202,8 +206,8 @@ var armAuth = {
   audience: environment().resourceManager
 }
 
-// Run Command passes RunId as a named PowerShell argument. Worker child output
-// is already suppressed by the worker itself; only the exit status matters here.
+// Run Command passes RunId as a named PowerShell argument. Step output goes to
+// the run's logs folder on the VM; only the exit status matters here.
 var runScript = join([
   'param([Parameter(Mandatory = $true)][string]$RunId)'
   '$ErrorActionPreference = \'Stop\''
@@ -218,7 +222,7 @@ resource scheduler 'Microsoft.Logic/workflows@2019-05-01' = {
   tags: tags
   identity: { type: 'SystemAssigned' }
   properties: {
-    state: 'Enabled'
+    state: schedulerEnabled ? 'Enabled' : 'Disabled'
     definition: {
       '$schema': 'https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#'
       contentVersion: '1.0.0.0'
@@ -229,6 +233,9 @@ resource scheduler 'Microsoft.Logic/workflows@2019-05-01' = {
             frequency: 'Day'
             interval: 1
             timeZone: 'UTC'
+            // A recurrence without a start time also runs once whenever the workflow is saved or
+            // enabled. A start time in the past only anchors the schedule.
+            startTime: '2026-01-01T00:00:00'
             schedule: { hours: scheduleHoursUtc, minutes: [0] }
           }
           runtimeConfiguration: {
@@ -279,8 +286,12 @@ resource scheduler 'Microsoft.Logic/workflows@2019-05-01' = {
         Report_outcome: {
           type: 'If'
           runAfter: { Deallocate_worker: ['Succeeded', 'Failed'] }
+          // A failed deallocation fails the run too, so a VM left running raises the alert.
           expression: {
-            and: [{ equals: ['@actions(\'Run_acquisition\').status', 'Succeeded'] }]
+            and: [
+              { equals: ['@actions(\'Run_acquisition\').status', 'Succeeded'] }
+              { equals: ['@actions(\'Deallocate_worker\').status', 'Succeeded'] }
+            ]
           }
           actions: {}
           else: {
@@ -289,7 +300,7 @@ resource scheduler 'Microsoft.Logic/workflows@2019-05-01' = {
                 type: 'Terminate'
                 inputs: {
                   runStatus: 'Failed'
-                  runError: { code: 'AcquisitionFailed', message: 'The acquisition run did not succeed; see the worker run report.' }
+                  runError: { code: 'AcquisitionFailed', message: 'The acquisition run or the worker deallocation did not succeed; see the run history and the worker run report.' }
                 }
               }
             }

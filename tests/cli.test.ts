@@ -207,6 +207,45 @@ describe('CLI', () => {
     fs.rmSync(setupDir, { recursive: true, force: true });
   }, 120_000);
 
+  it('prepare-bundle writes bundle options and prints only its JSON summary on stdout', async () => {
+    const versioned = path.join(workDir, 'cache', '10.0.2645.124', 'PackagesLocalDirectory');
+    stagePackages(versioned);
+    const securityDir = path.join(versioned, 'TestPackage', 'TestModel', 'AxSecurityRole');
+    fs.mkdirSync(securityDir, { recursive: true });
+    fs.copyFileSync(path.join(fixturesDir, 'AxSecurityRoleSample.xml'), path.join(securityDir, 'SampleClerkRole.xml'));
+    const labelDir = path.join(versioned, 'TestPackage', 'TestModel', 'AxLabelFile', 'LabelResources', 'en-US');
+    fs.mkdirSync(labelDir, { recursive: true });
+    fs.writeFileSync(path.join(labelDir, 'SampleLabels.en-US.label.txt'), 'Account=Account\n');
+    const acquired = { fileName: 'asset', sha256: 'f'.repeat(64), bytes: 1, acquiredAt: '2025-10-04T05:30:00Z' };
+    const sources = path.join(workDir, 'sources.json');
+    fs.writeFileSync(sources, JSON.stringify({
+      schemaVersion: 1,
+      applicationVersion: '10.0.2645.124',
+      dataverseEnvironmentUri: 'https://contoso.crm.dynamics.com/',
+      packagesLocalDirectory: versioned,
+      sources: { systemmetadata: acquired, finopsvsix22: acquired, crossreference: acquired },
+    }));
+    const bundleOptions = path.join(workDir, 'bundle-options.json');
+    const args = [
+      'prepare-bundle', '--sources', sources, '--db-path', path.join(workDir, 'candidate.db'),
+      '--bundle-options', bundleOptions, '--release-id', 'service-update-45',
+    ];
+
+    const res = await runCli(args, baseEnv, workDir);
+    expect(res.code).toBe(0);
+    expect(JSON.parse(res.stdout)).toEqual({
+      applicationVersion: '10.0.2645.124',
+      objects: 4,
+      releaseId: 'service-update-45',
+      bundleOptionsFile: bundleOptions,
+    });
+    expect(JSON.parse(fs.readFileSync(bundleOptions, 'utf8'))).toMatchObject({ releaseId: 'service-update-45' });
+
+    const again = await runCli(args, baseEnv, workDir);
+    expect(again.code).toBe(1);
+    expect(again.stderr).toContain('Refusing to overwrite');
+  }, 120_000);
+
   it('exits non-zero for an unknown command', async () => {
     const res = await runCli(['bogus'], baseEnv, workDir);
     expect(res.code).toBe(1);
@@ -217,6 +256,7 @@ describe('CLI', () => {
     const res = await runCli(['--help'], baseEnv, workDir);
     expect(res.code).toBe(0);
     expect(res.stdout).toContain('Commands:');
+    expect(res.stdout).toContain('prepare-bundle');
   }, 120_000);
 
   it('omits retired index transfer commands from help', () => {

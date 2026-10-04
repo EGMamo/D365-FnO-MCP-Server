@@ -52,6 +52,17 @@ export async function run(argv: string[]): Promise<CliResult> {
         }),
       };
     }
+    case 'prepare-bundle': {
+      const { prepareBundleCommand } = await import('./cli/prepare-bundle-command.js');
+      return {
+        code: await prepareBundleCommand({
+          sources: flagString(flags, 'sources'),
+          dbPath: flagString(flags, 'db-path'),
+          bundleOptions: flagString(flags, 'bundle-options'),
+          releaseId: flagString(flags, 'release-id'),
+        }),
+      };
+    }
     case 'index-trace': {
       const { indexTraceCommand } = await import('./cli/index-trace-command.js');
       const maxRows = flagString(flags, 'max-rows');
