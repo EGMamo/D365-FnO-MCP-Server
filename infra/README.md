@@ -102,7 +102,8 @@ worker's Blob acquisition lease remains the guard against overlapping runs.
 
 ## Operator steps outside the template
 
-These are deliberately not automated and must not be done implicitly:
+These are deliberately not automated and must not be done implicitly by the template. `scripts/azure-post-deploy.ps1 -ResourceGroup <group>` runs them from an
+operator machine, reading every name from this deployment's outputs (`Get-Help` lists its steps):
 
 1. Create the `mcp-api-keys` secret in the API vault and the Power Platform credential in the
    worker vault. Never put secret values in parameter files, source control, logs or chat.

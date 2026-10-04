@@ -1,11 +1,13 @@
 <#
 .SYNOPSIS
-    Runs the post-deployment steps for the rg-d365mcp-dev environment, in order.
+    Runs the operator steps after a first deployment of infra/main.bicep, in order.
 
 .DESCRIPTION
-    Companion to the post-deployment runbook. Run it from your own machine with PowerShell 7 and the
-    Azure CLI signed in to the subscription that holds rg-d365mcp-dev. The GitHub steps also need
-    the GitHub CLI (gh auth login).
+    Run it from your own machine with PowerShell 7 and the Azure CLI signed in (az login --tenant
+    <tenant>) to the subscription that holds the environment. The GitHub steps also need the GitHub
+    CLI (gh auth login). Every resource name, the deploy identity and the worker identity are read
+    from the outputs of the infra/main.bicep deployment in -ResourceGroup, so the script works for
+    any tenant, subscription and environment name.
 
     Steps, in the order -Step All runs them:
       PauseScheduler    Disable the Logic App so no scheduled run fires on an unprepared worker.
@@ -28,14 +30,24 @@
     and never touches the XRef proof VM.
 
 .EXAMPLE
-    ./azure-dev-next-steps.ps1 -Step PauseScheduler,SeedApiKeys,SetupWorker
+    ./scripts/azure-post-deploy.ps1 -ResourceGroup rg-d365mcp-prod
 
 .EXAMPLE
-    ./azure-dev-next-steps.ps1 -Step UploadConfig,FirstAcquisition,ResumeScheduler,GitHub,Deploy -AcquisitionConfig ./acquisition.json
+    ./scripts/azure-post-deploy.ps1 -ResourceGroup rg-d365mcp-prod -Step UploadConfig,FirstAcquisition,ResumeScheduler,GitHub,Deploy -AcquisitionConfig ./acquisition.json
 #>
 #Requires -Version 7.2
 [CmdletBinding()]
 param(
+    # Resource group the infra/main.bicep deployment went into.
+    [Parameter(Mandatory)]
+    [string]$ResourceGroup,
+
+    # Subscription holding the resource group. Defaults to the Azure CLI's current subscription.
+    [string]$SubscriptionId,
+
+    # Name of the infra/main.bicep deployment. Defaults to the newest successful one in the group.
+    [string]$DeploymentName,
+
     [ValidateSet('All', 'PauseScheduler', 'SeedApiKeys', 'SeedWorkerSecret', 'SetupWorker', 'UploadConfig',
         'FirstAcquisition', 'ResumeScheduler', 'GitHub', 'Deploy')]
     [string[]]$Step = @('All'),
@@ -43,6 +55,10 @@ param(
     [string]$AcquisitionConfig,
 
     [string]$WorkerSecretName = 'power-platform-client-secret',
+
+    # Name of the client entry in MCP_API_KEYS (the deploy smoke test gets 'ci-smoke').
+    [ValidatePattern('^[A-Za-z0-9._-]+$')]
+    [string]$ClientKeyName = 'vs-client',
 
     [string]$Repository = 'EGMamo/D365-FnO-MCP-Server',
 
@@ -56,22 +72,9 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 3.0
 
-# -- Environment (deployment outputs of infra/main.bicep, environmentName dev-001) --------------
-$SubscriptionId = '4c3987e9-5849-4c79-a0ef-e511526c03b9'
-$ResourceGroup = 'rg-d365mcp-dev'
-$WebApp = 'app-d365mcp-dev-001'
-$Registry = 'crd365mcpdev001padkd2'
-$StorageAccount = 'std365mcpdev001padkd2'
-$ArtifactContainer = 'd365-artifacts'
-$ApiVault = 'kv-api-dev-001-padkd2'
-$WorkerVault = 'kv-wrk-dev-001-padkd2'
-$WorkerVm = 'vm-worker-d365mcp-dev-001'
-$Scheduler = 'logic-worker-d365mcp-dev-001'
-$WorkerIdentity = 'id-worker-d365mcp-dev-001'
-$DeployClientId = '94292d29-76ab-4183-82b9-d3660c5086fb'
+# -- Environment (filled from the deployment outputs by Resolve-Environment) ------------------
 $ApiKeysSecretName = 'mcp-api-keys'
 $WorkerRoot = 'F:\worker'
-$ArtifactAccountUrl = "https://$StorageAccount.blob.core.windows.net/"
 
 $script:SmokeKey = $null
 $script:BundlePromoted = $false
@@ -172,6 +175,41 @@ function Set-ClipboardForSaving([string]$Label, [string]$Value) {
     Set-Clipboard -Value ' '
 }
 
+function Resolve-Environment {
+    if ($SubscriptionId) { Invoke-Az account set --subscription $SubscriptionId | Out-Null }
+    $account = Invoke-Az account show -o json | ConvertFrom-Json
+    $script:SubscriptionId = $account.id
+    $script:TenantId = $account.tenantId
+
+    $name = $DeploymentName
+    if (-not $name) {
+        $name = Invoke-Az deployment group list -g $ResourceGroup `
+            --query "[?properties.provisioningState=='Succeeded' && properties.outputs.webAppName != null] | sort_by(@, &properties.timestamp) | [-1].name" -o tsv
+        if (-not $name) { throw "No successful infra/main.bicep deployment found in $ResourceGroup. Pass -DeploymentName." }
+    }
+    $outputs = Invoke-Az deployment group show -g $ResourceGroup -n $name --query properties.outputs -o json | ConvertFrom-Json
+    $value = {
+        param($key)
+        $entry = $outputs.PSObject.Properties[$key]
+        if (-not $entry -or -not $entry.Value.value) { throw "Deployment '$name' has no '$key' output. Redeploy infra/main.bicep from master." }
+        return [string]$entry.Value.value
+    }
+    $script:WebApp = & $value webAppName
+    $script:WebAppHost = & $value webAppHostName
+    $script:Registry = & $value registryName
+    $script:DeployClientId = & $value deployClientId
+    $script:ArtifactAccountUrl = & $value artifactAccountUrl
+    $script:ArtifactContainer = & $value artifactContainerName
+    $script:WorkerClientId = & $value workerManagedIdentityClientId
+    $script:ApiVault = & $value apiKeyVaultName
+    $script:WorkerVault = & $value workerKeyVaultName
+    $script:WorkerVm = & $value workerVmName
+    $script:Scheduler = & $value schedulerName
+
+    Write-Host "Subscription $($account.name) ($SubscriptionId), tenant $TenantId"
+    Write-Host "Resource group $ResourceGroup, deployment '$name': web app $WebApp, worker $WorkerVm"
+}
+
 # -- Steps --------------------------------------------------------------------------------------
 function Step-PauseScheduler {
     Write-Step 'Pausing the acquisition scheduler'
@@ -187,11 +225,11 @@ function Step-SeedApiKeys {
 
     $clientKey = New-ApiKey
     $script:SmokeKey = New-ApiKey
-    Set-ClipboardForSaving 'vs-mahmoud (Visual Studio client)' $clientKey
+    Set-ClipboardForSaving "$ClientKeyName (client)" $clientKey
     Set-ClipboardForSaving 'ci-smoke (deploy smoke test)' $script:SmokeKey
 
     Invoke-WithVaultAccess $ApiVault {
-        Set-VaultSecret $ApiVault $ApiKeysSecretName "vs-mahmoud=$clientKey,ci-smoke=$($script:SmokeKey)"
+        Set-VaultSecret $ApiVault $ApiKeysSecretName "$ClientKeyName=$clientKey,ci-smoke=$($script:SmokeKey)"
     }
     $clientKey = $null
 }
@@ -210,8 +248,6 @@ function Step-SeedWorkerSecret {
 
 function Step-SetupWorker {
     Write-Step 'Setting up the worker VM'
-    $workerClientId = Invoke-Az identity show -g $ResourceGroup -n $WorkerIdentity --query clientId -o tsv
-
     # Helper installed on the VM: reads a worker-vault secret with the worker identity at run time,
     # so acquisition.json and command lines never carry secret values.
     $secretHelper = @'
@@ -219,7 +255,7 @@ param([Parameter(Mandatory)][string]$Name)
 $ErrorActionPreference = 'Stop'
 $token = (Invoke-RestMethod -Headers @{ Metadata = 'true' } -Uri ('http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https%3A%2F%2Fvault.azure.net&client_id=' + '__CLIENT_ID__')).access_token
 (Invoke-RestMethod -Headers @{ Authorization = "Bearer $token" } -Uri "https://__VAULT__.vault.azure.net/secrets/$($Name)?api-version=7.4").value
-'@.Replace('__CLIENT_ID__', $workerClientId).Replace('__VAULT__', $WorkerVault)
+'@.Replace('__CLIENT_ID__', $WorkerClientId).Replace('__VAULT__', $WorkerVault)
 
     # Wrapper for scripts/acquire-ude-assets.ps1 that supplies -ClientSecret from the worker vault.
     $acquireWrapper = @'
@@ -331,7 +367,7 @@ function Step-UploadConfig {
         type                    = 'azure-blob'
         accountUrl              = $ArtifactAccountUrl
         containerName           = $ArtifactContainer
-        managedIdentityClientId = (Invoke-Az identity show -g $ResourceGroup -n $WorkerIdentity --query clientId -o tsv)
+        managedIdentityClientId = $WorkerClientId
     }
     $json = $config | ConvertTo-Json -Depth 20
     $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))
@@ -348,7 +384,6 @@ function Step-FirstAcquisition {
     Write-Step 'Running the first acquisition'
     Start-WorkerVm
     $runId = 'manual-' + (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmZ')
-    $workerClientId = Invoke-Az identity show -g $ResourceGroup -n $WorkerIdentity --query clientId -o tsv
     $vmScript = @"
 `$ErrorActionPreference = 'Continue'
 `$env:Path = "C:\Program Files\nodejs;F:\worker\tools;`$env:Path"
@@ -358,7 +393,7 @@ Get-Content $WorkerRoot\runs\$runId\status.json -ErrorAction SilentlyContinue
 if (`$code -ne 0) { exit `$code }
 `$env:D365_ARTIFACT_ACCOUNT_URL = '$ArtifactAccountUrl'
 `$env:D365_ARTIFACT_CONTAINER = '$ArtifactContainer'
-`$env:D365_ARTIFACT_MANAGED_IDENTITY_CLIENT_ID = '$workerClientId'
+`$env:D365_ARTIFACT_MANAGED_IDENTITY_CLIENT_ID = '$WorkerClientId'
 & node $WorkerRoot\app\dist\src\index.js artifact status --verify --json
 exit `$LASTEXITCODE
 "@
@@ -396,12 +431,11 @@ function Step-ResumeScheduler {
 function Step-GitHub {
     Write-Step "Configuring the GitHub 'production' environment"
     if (-not (Get-Command gh -ErrorAction SilentlyContinue)) { throw 'Install the GitHub CLI and run gh auth login first.' }
-    $tenantId = Invoke-Az account show --query tenantId -o tsv
 
     & gh api -X PUT "repos/$Repository/environments/production" --silent
     if ($LASTEXITCODE -ne 0) { throw 'Could not create the production environment.' }
 
-    $values = [ordered]@{ AZURE_CLIENT_ID = $DeployClientId; AZURE_TENANT_ID = $tenantId; AZURE_SUBSCRIPTION_ID = $SubscriptionId }
+    $values = [ordered]@{ AZURE_CLIENT_ID = $DeployClientId; AZURE_TENANT_ID = $TenantId; AZURE_SUBSCRIPTION_ID = $SubscriptionId }
     foreach ($name in $values.Keys) {
         & gh secret set $name --env production --repo $Repository --body $values[$name]
         if ($LASTEXITCODE -ne 0) { throw "Could not set secret $name." }
@@ -433,11 +467,11 @@ function Step-Deploy {
     $runId = & gh run list --repo $Repository --workflow deploy.yml --limit 1 --json databaseId --jq '.[0].databaseId'
     & gh run watch $runId --repo $Repository --exit-status
     if ($LASTEXITCODE -ne 0) { throw 'The Deploy workflow failed; see the run log on GitHub.' }
-    Write-Host "Deployed. Connect clients to https://$WebApp.azurewebsites.net/mcp with the vs-mahmoud key."
+    Write-Host "Deployed. Connect clients to https://$WebAppHost/mcp with the $ClientKeyName key."
 }
 
 # -- Main ---------------------------------------------------------------------------------------
-Invoke-Az account set --subscription $SubscriptionId | Out-Null
+Resolve-Environment
 
 $order = @('PauseScheduler', 'SeedApiKeys', 'SeedWorkerSecret', 'SetupWorker', 'UploadConfig',
     'FirstAcquisition', 'ResumeScheduler', 'GitHub', 'Deploy')
@@ -449,7 +483,7 @@ try {
     foreach ($name in $selected) { & "Step-$name" }
     if ($Step -contains 'All' -and -not $AcquisitionConfig) {
         Write-Host "`nStopped before the first acquisition. Finish the PAC/XRef preparation, then run:"
-        Write-Host "  ./azure-dev-next-steps.ps1 -Step UploadConfig,FirstAcquisition,ResumeScheduler,GitHub,Deploy -AcquisitionConfig <path>"
+        Write-Host "  ./scripts/azure-post-deploy.ps1 -ResourceGroup $ResourceGroup -Step UploadConfig,FirstAcquisition,ResumeScheduler,GitHub,Deploy -AcquisitionConfig <path>"
     }
 }
 finally {
