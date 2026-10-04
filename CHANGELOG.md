@@ -171,6 +171,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `azure-post-deploy.ps1 -Step SetupWorker` no longer fails with a 404 on the Node.js download:
+  the VM script (Windows PowerShell 5.1) picks the Node 24 x64 installer from the release's
+  `SHASUMS256.txt` and verifies its checksum, and npm warnings on stderr no longer stop the build.
 - Concurrent knowledge-digest writes now reserve the shared numeric prefix atomically, preventing
   different article slugs from receiving the same sequence number.
 - Label files are found where Visual Studio keeps them
