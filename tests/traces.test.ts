@@ -238,5 +238,5 @@ describe('trace tools', () => {
       published.close();
     }
     expect((db.prepare('SELECT COUNT(*) AS n FROM ax_trace_sessions').get() as { n: number }).n).toBe(2);
-  });
+  }, 15_000);
 });

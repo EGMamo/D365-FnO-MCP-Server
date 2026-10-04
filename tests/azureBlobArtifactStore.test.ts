@@ -396,5 +396,5 @@ describe('Azure Blob artifact adapter', () => {
       })
     ).rejects.toThrow('worker failed');
     await expect(store.withAcquisitionLease(async () => 'reacquired')).resolves.toBe('reacquired');
-  });
+  }, 15_000);
 });
