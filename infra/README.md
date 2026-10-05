@@ -28,6 +28,17 @@ in with a device code (`az login --use-device-code`) instead of a browser, for e
 when the browser sign-in is blocked. Both scripts document their
 parameters in `Get-Help`.
 
+Both scripts take `-LogLevel Error|Warning|Info|Verbose|Debug` (default `Info`); `-Verbose` and
+`-Debug` also work. `Verbose` adds each az command, the values behind each decision and step
+timings, and passes `--verbose` to az; `Debug` adds internal values and passes `--debug`. Calls that
+send or return a secret (the deployment that carries the worker password, Key Vault tokens, your
+`-AcquisitionConfig`) never get those az flags, because `az --debug` logs whole requests and
+responses. `Error` prints only errors and what the questions ask about. On `azure-post-deploy.ps1`
+a level you pass also applies to the Run Command scripts on the worker, and `PrepareWorker` records
+it in `acquisition.json`, so `acquire-ude-sources.ps1`, AzCopy and the Node worker use it in the
+first and the scheduled acquisitions. Run `PrepareWorker` again without a level to go back to the
+default; a worker set up before this option needs `SetupWorker` first.
+
 To deploy by hand instead, run a what-if first and review it:
 
 ```bash

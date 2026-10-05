@@ -349,6 +349,12 @@ only when their exact length and, when the blob reports one, Content-MD5 match
 the current service metadata; the script then hashes them into the combined
 proof.
 
+Both scripts take `-LogLevel Error|Warning|Info|Verbose|Debug` (default `Info`),
+and `-Verbose` or `-Debug` work too. `acquire-ude-assets.ps1` also sets AzCopy's
+`--log-level` from a level you pass and, at `Verbose`, shows the end of the
+AzCopy log when a transfer fails. No level prints the client secret, the token
+or the SAS query string.
+
 Do not attempt to substitute a Linux container merely because `pac auth`
 works there. Only reconsider Linux if Microsoft documents a supported X++
 installer and the complete acquisition/build flow passes on that platform.
