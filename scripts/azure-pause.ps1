@@ -12,11 +12,13 @@
     Deleted (these are what cost money while nothing runs):
       App Service app, staging slot and plan; worker VM with its NIC, OS disk and data disk;
       NAT gateway and its public IP; private endpoints; availability test and alert rules.
+      Every GitHub federated credential on the deploy identity, so no GitHub repository can sign
+      in to the subscription while it is paused (scripts/azure-github-trust.ps1 adds one back).
     Kept (free or a few dollars a month):
       Storage account: artifact bundles (the index the API loads), sources, operations.
       Key Vaults and their secrets (purge protection would reserve deleted names for 90 days).
-      Managed identities with their role assignments and GitHub federated credentials, so the
-      GitHub 'production' environment's values stay valid.
+      Managed identities with their role assignments, so the GitHub 'production' environment's
+      client ID stays valid.
       Container registry and its images; Log Analytics and Application Insights; VNet, subnets,
       NSGs and private DNS zones (the storage and vault firewalls name the subnets); the Logic App
       scheduler, disabled; the action group and the worker's data collection rule.
@@ -153,6 +155,7 @@ $webApp = & $value outputs webAppName
 $workerVm = & $value outputs workerVmName
 $scheduler = & $value outputs schedulerName
 $registry = & $value outputs registryName
+$deployClientId = & $value outputs deployClientId
 
 Write-Host "Subscription: $($account.name) ($($account.id)), tenant $($account.tenantId)"
 Write-Host "Target:       $ResourceGroup, environment '$environmentName', workload '$workloadName' (deployment '$name')"
@@ -197,10 +200,21 @@ $doomed = @($all | Where-Object { $DeleteOrder.Contains($_.type.ToLowerInvariant
     Sort-Object { $DeleteOrder[$_.type.ToLowerInvariant()] }, name)
 $doomedIds = @($doomed | ForEach-Object { $_.id })
 $kept = @($all | Where-Object { $doomedIds -notcontains $_.id } | Sort-Object type, name)
+# Federated credentials are child resources, so resource list does not show them.
+$deployIdentity = $all | Where-Object { $_.type -eq 'Microsoft.ManagedIdentity/userAssignedIdentities' } |
+    Where-Object { (Invoke-Az identity show --ids $_.id --query clientId -o tsv) -eq $deployClientId } | Select-Object -First 1
+$githubTrust = @()
+if ($deployIdentity) {
+    $githubTrust = @(Invoke-Az identity federated-credential list -g $ResourceGroup --identity-name $deployIdentity.name -o json | ConvertFrom-Json |
+        Where-Object { $_.issuer -eq 'https://token.actions.githubusercontent.com' })
+}
 $untagged = @($all | Where-Object { $DeleteOrder.Contains($_.type.ToLowerInvariant()) -and -not (& $ours $_) })
 
-Write-Host "`nDeleted ($($doomed.Count)):" -ForegroundColor Yellow
+Write-Host "`nDeleted ($($doomed.Count + $githubTrust.Count)):" -ForegroundColor Yellow
 $doomed | ForEach-Object { Write-Host ("  {0,-50} {1}" -f $_.type, $_.name) }
+foreach ($credential in $githubTrust) {
+    Write-Host ("  {0,-50} {1}" -f 'GitHub federated credential', "$($deployIdentity.name)/$($credential.name) ($($credential.subject))")
+}
 Write-Host "`nKept ($($kept.Count)):" -ForegroundColor Green
 $kept | ForEach-Object { Write-Host ("  {0,-50} {1}" -f $_.type, $_.name) }
 foreach ($resource in $untagged) {
@@ -215,9 +229,9 @@ if ($registrySku -eq 'Premium') {
 if ($schedulerState -eq 'Enabled') { Write-Info "The scheduler '$scheduler' is turned off; turn it on again with azure-post-deploy.ps1 -Step ResumeScheduler after the worker is set up." }
 
 if ($WhatIfOnly) { Write-Info "`n-WhatIfOnly: nothing was changed."; return }
-if ($doomed.Count -eq 0) { Write-Info "`nNothing to delete: $ResourceGroup is already paused."; return }
+if ($doomed.Count -eq 0 -and $githubTrust.Count -eq 0) { Write-Info "`nNothing to delete: $ResourceGroup is already paused."; return }
 
-Write-Warning 'Deleting these cannot be undone. The bundles, secrets, identities and images are kept; the worker VM disks are not, so the next acquisition run starts with a fresh worker.'
+Write-Warning 'Deleting these cannot be undone. The bundles, secrets, identities and images are kept; the worker VM disks are not, so the next acquisition run starts with a fresh worker, and the Deploy workflow cannot sign in until azure-github-trust.ps1 runs again.'
 $typed = Read-Host "Type the resource group name ($ResourceGroup) to pause it"
 if ($typed -cne $ResourceGroup) { throw 'Stopped: the name did not match, nothing was changed.' }
 
@@ -238,6 +252,10 @@ if ($schedulerState -eq 'Enabled') {
 
 # -- 5. Delete -----------------------------------------------------------------------------------
 Write-Step 'Deleting'
+foreach ($credential in $githubTrust) {
+    Write-Info "Deleting GitHub federated credential '$($credential.name)' ($($credential.subject))..."
+    Invoke-Az identity federated-credential delete -g $ResourceGroup --identity-name $deployIdentity.name -n $credential.name --yes --output none | Out-Null
+}
 # The NAT gateway cannot be deleted while a subnet uses it; the resume attaches it again.
 $nat = @($doomed | Where-Object { $_.type -eq 'Microsoft.Network/natGateways' })
 $remaining = @($doomed)
@@ -263,11 +281,14 @@ for ($pass = 1; $pass -le 5 -and $remaining.Count -gt 0; $pass++) {
 if ($remaining.Count -gt 0) {
     throw "Could not delete: $(($remaining | ForEach-Object { "$($_.type) '$($_.name)'" }) -join ', '). Delete them in the portal or run this again; the state for the resume is already recorded."
 }
-Write-Info "Deleted $($doomed.Count) resources. $ResourceGroup is paused."
+Write-Info "Deleted $($doomed.Count) resources and $($githubTrust.Count) GitHub credential(s). $ResourceGroup is paused."
 if ($nat) { Write-Verbose 'The subnets have no NAT gateway until the resume.' }
 
 Write-Host "`nTo resume:" -ForegroundColor Cyan
 Write-Host "  ./scripts/azure-deploy.ps1 -ResourceGroup $ResourceGroup -EnvironmentName $environmentName -SubscriptionId $($account.id)"
-Write-Host '  The API comes back with the same image and loads the kept bundle from storage. Before the next acquisition run:'
+Write-Host '  The API comes back with the same image and loads the kept bundle from storage.'
+Write-Host '  Before the next Deploy run, let the repository sign in again (after a move, from a clone of the new location):'
+Write-Host "  ./scripts/azure-github-trust.ps1 -ResourceGroup $ResourceGroup"
+Write-Host '  Before the next acquisition run:'
 $workerSteps = if ($schedulerState -eq 'Enabled') { 'SetupWorker,PrepareWorker,ResumeScheduler' } else { 'SetupWorker,PrepareWorker' }
 Write-Host "  ./scripts/azure-post-deploy.ps1 -ResourceGroup $ResourceGroup -Step $workerSteps -DataverseUrl <url> -WorkerApplicationId <app id>"

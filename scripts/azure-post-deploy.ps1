@@ -21,7 +21,9 @@
                         -AcquisitionConfig).
       FirstAcquisition  Run one acquisition, then verify the promoted bundle.
       ResumeScheduler   Enable the Logic App once a first bundle is promoted.
-      GitHub            Create the 'production' environment with its secrets and variables.
+      GitHub            Trust this repository's 'production' jobs on the deploy identity
+                        (azure-github-trust.ps1), then create that environment with its
+                        secrets and variables.
       Deploy            Start the Deploy workflow on master and watch it.
 
     PrepareWorker needs -DataverseUrl and -WorkerApplicationId: the Power Platform environment
@@ -380,6 +382,7 @@ function Resolve-Environment {
         if (-not $name) { throw "No successful infra/main.bicep deployment found in $ResourceGroup. Pass -DeploymentName." }
         Write-Verbose "No -DeploymentName: using the newest successful infra/main.bicep deployment, '$name'."
     }
+    $script:ResolvedDeploymentName = $name
     $outputs = Invoke-Az deployment group show -g $ResourceGroup -n $name --query properties.outputs -o json | ConvertFrom-Json
     Write-Debug "Deployment outputs: $(@($outputs.PSObject.Properties.Name) -join ', ')"
     $value = {
@@ -770,6 +773,12 @@ function Step-GitHub {
     Write-Verbose "gh api -X PUT repos/$Repository/environments/production"
     & gh api -X PUT "repos/$Repository/environments/production" --silent
     if ($LASTEXITCODE -ne 0) { throw 'Could not create the production environment.' }
+
+    # The template trusts no repository; let this one's 'production' jobs sign in as the deploy identity.
+    $trustLogging = @{}
+    if ($script:LogLevelRequested) { $trustLogging.LogLevel = $script:LogLevelName }
+    & (Join-Path $PSScriptRoot 'azure-github-trust.ps1') -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId `
+        -DeploymentName $script:ResolvedDeploymentName -Repository $Repository @trustLogging
 
     $values = [ordered]@{ AZURE_CLIENT_ID = $DeployClientId; AZURE_TENANT_ID = $TenantId; AZURE_SUBSCRIPTION_ID = $SubscriptionId }
     foreach ($name in $values.Keys) {

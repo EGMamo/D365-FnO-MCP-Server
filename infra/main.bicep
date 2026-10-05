@@ -89,11 +89,6 @@ param workerSubnetPrefix string = '10.40.1.0/26'
 @description('Keep ACR reachable publicly (authenticated only) so GitHub-hosted runners can push. The API pulls over the private endpoint when private networking is on.')
 param registryPublicNetworkAccess bool = true
 
-// ── Deployment identity ────────────────────────────────────────────────────
-@description('GitHub repository (owner/name) allowed to federate with the deploy identity.')
-param githubRepository string = 'EGMamo/D365-FnO-MCP-Server'
-param githubEnvironment string = 'production'
-
 // ── Monitoring ─────────────────────────────────────────────────────────────
 @minValue(30)
 @maxValue(730)
@@ -147,8 +142,6 @@ module identities 'modules/identities.bicep' = {
     location: location
     tags: allTags
     namePrefix: namePrefix
-    githubRepository: githubRepository
-    githubEnvironment: githubEnvironment
   }
 }
 

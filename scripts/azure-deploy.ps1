@@ -101,8 +101,9 @@ param(
 
     [hashtable]$Tags = @{},
 
-    # GitHub repository (owner/name) whose 'production' environment may deploy the API. Defaults to
-    # the GitHub repository of this clone's 'origin' remote.
+    # GitHub repository (owner/name) that -PostDeploy configures and trusts to deploy the API.
+    # Defaults to the GitHub repository of this clone's 'origin' remote. The template itself trusts
+    # no repository; see scripts/azure-github-trust.ps1.
     [ValidatePattern('^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$', ErrorMessage = '{0} is not an owner/name repository.')]
     [string]$GitHubRepository,
 
@@ -180,7 +181,7 @@ Write-Verbose "Log level $($script:LogLevelName); PowerShell $($PSVersionTable.P
 if ($RemoveExistingResources -and $WhatIfOnly) { throw '-RemoveExistingResources deletes resources, so it cannot be combined with -WhatIfOnly.' }
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
-if (-not $GitHubRepository) {
+if ($PostDeploy -and -not $GitHubRepository) {
     $GitHubRepository = & (Join-Path $PSScriptRoot 'Get-GitHubRepository.ps1')
     Write-Verbose "GitHub repository from the origin remote: $GitHubRepository."
 }
@@ -520,8 +521,7 @@ else {
         "param costProfile = $(ConvertTo-BicepString $CostProfile)",
         "param tags = {`n$tagLines`n}",
         "param allowedIngressCidrs = $(ConvertTo-BicepArray $AllowedIngressCidrs)",
-        "param alertEmailReceivers = $(ConvertTo-BicepArray $AlertEmail)",
-        "param githubRepository = $(ConvertTo-BicepString $GitHubRepository)"
+        "param alertEmailReceivers = $(ConvertTo-BicepArray $AlertEmail)"
     )
     if ($apiImage) { $lines += "param apiImage = $(ConvertTo-BicepString $apiImage)" }
     if ($schedulerEnabled) { $lines += 'param workerSchedulerEnabled = true' }
@@ -677,6 +677,7 @@ if ($PostDeploy) {
 elseif ($pausedAt) {
     Write-Info "`nResumed the environment paused at $pausedAt. The API loads the kept bundle from storage on start."
     Write-Info "The worker VM is new: before the next acquisition run, run $postDeployScript -ResourceGroup $ResourceGroup -Step SetupWorker,PrepareWorker -DataverseUrl <url> -WorkerApplicationId <app id> (and ResumeScheduler if scheduled runs were on)."
+    Write-Info "The Deploy workflow needs GitHub trust again: $(Join-Path $PSScriptRoot 'azure-github-trust.ps1') -ResourceGroup $ResourceGroup"
 }
 else {
     Write-Info "`nNext: $postDeployScript -ResourceGroup $ResourceGroup"

@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   artifact bundles), Key Vaults, identities, the registry and the network. `azure-deploy.ps1`
   resumes it with the API image recorded at pause time. See "Pausing an environment" in
   infra/README.md.
+- `scripts/azure-github-trust.ps1` adds the GitHub federated credential the Deploy workflow signs in
+  with, on demand, using the repository's ID-based OIDC subject looked up on GitHub; `-Remove`
+  deletes every GitHub credential on the deploy identity. `azure-post-deploy.ps1 -Step GitHub` runs
+  it, and `azure-pause.ps1` removes the trust.
 - `azure-deploy.ps1 -GitHubRepository` and `azure-post-deploy.ps1 -Repository` default to the
   GitHub repository of the clone's `origin` remote instead of a fixed owner, and
   docs/moving-the-repository.md lists what to update when the repository moves.
@@ -195,6 +199,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `infra/main.bicep` no longer creates the deploy identity's GitHub federated credential and drops
+  the `githubRepository` and `githubEnvironment` parameters, so no deployment names a GitHub owner or
+  repository. Run `scripts/azure-github-trust.ps1` (or `azure-post-deploy.ps1 -Step GitHub`) to let
+  the Deploy workflow sign in. A redeploy does not delete an existing credential; the trust script
+  replaces it. A `-ParameterFile` that still sets those parameters must drop them.
 - Bundles declare capability coverage from what the indexer actually reads
   (`src/indexer/capabilityCoverage.ts`): code, data model, forms, labels, extensions and security
   graphs are partial, and workflows, reporting and reports are absent. A capability whose source
