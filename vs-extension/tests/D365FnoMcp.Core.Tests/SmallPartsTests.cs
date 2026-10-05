@@ -131,3 +131,16 @@ public class SettingsStoreTests
     public void SecretNamesIgnoreUrlSpelling() =>
         Assert.Equal(SecretNames.ApiKey("https://app.example.net/mcp/"), SecretNames.ApiKey("https://app.example.net"));
 }
+
+public class ApiKeyEntryTests
+{
+    [Theory]
+    [InlineData("  new-key\r\n", null, "new-key")]
+    [InlineData("new-key", "saved-key", "new-key")]
+    [InlineData("", "saved-key", "saved-key")]
+    [InlineData("   ", "saved-key", "saved-key")]
+    [InlineData("", null, null)]
+    [InlineData("", "  ", null)]
+    public void ResolvesTypedOrSavedKey(string entered, string? saved, string? expected) =>
+        Assert.Equal(expected, ApiKeyEntry.Resolve(entered, saved));
+}

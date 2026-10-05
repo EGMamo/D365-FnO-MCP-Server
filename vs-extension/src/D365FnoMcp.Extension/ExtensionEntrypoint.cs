@@ -29,6 +29,7 @@ internal sealed class ExtensionEntrypoint : Microsoft.VisualStudio.Extensibility
         Children =
         [
             MenuChild.Command<ConfigureConnectionCommand>(),
+            MenuChild.Command<SetApiKeyCommand>(),
             MenuChild.Command<TestConnectionCommand>(),
         ],
     };

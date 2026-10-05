@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Visual Studio extension: **Extensions > D365 F&O MCP > Set API Key...** enters or replaces the
+  hosted API key on its own (tested, stored in Windows Credential Manager, gateway restarted).
+  The key prompt in Configure Connection now has its own title and says which key to paste, and
+  Test Connection points to Set API Key when no key is saved.
 - `costProfile` parameter in `infra/main.bicep` (`standard` or `cheapest`). `cheapest` keeps the
   same architecture at the lowest cost: P0v3 App Service plan, Standard SSD worker disks, Basic
   ACR without a private endpoint, and the `/health` availability test from 2 locations every 15

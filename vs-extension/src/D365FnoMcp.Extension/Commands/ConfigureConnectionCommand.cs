@@ -55,22 +55,9 @@ internal sealed class ConfigureConnectionCommand : Command
             return;
         }
 
-        string? savedKey = this.services.Secrets.Read(SecretNames.ApiKey(serverUrl));
-        string? entered = await shell.ShowPromptAsync(
-            savedKey is null
-                ? "API key for this server (it is stored in Windows Credential Manager):"
-                : "API key for this server. Leave empty to keep the saved key:",
-            InputPromptOptions.Default with { Title = "D365 F&O MCP" },
-            cancellationToken);
-        if (entered is null)
+        string? apiKey = await ApiKeyPrompt.AskAsync(shell, this.services.Secrets, serverUrl, cancellationToken);
+        if (apiKey is null)
         {
-            return;
-        }
-
-        string apiKey = string.IsNullOrWhiteSpace(entered) ? savedKey ?? string.Empty : entered.Trim();
-        if (apiKey.Length == 0)
-        {
-            await shell.ShowPromptAsync("An API key is required.", PromptOptions.ErrorConfirm, cancellationToken);
             return;
         }
 
