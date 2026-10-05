@@ -101,8 +101,10 @@ param(
 
     [hashtable]$Tags = @{},
 
-    # GitHub repository (owner/name) whose 'production' environment may deploy the API.
-    [string]$GitHubRepository = 'EGMamo/D365-FnO-MCP-Server',
+    # GitHub repository (owner/name) whose 'production' environment may deploy the API. Defaults to
+    # the GitHub repository of this clone's 'origin' remote.
+    [ValidatePattern('^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$', ErrorMessage = '{0} is not an owner/name repository.')]
+    [string]$GitHubRepository,
 
     # Use this parameter file instead of generating one. It must read the worker password with
     # readEnvironmentVariable('D365_WORKER_ADMIN_PASSWORD').
@@ -178,8 +180,15 @@ Write-Verbose "Log level $($script:LogLevelName); PowerShell $($PSVersionTable.P
 if ($RemoveExistingResources -and $WhatIfOnly) { throw '-RemoveExistingResources deletes resources, so it cannot be combined with -WhatIfOnly.' }
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
+if (-not $GitHubRepository) {
+    $GitHubRepository = & (Join-Path $PSScriptRoot 'Get-GitHubRepository.ps1')
+    Write-Verbose "GitHub repository from the origin remote: $GitHubRepository."
+}
 $Template = Join-Path $RepoRoot 'infra/main.bicep'
 $PasswordVariable = 'D365_WORKER_ADMIN_PASSWORD'
+# Resource group tags written by azure-pause.ps1 and removed after a successful deployment.
+$PausedTags = @('d365mcp-paused-at', 'd365mcp-paused-api-image', 'd365mcp-paused-scheduler')
+$PausedImageTag = 'd365mcp-paused-api-image'
 $Providers = @(
     'Microsoft.Authorization', 'Microsoft.Compute', 'Microsoft.ContainerRegistry', 'Microsoft.Insights',
     'Microsoft.KeyVault', 'Microsoft.Logic', 'Microsoft.ManagedIdentity', 'Microsoft.Network',
@@ -475,7 +484,16 @@ else {
         Write-Info "Keeping the running API image $apiImage."
     }
     else {
-        Write-Verbose "No running API image found on $siteName (exit $LASTEXITCODE, linuxFxVersion '$fx'); the template default is used."
+        # azure-pause.ps1 deleted the app and recorded its image on the resource group.
+        $groupTags = Invoke-Az group show -n $ResourceGroup --query tags -o json | ConvertFrom-Json
+        $pausedImage = if ($groupTags -and $groupTags.PSObject.Properties[$PausedImageTag]) { $groupTags.$PausedImageTag }
+        if ($pausedImage) {
+            $apiImage = $pausedImage
+            Write-Info "Resuming a paused environment with its API image $apiImage."
+        }
+        else {
+            Write-Verbose "No running API image found on $siteName (exit $LASTEXITCODE, linuxFxVersion '$fx'); the template default is used."
+        }
     }
 
     # The scheduler is created off; keep it on when azure-post-deploy.ps1 has already turned it on.
@@ -633,6 +651,14 @@ finally {
 }
 
 # -- 7. Outputs and hand-off ---------------------------------------------------------------------
+$groupTags = Invoke-Az group show -n $ResourceGroup --query tags -o json | ConvertFrom-Json
+$pausedAt = if ($groupTags -and $groupTags.PSObject.Properties['d365mcp-paused-at']) { $groupTags.'d365mcp-paused-at' }
+$present = @($PausedTags | Where-Object { $groupTags -and $groupTags.PSObject.Properties[$_] })
+if ($present) {
+    foreach ($tag in $present) { Invoke-Az group update -n $ResourceGroup --remove "tags.$tag" --output none | Out-Null }
+    Write-Verbose "Removed the pause tags $($present -join ', ') from $ResourceGroup."
+}
+
 Write-Step 'Outputs'
 $outputs = $result.properties.outputs
 foreach ($property in $outputs.PSObject.Properties) {
@@ -647,6 +673,10 @@ if ($PostDeploy) {
     if ($script:LogLevelRequested) { $postDeployLogging.LogLevel = $script:LogLevelName }
     Write-Verbose "Running $postDeployScript with -LogLevel $($script:LogLevelName)."
     & $postDeployScript -ResourceGroup $ResourceGroup -SubscriptionId $account.id -DeploymentName $deploymentName -Repository $GitHubRepository @postDeployLogging
+}
+elseif ($pausedAt) {
+    Write-Info "`nResumed the environment paused at $pausedAt. The API loads the kept bundle from storage on start."
+    Write-Info "The worker VM is new: before the next acquisition run, run $postDeployScript -ResourceGroup $ResourceGroup -Step SetupWorker,PrepareWorker -DataverseUrl <url> -WorkerApplicationId <app id> (and ResumeScheduler if scheduled runs were on)."
 }
 else {
     Write-Info "`nNext: $postDeployScript -ResourceGroup $ResourceGroup"

@@ -77,6 +77,29 @@ protection reserves vault names for 90 days) before deploying. It lists them and
 resource group name, even with `-Yes`; storage bundles, registry images and the worker disks are
 lost, so run `azure-post-deploy.ps1`, the Deploy workflow and a first acquisition again afterwards.
 
+## Pausing an environment
+
+`scripts/azure-pause.ps1 -ResourceGroup <group>` cuts an idle environment to a few dollars a month
+while keeping what a resume needs. It deletes the App Service app and plan, the worker VM with its
+NIC and disks, the NAT gateway and its public IP, the private endpoints, the availability test and
+the alert rules. It keeps the storage account (the artifact bundles the API loads), the Key Vaults,
+the managed identities with their role assignments and GitHub federated credential, the registry
+and its images, Log Analytics and Application Insights, the VNet, NSGs and private DNS zones, and
+the scheduler Logic App (disabled). Only resources tagged with the deployment's `workload` and
+`environment` are deleted; names come from the newest successful deployment.
+
+Run it with `-WhatIfOnly` first to see the list. It stops while the worker VM is running, records
+the API image and scheduler state as `d365mcp-paused-*` tags on the resource group, then asks you
+to type the group name. What stays billed is mostly storage by GB and the registry (Basic about $5
+a month, Premium about $50, so move to `cheapest` first if it is still Premium).
+
+To resume, run `azure-deploy.ps1` with the same resource group and environment name. It recreates
+the deleted resources, deploys the image recorded at pause time and removes the tags; the API pulls
+the active bundle from storage when it starts, so no acquisition run is needed. The GitHub
+`production` environment's values stay valid because the identities were kept. The new worker VM
+starts empty, so run `azure-post-deploy.ps1 -Step SetupWorker,PrepareWorker` before the next
+acquisition and `-Step ResumeScheduler` if scheduled runs were on.
+
 ## What it creates
 
 | Module | Resources |

@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `scripts/azure-pause.ps1` pauses an idle environment: it deletes the App Service app and plan,
+  the worker VM and disks, the NAT gateway, private endpoints and alerts, and keeps storage (the
+  artifact bundles), Key Vaults, identities, the registry and the network. `azure-deploy.ps1`
+  resumes it with the API image recorded at pause time. See "Pausing an environment" in
+  infra/README.md.
+- `azure-deploy.ps1 -GitHubRepository` and `azure-post-deploy.ps1 -Repository` default to the
+  GitHub repository of the clone's `origin` remote instead of a fixed owner, and
+  docs/moving-the-repository.md lists what to update when the repository moves.
 - Visual Studio extension: **Extensions > D365 F&O MCP > Set API Key...** enters or replaces the
   hosted API key on its own (tested, stored in Windows Credential Manager, gateway restarted).
   The key prompt in Configure Connection now has its own title and says which key to paste, and

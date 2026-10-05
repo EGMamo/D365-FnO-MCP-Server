@@ -106,9 +106,10 @@ param(
     [ValidatePattern('^[A-Za-z0-9._-]+$')]
     [string]$ClientKeyName = 'vs-client',
 
-    # GitHub repository the worker build comes from and the Deploy workflow runs in.
+    # GitHub repository the worker build comes from and the Deploy workflow runs in. Defaults to the
+    # GitHub repository of this clone's 'origin' remote.
     [ValidatePattern('^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$', ErrorMessage = '{0} is not an owner/name repository.')]
-    [string]$Repository = 'EGMamo/D365-FnO-MCP-Server',
+    [string]$Repository,
 
     # Keep your temporary 'Key Vault Secrets Officer' role on the vaults (for later rotation).
     [switch]$KeepVaultAccess,
@@ -145,6 +146,11 @@ if ($script:LogRank -lt 2) { $InformationPreference = 'SilentlyContinue' }
 $script:AzLogArgs = @(if ($script:LogRank -ge 4) { '--debug' } elseif ($script:LogRank -ge 3) { '--verbose' })
 # MCP_LOG_LEVEL of the Node worker on the VM, which has nothing between INFO and DEBUG.
 $script:NodeLogLevel = @{ Error = 'ERROR'; Warning = 'WARN'; Info = 'INFO'; Verbose = 'DEBUG'; Debug = 'DEBUG' }[$script:LogLevelName]
+
+if (-not $Repository) {
+    $Repository = & (Join-Path $PSScriptRoot 'Get-GitHubRepository.ps1')
+    Write-Verbose "GitHub repository from the origin remote: $Repository."
+}
 
 # -- Environment (filled from the deployment outputs by Resolve-Environment) ------------------
 $ApiKeysSecretName = 'mcp-api-keys'
