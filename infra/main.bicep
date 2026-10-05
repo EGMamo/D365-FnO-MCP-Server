@@ -94,6 +94,10 @@ param registryPublicNetworkAccess bool = true
 param githubRepository string = 'EGMamo/D365-FnO-MCP-Server'
 param githubEnvironment string = 'production'
 
+@description('Numeric GitHub IDs of the repository owner and the repository. When both are set the deploy identity also trusts GitHub\'s ID-based OIDC subject, which repositories created, renamed or transferred after 15 July 2026 present. scripts/azure-deploy.ps1 looks them up.')
+param githubOwnerId string = ''
+param githubRepositoryId string = ''
+
 // ── Monitoring ─────────────────────────────────────────────────────────────
 @minValue(30)
 @maxValue(730)
@@ -149,6 +153,8 @@ module identities 'modules/identities.bicep' = {
     namePrefix: namePrefix
     githubRepository: githubRepository
     githubEnvironment: githubEnvironment
+    githubOwnerId: githubOwnerId
+    githubRepositoryId: githubRepositoryId
   }
 }
 

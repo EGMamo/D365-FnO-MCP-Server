@@ -12,6 +12,10 @@ param githubRepository string
 @description('GitHub environment the deployment workflow runs in.')
 param githubEnvironment string
 
+@description('Numeric GitHub owner and repository IDs. When both are set, the ID-based subject is trusted too.')
+param githubOwnerId string = ''
+param githubRepositoryId string = ''
+
 resource apiIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
   name: 'id-api-${namePrefix}'
   location: location
@@ -38,6 +42,23 @@ resource githubFederation 'Microsoft.ManagedIdentity/userAssignedIdentities/fede
   properties: {
     issuer: 'https://token.actions.githubusercontent.com'
     subject: 'repo:${githubRepository}:environment:${githubEnvironment}'
+    audiences: ['api://AzureADTokenExchange']
+  }
+}
+
+// Repositories created, renamed or transferred after 15 July 2026 (and ones that
+// opted in) present an ID-based subject: repo:owner@ownerId/name@repoId:...
+var githubNames = split(githubRepository, '/')
+var trustImmutableSubject = !empty(githubOwnerId) && !empty(githubRepositoryId)
+
+resource githubImmutableFederation 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-01-31' = if (trustImmutableSubject) {
+  parent: deployIdentity
+  name: 'github-${githubEnvironment}-immutable'
+  // An identity accepts one federated credential write at a time.
+  dependsOn: [githubFederation]
+  properties: {
+    issuer: 'https://token.actions.githubusercontent.com'
+    subject: 'repo:${githubNames[0]}@${githubOwnerId}/${githubNames[1]}@${githubRepositoryId}:environment:${githubEnvironment}'
     audiences: ['api://AzureADTokenExchange']
   }
 }

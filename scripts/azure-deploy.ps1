@@ -104,6 +104,15 @@ param(
     # GitHub repository (owner/name) whose 'production' environment may deploy the API.
     [string]$GitHubRepository = 'EGMamo/D365-FnO-MCP-Server',
 
+    # Numeric IDs of the repository owner and the repository, for GitHub's ID-based OIDC subject
+    # (repositories created, renamed or transferred after 15 July 2026 present it). Looked up with
+    # the GitHub CLI or the public GitHub API when not given.
+    [ValidatePattern('^\d+$')]
+    [string]$GitHubOwnerId,
+
+    [ValidatePattern('^\d+$')]
+    [string]$GitHubRepositoryId,
+
     # Use this parameter file instead of generating one. It must read the worker password with
     # readEnvironmentVariable('D365_WORKER_ADMIN_PASSWORD').
     [string]$ParameterFile,
@@ -239,6 +248,31 @@ function Confirm-Continue([string]$Question) {
     if ($Yes) { return }
     $answer = Read-Host "$Question [y/N]"
     if ($answer -notmatch '^(y|yes)$') { throw 'Stopped at your request.' }
+}
+
+# Returns the numeric owner and repository IDs of an owner/name repository, or $null. Tries the
+# GitHub CLI (private repositories need it) and then the public GitHub API.
+function Get-GitHubRepositoryIds([string]$Repository) {
+    if (Get-Command gh -ErrorAction SilentlyContinue) {
+        Write-Verbose "gh api repos/$Repository --jq '[.owner.id, .id] | @tsv'"
+        # A failure is handled below, so gh's error text is data here.
+        $ErrorActionPreference = 'Continue'
+        $output = foreach ($line in (& gh api "repos/$Repository" --jq '[.owner.id, .id] | @tsv' 2>&1)) {
+            if ($line -is [Management.Automation.ErrorRecord]) { Write-Verbose "gh: $line" } else { $line }
+        }
+        if ($LASTEXITCODE -eq 0 -and "$output" -match '^(\d+)\t(\d+)$') { return @($Matches[1], $Matches[2]) }
+        Write-Verbose "gh did not return the repository IDs (exit $LASTEXITCODE)."
+    }
+    try {
+        Write-Verbose "GET https://api.github.com/repos/$Repository"
+        $repo = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repository" -TimeoutSec 30 `
+            -Headers @{ Accept = 'application/vnd.github+json'; 'User-Agent' = 'd365-fno-mcp-server-deploy' }
+        if ("$($repo.owner.id)" -match '^\d+$' -and "$($repo.id)" -match '^\d+$') { return @("$($repo.owner.id)", "$($repo.id)") }
+    }
+    catch {
+        Write-Verbose "The public GitHub API did not return the repository: $($_.Exception.Message)"
+    }
+    return $null
 }
 
 function ConvertTo-BicepString([string]$Value) {
@@ -485,6 +519,23 @@ else {
     Write-Verbose "Scheduler state: '$schedulerState' (exit $LASTEXITCODE)."
     if ($schedulerEnabled) { Write-Info 'Keeping scheduled acquisition runs on.' }
 
+    # The deploy identity always trusts the name-based subject, and the ID-based one when both IDs are known.
+    if (-not $GitHubOwnerId -or -not $GitHubRepositoryId) {
+        $githubIds = Get-GitHubRepositoryIds $GitHubRepository
+        if ($githubIds) {
+            if (-not $GitHubOwnerId) { $GitHubOwnerId = $githubIds[0] }
+            if (-not $GitHubRepositoryId) { $GitHubRepositoryId = $githubIds[1] }
+        }
+    }
+    if ($GitHubOwnerId -and $GitHubRepositoryId) {
+        Write-Info "GitHub deployments from $GitHubRepository (owner ID $GitHubOwnerId, repository ID $GitHubRepositoryId)."
+    }
+    else {
+        Write-Warning ("Could not read the numeric IDs of $GitHubRepository, so only its name-based GitHub sign-in is trusted. " +
+            'If the Deploy workflow fails with AADSTS700213 for a subject like repo:owner@123/name@456:environment:production, ' +
+            'rerun with -GitHubOwnerId and -GitHubRepositoryId set to those two numbers.')
+    }
+
     $allTags = [ordered]@{}
     foreach ($entry in $Tags.GetEnumerator()) { $allTags[$entry.Key] = [string]$entry.Value }
     $tagLines = ($allTags.GetEnumerator() | ForEach-Object {
@@ -505,6 +556,10 @@ else {
         "param alertEmailReceivers = $(ConvertTo-BicepArray $AlertEmail)",
         "param githubRepository = $(ConvertTo-BicepString $GitHubRepository)"
     )
+    if ($GitHubOwnerId -and $GitHubRepositoryId) {
+        $lines += "param githubOwnerId = $(ConvertTo-BicepString $GitHubOwnerId)"
+        $lines += "param githubRepositoryId = $(ConvertTo-BicepString $GitHubRepositoryId)"
+    }
     if ($apiImage) { $lines += "param apiImage = $(ConvertTo-BicepString $apiImage)" }
     if ($schedulerEnabled) { $lines += 'param workerSchedulerEnabled = true' }
     $lines += "param workerAdminPassword = readEnvironmentVariable('$PasswordVariable')"

@@ -97,7 +97,15 @@ jobs:
         id: acr
         run: |
           az acr login --name "${{ vars.ACR_NAME }}"
-          echo "server=$(az acr show --name "${{ vars.ACR_NAME }}" --query loginServer -o tsv)" >> "$GITHUB_OUTPUT"
+          # The deploy identity can push images but not read the registry resource,
+          # so `az acr show` finds nothing. Ask the token exchange instead: it returns
+          # the login server that `az acr login` just used (only that field is printed).
+          SERVER="$(az acr login --name "${{ vars.ACR_NAME }}" --expose-token --only-show-errors --query loginServer -o tsv)"
+          if [ -z "$SERVER" ]; then
+            echo "::error::Could not resolve the login server of registry ${{ vars.ACR_NAME }}."
+            exit 1
+          fi
+          echo "server=$SERVER" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@v4
 

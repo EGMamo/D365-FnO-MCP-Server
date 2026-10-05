@@ -28,6 +28,15 @@ in with a device code (`az login --use-device-code`) instead of a browser, for e
 when the browser sign-in is blocked. Both scripts document their
 parameters in `Get-Help`.
 
+The Deploy workflow signs in as the deploy identity, which trusts the `production` environment of
+`-GitHubRepository` (default this repository) under both subjects GitHub can send: by name
+(`repo:owner/name:environment:production`) and by numeric ID
+(`repo:owner@ownerId/name@repoId:environment:production`), which repositories created, renamed or
+transferred after 15 July 2026 use. `azure-deploy.ps1` reads the two IDs with `gh` or the public
+GitHub API; if it warns that it couldn't, pass `-GitHubOwnerId` and `-GitHubRepositoryId` (the
+numbers in the subject of an AADSTS700213 error, or `gh api repos/<owner>/<name> --jq '[.owner.id,
+.id]'`). A hand-written parameter file sets `githubOwnerId` and `githubRepositoryId` instead.
+
 Both scripts take `-LogLevel Error|Warning|Info|Verbose|Debug` (default `Info`); `-Verbose` and
 `-Debug` also work. `Verbose` adds each az command, the values behind each decision and step
 timings, and passes `--verbose` to az; `Debug` adds internal values and passes `--debug`. Calls that
@@ -83,7 +92,7 @@ lost, so run `azure-post-deploy.ps1`, the Deploy workflow and a first acquisitio
 | --- | --- |
 | `monitoring` | Log Analytics workspace, workspace-based Application Insights (local auth off), action group |
 | `network` | VNet with app-integration, private-endpoint and worker subnets; NAT gateway for egress; deny-all inbound NSGs; private DNS zones for Blob, Key Vault and ACR |
-| `identities` | User-assigned identities for the API, the worker and the GitHub deploy workflow (OIDC federated credential, no secret) |
+| `identities` | User-assigned identities for the API, the worker and the GitHub deploy workflow (OIDC federated credentials for the name- and ID-based GitHub subjects, no secret) |
 | `storage` | StorageV2 account with Shared Key and public blob access disabled; `d365-artifacts`, `d365-sources` and `d365-operations` containers; versioning and soft delete; lifecycle rules that never touch bundles |
 | `keyVault` (x2) | One RBAC vault for API secrets and one for worker secrets, purge protection on. Separate vaults keep the internet-facing API's identity away from the worker's Power Platform credential; vaults have no fixed cost |
 | `registry` | ACR with admin user and anonymous pull disabled (Premium with a private endpoint when private networking is on, except in the `cheapest` profile) |
