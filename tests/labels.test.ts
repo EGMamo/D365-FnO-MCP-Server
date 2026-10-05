@@ -20,6 +20,8 @@ beforeAll(() => {
       { labelId: 'SYS2', value: 'Sales order line', language: 'en-US' },
       { labelId: 'SYS3', value: '100% done', language: 'en-US' },
       { labelId: 'SYS4', value: 'Customer group', language: 'en-US' },
+      { labelId: 'SYS5', value: 'Заказ на продажу', language: 'ru' },
+      { labelId: 'SYS5', value: 'Sales order', language: 'en-US' },
     ]
   );
   tools = collectLabelsTools(db);
@@ -52,6 +54,14 @@ describe('search_labels', () => {
     expect(percent.map((h) => h.label_id)).toEqual(['SYS3']);
     expect(JSON.parse((await call('search_labels', { query: '_', limit: 20 })).content[0].text)).toEqual([]);
   });
+
+  it('returns each hit with its language and filters by language', async () => {
+    const all = JSON.parse((await call('search_labels', { query: 'Customer account', limit: 20 })).content[0].text);
+    expect(all).toEqual([{ label_id: 'SYS1', language: 'en-US', value: 'Customer account' }]);
+    const german = JSON.parse((await call('search_labels', { query: 'konto', language: 'DE', limit: 20 })).content[0].text);
+    expect(german.map((h: { language: string }) => h.language)).toEqual(['de']);
+    expect(JSON.parse((await call('search_labels', { query: 'konto', language: 'en-US', limit: 20 })).content[0].text)).toEqual([]);
+  });
 });
 
 describe('search_labels_fts', () => {
@@ -64,6 +74,11 @@ describe('search_labels_fts', () => {
   it('filters by language', async () => {
     const res = await call('search_labels_fts', { query: 'Kundenkonto', language: 'en-US', limit: 20 });
     expect(JSON.parse(res.content[0].text)).toEqual([]);
+  });
+
+  it('ignores case in non-Latin scripts', async () => {
+    const res = await call('search_labels_fts', { query: 'заказ', limit: 20 });
+    expect(JSON.parse(res.content[0].text)).toEqual([{ label_id: 'SYS5', language: 'ru', value: 'Заказ на продажу' }]);
   });
 
   it('respects the limit', async () => {
