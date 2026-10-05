@@ -303,24 +303,6 @@ function releaseRunLock(file: string, owner: RunLockOwner): void {
   }
 }
 
-function bundleTimestamp(bundle: ValidatedArtifactBundle): number {
-  return Math.max(
-    Date.parse(bundle.manifest.createdAt),
-    Date.parse(bundle.manifest.builtAt),
-    Date.parse(bundle.manifest.publishedAt)
-  );
-}
-
-function rejectOlderBundle(candidate: ValidatedArtifactBundle, active: ValidatedArtifactBundle | null): void {
-  if (!active) return;
-  if (bundleTimestamp(candidate) <= bundleTimestamp(active)) {
-    throw new Error(
-      `Refusing to promote artifact ${candidate.manifest.bundleId}: it is not newer than ` +
-        `the active bundle ${active.manifest.bundleId}.`
-    );
-  }
-}
-
 /** The configured compatibility policy with every omitted field set to what this build serves. */
 export function resolveAcquisitionPolicy(
   policy: Partial<ArtifactCompatibilityPolicy> = {}
@@ -488,11 +470,9 @@ export class LocalArtifactPublisher implements ArtifactPublisher {
       fs.rmSync(stagingRoot, { recursive: true, force: true });
     }
     signal.throwIfAborted();
+    // promoteArtifactBundle refuses a bundle that is not newer than the active one, reading only
+    // the active manifest: the active bundle may predate the current policy.
     const pointers = readArtifactPointers(this.storeRoot);
-    const active = pointers.active
-      ? validateArtifactBundle(artifactBundleDirectory(this.storeRoot, pointers.active.bundleId), policy)
-      : null;
-    rejectOlderBundle(bundle, active);
     const promoted = promoteArtifactBundle(
       this.storeRoot,
       bundle.manifest.bundleId,

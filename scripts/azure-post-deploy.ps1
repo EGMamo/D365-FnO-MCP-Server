@@ -485,7 +485,8 @@ function New-AcquisitionConfig {
         build             = @([ordered]@{
                 name       = 'prepare-bundle'
                 executable = 'C:\Program Files\nodejs\node.exe'
-                args       = @("$WorkerRoot\app\dist\src\index.js", 'prepare-bundle',
+                # Headroom above Node's default heap of about 4 GB; the default worker size (D8s_v5) has 32 GB.
+                args       = @('--max-old-space-size=8192', "$WorkerRoot\app\dist\src\index.js", 'prepare-bundle',
                     '--sources', '${WORK_DIR}\sources.json', '--db-path', '${SOURCE_DB}',
                     '--bundle-options', '${BUNDLE_OPTIONS_FILE}')
             })
@@ -576,7 +577,8 @@ if ($code -ne 0) {
 $env:D365_ARTIFACT_ACCOUNT_URL = '__ACCOUNT__'
 $env:D365_ARTIFACT_CONTAINER = '__CONTAINER__'
 $env:D365_ARTIFACT_MANAGED_IDENTITY_CLIENT_ID = '__CLIENT__'
-& node __ROOT__\app\dist\src\index.js artifact status --verify --json 2>&1 | ForEach-Object { "$_" }
+# Promote already downloaded and validated the bundle; --verify would download it again.
+& node __ROOT__\app\dist\src\index.js artifact status --json 2>&1 | ForEach-Object { "$_" }
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Write-Output 'ACQUISITION-OK'
 '@.Replace('__ROOT__', $WorkerRoot).Replace('__RUN__', $runId).Replace('__ACCOUNT__', $ArtifactAccountUrl).
@@ -618,7 +620,7 @@ Write-Output 'ACQUISITION-OK'
         throw "Acquisition run '$runId' ended as $state (exit $($view.exitCode)); see the output above. Fix it before deploying the API."
     }
     $script:BundlePromoted = $true
-    Write-Host "Run '$runId' promoted a bundle and the store verified it."
+    Write-Host "Run '$runId' validated and promoted a bundle."
 }
 
 function Step-ResumeScheduler {

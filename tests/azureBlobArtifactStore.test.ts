@@ -244,14 +244,14 @@ afterEach(() => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-function createBundle(createdAt: string) {
+function createBundle(createdAt: string, serverVersion = '0.1') {
   return createArtifactBundle(sourceDatabase, root, {
     applicationVersion: '10.0.2500.1',
     sdkVersion: '10.0.2500.1',
     releaseId: `service-update-${createdAt.slice(11, 13)}`,
-    generatorVersion: '0.1.0',
-    minimumServerVersion: '0.1.0',
-    maximumServerVersion: '0.1.99',
+    generatorVersion: `${serverVersion}.0`,
+    minimumServerVersion: `${serverVersion}.0`,
+    maximumServerVersion: `${serverVersion}.99`,
     requiredCapabilities: ['codeMetadata', 'dataModelMetadata', 'securityGraphs'],
     capabilities,
     provenance,
@@ -317,6 +317,27 @@ describe('Azure Blob artifact adapter', () => {
     expect(pointerUploads[0]?.conditions).toEqual({ ifNoneMatch: '*' });
     expect(pointerUploads[1]?.conditions?.ifMatch).toMatch(/^"etag-/);
     expect(pointerUploads[2]?.conditions?.ifMatch).toMatch(/^"etag-/);
+  });
+
+  it('promotes past an active bundle the upgraded server no longer accepts, reading only its manifest', async () => {
+    const first = createBundle(FIRST_TIME);
+    const upgraded = createBundle(SECOND_TIME, '0.2');
+    const upgradedPolicy = { ...policy, serverVersion: '0.2.0' };
+    const getBlob = vi.spyOn(container, 'getBlob');
+
+    await store.withAcquisitionLease(async (writer) => {
+      await writer.uploadBundle(first.directory, policy);
+      await writer.promote(first.manifest.bundleId, 0, policy, FIRST_TIME);
+      await writer.uploadBundle(upgraded.directory, upgradedPolicy);
+      getBlob.mockClear();
+      const promoted = await writer.promote(upgraded.manifest.bundleId, 1, upgradedPolicy, SECOND_TIME);
+      expect(promoted.pointers.active?.bundleId).toBe(upgraded.manifest.bundleId);
+      expect(promoted.pointers.previous?.bundleId).toBe(first.manifest.bundleId);
+    });
+
+    const firstPrefix = `bundles/${first.manifest.bundleId.slice('sha256:'.length)}/`;
+    const firstReads = getBlob.mock.calls.map(([name]) => String(name)).filter((name) => name.startsWith(firstPrefix));
+    expect(firstReads).toEqual([`${firstPrefix}manifest.json`]);
   });
 
   it('fails closed on conditional pointer conflicts without changing the active pointer', async () => {

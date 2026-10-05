@@ -173,6 +173,33 @@ describe('scheduled acquisition worker', () => {
     expect(execute).toHaveBeenCalledTimes(2);
   });
 
+  it('promotes past a local active bundle that the upgraded worker no longer accepts', async () => {
+    const build = (serverVersion: string, createdAt: string) =>
+      async (command: { name: string }, context: AcquisitionRunContext) => {
+        if (command.name !== 'build-index') return;
+        writeCandidate(context);
+        const options = JSON.parse(fs.readFileSync(context.bundleOptionsFile, 'utf8')) as Record<string, unknown>;
+        fs.writeFileSync(context.bundleOptionsFile, JSON.stringify({
+          ...options,
+          generatorVersion: `${serverVersion}.0`,
+          minimumServerVersion: `${serverVersion}.0`,
+          maximumServerVersion: `${serverVersion}.99`,
+          createdAt,
+        }));
+      };
+    const publisher = new LocalArtifactPublisher(storeRoot);
+    await runAcquisitionWorker(config, publisher, {}, { executeCommand: build('0.1', TIME) });
+
+    const upgraded = await runAcquisitionWorker(
+      { ...config, runId: 'scheduled-2026-10-05', policy: { ...policy, serverVersion: '0.2.0' } },
+      publisher,
+      {},
+      { executeCommand: build('0.2', '2026-10-05T00:00:00.000Z') }
+    );
+
+    expect(upgraded).toMatchObject({ state: 'succeeded', pointerRevision: 2 });
+  });
+
   it('does not publish a bundle that fails final validation and redacts failure details', async () => {
     const publisher: ArtifactPublisher = { publish: vi.fn() };
 
