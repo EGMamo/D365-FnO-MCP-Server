@@ -248,16 +248,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- The Deploy workflow could not run:
-  - It failed to sign in to Azure with AADSTS700213, because this repository sends GitHub's newer
-    ID-based OIDC subject (`repo:owner@ownerId/name@repoId:environment:production`), which
-    repositories created, renamed or transferred after 15 July 2026 use. The deploy identity now
-    trusts that subject too (`github-production-immutable`). `azure-deploy.ps1` reads both IDs with
-    `gh` or the public GitHub API, or takes `-GitHubOwnerId` and `-GitHubRepositoryId`, and warns
-    when it can't find them.
-  - Its image tags had an empty registry address, because the deploy identity cannot read the
-    registry resource that `az acr show` asks for. The workflow now takes the login server from
-    `az acr login --expose-token` and stops if it is still empty.
+- The Deploy workflow tagged the image with an empty registry address (`/d365-fno-mcp-server:<sha>`)
+  and failed to build it, because the deploy identity can push images but cannot read the registry
+  resource that `az acr show` asks for. It now takes the login server from `az acr login
+  --expose-token` and stops if it is still empty.
 - The hosted API could not fit a full-size index on App Service: each running slot kept the
   downloaded bundle and a copy of its database (about 12 GB for the 5.9 GB index), and the
   production and staging slots share each instance's 15 GB host disk. Startup from Azure Blob now
