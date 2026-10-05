@@ -19,6 +19,8 @@ public sealed class McpGateway : IAsyncDisposable
 {
     public const string ContextToolName = "workspace_get_context";
 
+    public const string ContextToolDescription = "Returns privacy-safe D365 F&O context for the current Visual Studio workspace. Local paths and credentials are never returned.";
+
     /// <summary>Marks the gateway's own 401, so another Visual Studio instance can tell a live gateway from a reused port.</summary>
     private const string GatewayHeader = "X-D365FnoMcp-Gateway";
     private readonly HttpClient upstreamClient;
@@ -27,6 +29,7 @@ public sealed class McpGateway : IAsyncDisposable
     private string upstreamEndpoint = string.Empty;
     private string apiKey = string.Empty;
     private string? sdkVersion;
+    private volatile IReadOnlySet<string>? allowedTools;
 
     public McpGateway(HttpClient upstreamClient, IWorkspaceContextProvider contextProvider)
     {
@@ -37,6 +40,16 @@ public sealed class McpGateway : IAsyncDisposable
     public Uri? Endpoint { get; private set; }
 
     public string BearerToken { get; private set; } = string.Empty;
+
+    /// <summary>
+    /// Tools offered to Visual Studio; null offers all of them. Others are left out of
+    /// tools/list and refused on tools/call. Takes effect on the next request.
+    /// </summary>
+    public IReadOnlySet<string>? AllowedTools
+    {
+        get => this.allowedTools;
+        set => this.allowedTools = value;
+    }
 
     public async Task StartAsync(string serverUrl, string apiKey, string? sdkVersion, CancellationToken cancellationToken)
     {
@@ -128,7 +141,14 @@ public sealed class McpGateway : IAsyncDisposable
         }
 
         string? method = (string?)request?["method"];
-        if (method == "tools/call" && (string?)request?["params"]?["name"] == ContextToolName)
+        string? calledTool = method == "tools/call" ? (string?)request?["params"]?["name"] : null;
+        if (calledTool is not null && !ToolSelection.IsAllowed(this.allowedTools, calledTool))
+        {
+            await WriteErrorAsync(context, request?["id"], -32602, $"Tool '{calledTool}' is turned off in the D365 F&O MCP extension (Extensions > D365 F&O MCP > Select Tools...).");
+            return;
+        }
+
+        if (calledTool == ContextToolName)
         {
             await this.WriteContextResultAsync(context, request?["id"]);
             return;
@@ -186,15 +206,20 @@ public sealed class McpGateway : IAsyncDisposable
         JsonNode? responseBody = ConnectionTester.ParseRpcBody(responseText, response.Content.Headers.ContentType?.MediaType);
         if (responseBody?["result"]?["tools"] is JsonArray tools)
         {
+            IReadOnlySet<string>? allowed = this.allowedTools;
             for (int i = tools.Count - 1; i >= 0; i--)
             {
-                if ((string?)tools[i]?["name"] == ContextToolName)
+                string? name = (string?)tools[i]?["name"];
+                if (name == ContextToolName || name is null || !ToolSelection.IsAllowed(allowed, name))
                 {
                     tools.RemoveAt(i);
                 }
             }
 
-            tools.Add(ContextTool());
+            if (ToolSelection.IsAllowed(allowed, ContextToolName))
+            {
+                tools.Add(ContextTool());
+            }
         }
 
         if (appendContextInstructions && responseBody?["result"] is JsonObject initializeResult)
@@ -240,10 +265,22 @@ public sealed class McpGateway : IAsyncDisposable
         await context.Response.WriteAsync(response.ToJsonString(), context.RequestAborted);
     }
 
+    private static async Task WriteErrorAsync(HttpContext context, JsonNode? id, int code, string message)
+    {
+        var response = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = id?.DeepClone(),
+            ["error"] = new JsonObject { ["code"] = code, ["message"] = message },
+        };
+        context.Response.ContentType = "application/json";
+        await context.Response.WriteAsync(response.ToJsonString(), context.RequestAborted);
+    }
+
     private static JsonObject ContextTool() => new()
     {
         ["name"] = ContextToolName,
-        ["description"] = "Returns privacy-safe D365 F&O context for the current Visual Studio workspace. Local paths and credentials are never returned.",
+        ["description"] = ContextToolDescription,
         ["inputSchema"] = new JsonObject
         {
             ["type"] = "object",

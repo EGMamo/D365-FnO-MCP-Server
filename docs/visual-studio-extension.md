@@ -18,6 +18,14 @@ The extension needs Visual Studio 2022 17.14 or later, or Visual Studio 2026.
 To enter or replace only the key later, use **Extensions > D365 F&O MCP > Set API Key...**. It
 tests the key, stores it in Windows Credential Manager and restarts the local gateway with it.
 
+Once the connection test passes, Configure Connection shows the server's tools with a checkbox
+each, plus the local `workspace_get_context`. Only checked tools are offered to Copilot; the
+gateway also refuses calls to unchecked ones. To change the choice later, use **Extensions > D365
+F&O MCP > Select Tools...**, which re-validates the connection, shows the same list and applies the
+change to the running gateway without a restart. Copilot may keep its earlier tool list until you
+refresh the tools in Copilot Chat. With every tool checked, tools the server adds later are offered
+too; with a partial selection, new tools stay off until you check them.
+
 To update, install a newer release the same way. Builds of unreleased commits are available as the
 `vs-extension-vsix` artifact of each CI run. They keep the version in
 `vs-extension/Directory.Build.props`, so uninstall a newer release before installing one.
@@ -62,7 +70,8 @@ Visual Studio extension gateway
 - Other MCP server entries and inputs in the file are preserved.
 - **Test Connection** checks `/health`, performs MCP `initialize`, and lists hosted tools.
 - The gateway forwards hosted tools, resources and prompts and adds
-  `workspace_get_context`.
+  `workspace_get_context`, limited to the tools selected in **Select Tools...** (stored as
+  `AllowedTools` in `%LOCALAPPDATA%\D365FnoMcp\settings.json`; absent means all tools).
 
 ## Workspace context
 

@@ -6,7 +6,7 @@ use it: [docs/visual-studio-extension.md](../docs/visual-studio-extension.md).
 | Project | Target | Contents |
 | --- | --- | --- |
 | `src/D365FnoMcp.Core` | `net8.0` | Settings, server URL validation, `.mcp.json` merging, the connection test, SDK version detection from `PackagesLocalDirectory`, the loopback MCP gateway and the `workspace_get_context` resolver. No Visual Studio references. |
-| `src/D365FnoMcp.Extension` | `net8.0-windows8.0` | The out-of-process [VisualStudio.Extensibility](https://learn.microsoft.com/visualstudio/extensibility/visualstudio.extensibility/) extension: *Configure Connection*, *Set API Key* and *Test Connection* commands, loopback gateway lifecycle, workspace context, and Credential Manager storage. |
+| `src/D365FnoMcp.Extension` | `net8.0-windows8.0` | The out-of-process [VisualStudio.Extensibility](https://learn.microsoft.com/visualstudio/extensibility/visualstudio.extensibility/) extension: *Configure Connection*, *Set API Key*, *Select Tools* and *Test Connection* commands, the tool picker dialog, loopback gateway lifecycle, workspace context, and Credential Manager storage. |
 | `tests/D365FnoMcp.Core.Tests` | `net8.0` | xUnit tests for Core: connection test, gateway, `.mcp.json` merging, workspace context, settings, server URLs and SDK detection. They need neither Node.js nor the built server. |
 
 ## Build

@@ -69,6 +69,14 @@ internal sealed class ConfigureConnectionCommand : Command
             return;
         }
 
+        // Once the connection is validated, the tool list is known: let the user choose which
+        // tools Copilot may use. Cancelling keeps the previous choice.
+        List<string>? allowedTools = settings.AllowedTools;
+        if (report.Succeeded)
+        {
+            (_, allowedTools) = await ToolPicker.ChooseAsync(shell, serverUrl, report.Tools, allowedTools, cancellationToken);
+        }
+
         string? solutionDirectory = await this.GetSolutionDirectoryAsync(cancellationToken);
 
         // Ask for the target before anything changes: dismissing it keeps the previous settings,
@@ -105,6 +113,7 @@ internal sealed class ConfigureConnectionCommand : Command
         try
         {
             gateway = await this.services.RestartGatewayAsync(serverUrl, apiKey, cancellationToken);
+            gateway.AllowedTools = ToolSelection.ToSet(allowedTools);
         }
         catch (Exception ex) when (ex is IOException or HttpRequestException or InvalidOperationException)
         {
@@ -125,6 +134,7 @@ internal sealed class ConfigureConnectionCommand : Command
         this.services.Secrets.Write(SecretNames.ApiKey(serverUrl), apiKey);
         settings.ServerUrl = serverUrl;
         settings.McpConfigurationPath = path;
+        settings.AllowedTools = allowedTools;
         this.services.Settings.Save(settings);
 
         await this.services.WriteOutputAsync(
@@ -132,7 +142,8 @@ internal sealed class ConfigureConnectionCommand : Command
             cancellationToken);
         await shell.ShowPromptAsync(
             $"Saved. The local '{settings.McpServerName}' gateway was written to{Environment.NewLine}{path}{Environment.NewLine}{Environment.NewLine}" +
-            "In Copilot Chat, switch to Agent mode, open Tools and enable the d365-fno tools.",
+            "In Copilot Chat, switch to Agent mode, open Tools and enable the d365-fno tools. " +
+            "To change which tools are offered later, use Extensions > D365 F&O MCP > Select Tools...",
             PromptOptions.InformationConfirm,
             cancellationToken);
     }

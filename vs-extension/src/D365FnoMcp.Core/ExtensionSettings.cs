@@ -15,6 +15,8 @@ public sealed class ExtensionSettings
     /// <summary>The .mcp.json managed by the extension, so its ephemeral gateway entry can be refreshed on startup.</summary>
     public string McpConfigurationPath { get; set; } = string.Empty;
 
+    /// <summary>Tools the gateway offers to Visual Studio; null offers every tool, including ones the server adds later.</summary>
+    public List<string>? AllowedTools { get; set; }
 }
 
 /// <summary>Reads and writes <see cref="ExtensionSettings"/> as JSON.</summary>
