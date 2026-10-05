@@ -28,6 +28,17 @@ in with a device code (`az login --use-device-code`) instead of a browser, for e
 when the browser sign-in is blocked. Both scripts document their
 parameters in `Get-Help`.
 
+Both scripts take `-LogLevel Error|Warning|Info|Verbose|Debug` (default `Info`); `-Verbose` and
+`-Debug` also work. `Verbose` adds each az command, the values behind each decision and step
+timings, and passes `--verbose` to az; `Debug` adds internal values and passes `--debug`. Calls that
+send or return a secret (the deployment that carries the worker password, Key Vault tokens, your
+`-AcquisitionConfig`) never get those az flags, because `az --debug` logs whole requests and
+responses. `Error` prints only errors and what the questions ask about. On `azure-post-deploy.ps1`
+a level you pass also applies to the Run Command scripts on the worker, and `PrepareWorker` records
+it in `acquisition.json`, so `acquire-ude-sources.ps1`, AzCopy and the Node worker use it in the
+first and the scheduled acquisitions. Run `PrepareWorker` again without a level to go back to the
+default; a worker set up before this option needs `SetupWorker` first.
+
 To deploy by hand instead, run a what-if first and review it:
 
 ```bash
@@ -155,18 +166,32 @@ These names match the startup materialization in the server configuration (`src/
 `.github/workflows/deploy.yml` pushes the image, starts it in the `staging` slot, waits for the slot
 to report healthy (it has then materialized and validated the bundle), smoke-tests `/mcp` and swaps.
 The swap warm-up pings `/health` again and aborts if the slot is not ready. If production is not
-healthy after the swap, the workflow swaps back.
+healthy after the swap, the workflow swaps back. It then stops `staging` while production is
+healthy (otherwise it leaves `staging` running and warns), and the next deployment starts it again.
+
+Disk: each App Service instance has a 15 GB host disk for images and container data that is not
+expandable and is shared by every container in the plan, both slots included
+([App Service on Linux FAQ](https://learn.microsoft.com/troubleshoot/azure/app-service/faqs-app-service-linux-new#custom-containers)).
+A running slot keeps one copy of the index in its container (the downloaded bundle and the active
+database are hard links to the same file), so a deployment briefly needs room for two copies and
+production alone holds one between deployments.
 
 Rollback paths:
 
-- **Image:** swap the slots again; the previous image is still in `staging`.
+- **Image:** after a successful deployment the stopped `staging` slot holds the previous image;
+  after a failed one it holds the candidate that failed. Check with `az webapp config show --slot
+  staging --query linuxFxVersion`, and if needed point it at a known-good tag (deployments tag
+  images with the commit SHA) with `az webapp config container set --slot staging
+  --container-image-name <registry>/d365-fno-mcp-server:<tag>`. Then start it (`az webapp start
+  --slot staging`), wait until its `/health` answers 200, swap, and stop `staging` again.
 - **Index:** run `node F:\worker\app\dist\src\index.js artifact rollback --expected-revision <n>`
   on the worker VM through Run Command (`az vm start`, then `az vm run-command invoke
   --command-id RunPowerShellScript --scripts @rollback.ps1`), with `D365_ARTIFACT_ACCOUNT_URL`,
   `D365_ARTIFACT_CONTAINER` and `D365_ARTIFACT_MANAGED_IDENTITY_CLIENT_ID` set in the script from
   the deployment outputs; it reaches Storage privately. Then restart the web app so each instance
-  pulls the previous bundle. Restarting `staging` first and swapping keeps the API available during
-  the change.
+  pulls the previous bundle; `/health` answers 503 until it has. To keep the API available instead,
+  set `staging` to production's image first (a swap also exchanges images), then start it, wait for
+  its `/health`, swap and stop it again.
 
 Infrastructure-only redeploys must pass the currently deployed image as `apiImage`, or the web app
 and slot are reset to that parameter's value.

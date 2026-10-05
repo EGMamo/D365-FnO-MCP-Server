@@ -34,6 +34,14 @@
     The signed-in identity needs Owner, or Contributor plus User Access Administrator, on the
     resource group (the template creates role assignments).
 
+    -LogLevel sets how much it prints: Error, Warning, Info (the default), Verbose or Debug;
+    -Verbose and -Debug also work. Verbose adds each az command, the error text of az calls whose
+    failure the script handles, the values behind each decision and step timings, and passes
+    --verbose to az; Debug adds internal values and passes --debug. The calls that send the worker
+    password (what-if and the deployment) never get those flags, because az --debug logs request
+    bodies. Errors, questions and what they ask about (the what-if result too with -WhatIfOnly)
+    show at every level. -PostDeploy passes a level you set on to azure-post-deploy.ps1.
+
 .EXAMPLE
     ./scripts/azure-deploy.ps1 -TenantId <tenant-id> -SubscriptionId <subscription-id> -ResourceGroup rg-d365mcp-prod -Location westeurope -EnvironmentName prod -AlertEmail ops@example.com
 
@@ -54,6 +62,10 @@
 .EXAMPLE
     # Start over: delete everything in the group except the Key Vaults, then deploy fresh.
     ./scripts/azure-deploy.ps1 -ResourceGroup rg-d365mcp-dev -EnvironmentName dev -RemoveExistingResources
+
+.EXAMPLE
+    # Show each az command, the values behind each decision and step timings.
+    ./scripts/azure-deploy.ps1 -ResourceGroup rg-d365mcp-dev -EnvironmentName dev -LogLevel Verbose
 #>
 #Requires -Version 7.2
 [CmdletBinding()]
@@ -124,11 +136,44 @@ param(
     [switch]$Yes,
 
     # Run scripts/azure-post-deploy.ps1 after a successful deployment.
-    [switch]$PostDeploy
+    [switch]$PostDeploy,
+
+    # How much the script prints: Error, Warning, Info (default), Verbose or Debug. -Verbose and -Debug also work.
+    [ValidateSet('Error', 'Warning', 'Info', 'Verbose', 'Debug')]
+    [string]$LogLevel = 'Info'
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 3.0
+
+# -Verbose and -Debug raise the level; the preference variables then follow the resolved level.
+$script:LogRank = @{ Error = 0; Warning = 1; Info = 2; Verbose = 3; Debug = 4 }[$LogLevel]
+if ($VerbosePreference -eq 'Continue' -and $script:LogRank -lt 3) { $script:LogRank = 3 }
+if ($DebugPreference -in @('Continue', 'Inquire')) { $script:LogRank = 4 }
+$script:LogLevelName = @('Error', 'Warning', 'Info', 'Verbose', 'Debug')[$script:LogRank]
+# True only when you passed -LogLevel, -Verbose or -Debug, so a default run calls
+# azure-post-deploy.ps1 as before, even when your session's preferences raise the level here.
+$script:LogLevelRequested = $PSBoundParameters.ContainsKey('LogLevel') -or [bool]$PSBoundParameters['Verbose'] -or
+    [bool]$PSBoundParameters['Debug']
+$VerbosePreference = if ($script:LogRank -ge 3) { 'Continue' } else { 'SilentlyContinue' }
+# Never 'Inquire': a debug run must not stop at every Write-Debug.
+$DebugPreference = if ($script:LogRank -ge 4) { 'Continue' } else { 'SilentlyContinue' }
+# Only a requested level changes these, and an explicit -WarningAction or -InformationAction still
+# wins, so a default run honours the caller's settings as before.
+if ($script:LogLevelRequested -and -not $PSBoundParameters.ContainsKey('WarningAction')) {
+    $WarningPreference = if ($script:LogRank -ge 1) { 'Continue' } else { 'SilentlyContinue' }
+}
+if ($script:LogLevelRequested -and -not $PSBoundParameters.ContainsKey('InformationAction')) {
+    $InformationPreference = if ($script:LogRank -ge 2) { 'Continue' } else { 'SilentlyContinue' }
+}
+# Splatted into warnings that explain a question or the list before it: -LogLevel Error does not
+# hide them, but -WarningAction does.
+$script:WarnAtAllLevels = @{}
+if ($script:LogRank -lt 1 -and -not $PSBoundParameters.ContainsKey('WarningAction')) { $script:WarnAtAllLevels.WarningAction = 'Continue' }
+# Added by Invoke-Az only. az --debug logs request and response bodies, so calls that carry a secret
+# go through Invoke-AzSensitive and never get these.
+$script:AzLogArgs = @(if ($script:LogRank -ge 4) { '--debug' } elseif ($script:LogRank -ge 3) { '--verbose' })
+Write-Verbose "Log level $($script:LogLevelName); PowerShell $($PSVersionTable.PSVersion)."
 
 if ($RemoveExistingResources -and $WhatIfOnly) { throw '-RemoveExistingResources deletes resources, so it cannot be combined with -WhatIfOnly.' }
 
@@ -141,12 +186,53 @@ $Providers = @(
     'Microsoft.OperationalInsights', 'Microsoft.Storage', 'Microsoft.Web'
 )
 
-function Write-Step([string]$Text) { Write-Host "`n== $Text ==" -ForegroundColor Cyan }
+# Write-Host ignores the preference variables, so Info-level progress goes through here.
+function Write-Info([string]$Text, [ConsoleColor]$ForegroundColor) {
+    if ($script:LogRank -lt 2) { return }
+    $colour = @{}
+    if ($PSBoundParameters.ContainsKey('ForegroundColor')) { $colour.ForegroundColor = $ForegroundColor }
+    Write-Host $Text @colour
+}
 
+$script:CurrentStep = $null
+function Complete-Step {
+    if ($script:CurrentStep) { Write-Verbose "'$($script:CurrentStep.Name)' took $($script:CurrentStep.Timer.Elapsed.ToString('hh\:mm\:ss'))." }
+    $script:CurrentStep = $null
+}
+
+function Write-Step([string]$Text) {
+    Complete-Step
+    $script:CurrentStep = @{ Name = $Text; Timer = [Diagnostics.Stopwatch]::StartNew() }
+    Write-Info "`n== $Text ==" -ForegroundColor Cyan
+}
+
+# For calls that send and return no secret values: shows the command and adds az --verbose/--debug.
 function Invoke-Az {
+    Write-Verbose "az $($args -join ' ')"
+    $output = & az @args @script:AzLogArgs
+    if ($LASTEXITCODE -ne 0) { throw "az $($args[0..1] -join ' ') failed (exit $LASTEXITCODE)." }
+    return $output
+}
+
+# For calls that send or return a secret, such as the deployment commands, whose compiled parameters
+# include the worker password: no --verbose/--debug at any level and only the subcommand is shown.
+function Invoke-AzSensitive {
+    $command = foreach ($word in $args) { if ("$word".StartsWith('-')) { break }; $word }
+    Write-Verbose "az $($command -join ' ') (carries a secret: arguments not shown, no --verbose/--debug)"
     $output = & az @args
     if ($LASTEXITCODE -ne 0) { throw "az $($args[0..1] -join ' ') failed (exit $LASTEXITCODE)." }
     return $output
+}
+
+# For calls whose failure the caller handles through $LASTEXITCODE: az's error text stays hidden as
+# before and shows at Verbose. No --verbose/--debug, whose text would bury it.
+function Invoke-AzQuiet {
+    Write-Verbose "az $($args -join ' ')"
+    # The merged error text is data here, not a failure.
+    $ErrorActionPreference = 'Continue'
+    foreach ($line in (& az @args 2>&1)) {
+        if ($line -is [Management.Automation.ErrorRecord]) { Write-Verbose "az: $line" } else { $line }
+    }
 }
 
 function Confirm-Continue([string]$Question) {
@@ -176,7 +262,7 @@ function Test-VmPassword([string]$Value) {
 function Write-DeploymentFailure([string]$Name) {
     Write-Host "`nDeployment '$Name' failed:" -ForegroundColor Red
     $seenText = [Text.StringBuilder]::new()
-    $errorJson = & az deployment group show -g $ResourceGroup -n $Name --query properties.error -o json 2>$null
+    $errorJson = Invoke-AzQuiet deployment group show -g $ResourceGroup -n $Name --query properties.error -o json
     if ($LASTEXITCODE -ne 0 -or -not $errorJson -or $errorJson -eq 'null') {
         Write-Host "No error details recorded; run: az deployment group show -g $ResourceGroup -n $Name"
     }
@@ -202,8 +288,8 @@ function Write-DeploymentFailure([string]$Name) {
         $current = $pending.Dequeue()
         if ($seen.ContainsKey($current)) { continue }
         $seen[$current] = $true
-        $opsJson = & az deployment operation group list -g $ResourceGroup -n $current `
-            --query "[?properties.provisioningState=='Failed'].{type:properties.targetResource.resourceType, name:properties.targetResource.resourceName, code:properties.statusMessage.error.code, message:properties.statusMessage.error.message}" -o json 2>$null
+        $opsJson = Invoke-AzQuiet deployment operation group list -g $ResourceGroup -n $current `
+            --query "[?properties.provisioningState=='Failed'].{type:properties.targetResource.resourceType, name:properties.targetResource.resourceName, code:properties.statusMessage.error.code, message:properties.statusMessage.error.message}" -o json
         if ($LASTEXITCODE -ne 0 -or -not $opsJson) { continue }
         foreach ($op in @($opsJson | ConvertFrom-Json)) {
             if ($op.type -eq 'Microsoft.Resources/deployments') { $pending.Enqueue($op.name); continue }
@@ -247,15 +333,15 @@ function Remove-GroupResources([object[]]$Resources) {
     $remaining = @($Resources | Sort-Object { $r = $rank[$_.type.ToLowerInvariant()]; if ($null -eq $r) { 5 } else { $r } })
     for ($pass = 1; $pass -le 5 -and $remaining.Count -gt 0; $pass++) {
         # A deleted app's subnet link or a deleted VM's NIC can take a minute to release.
-        if ($pass -gt 1) { Write-Host "Retrying $($remaining.Count) resource(s) that still had dependents..."; Start-Sleep -Seconds 60 }
+        if ($pass -gt 1) { Write-Info "Retrying $($remaining.Count) resource(s) that still had dependents..."; Start-Sleep -Seconds 60 }
         $failed = @()
         foreach ($resource in $remaining) {
             # Children (slots, VM extensions) go with their parent.
-            & az resource show --ids $resource.id --output none 2>$null
-            if ($LASTEXITCODE -ne 0) { continue }
-            Write-Host "Deleting $($resource.type) '$($resource.name)'..."
-            & az resource delete --ids $resource.id --output none 2>$null
-            if ($LASTEXITCODE -ne 0) { $failed += $resource }
+            Invoke-AzQuiet resource show --ids $resource.id --output none
+            if ($LASTEXITCODE -ne 0) { Write-Verbose "'$($resource.name)' is already gone."; continue }
+            Write-Info "Deleting $($resource.type) '$($resource.name)'..."
+            Invoke-AzQuiet resource delete --ids $resource.id --output none
+            if ($LASTEXITCODE -ne 0) { Write-Verbose "Deleting '$($resource.name)' failed (exit $LASTEXITCODE) in pass $pass."; $failed += $resource }
         }
         $remaining = $failed
     }
@@ -267,17 +353,21 @@ function Remove-GroupResources([object[]]$Resources) {
 # -- 1. Tools and context ------------------------------------------------------------------------
 Write-Step 'Checking tools and Azure context'
 if (-not (Get-Command az -ErrorAction SilentlyContinue)) { throw 'Install the Azure CLI first.' }
-& az bicep version *> $null
+Write-Verbose "Azure CLI: $((Get-Command az).Source)"
+Invoke-AzQuiet bicep version | Out-Null
 if ($LASTEXITCODE -ne 0) { Invoke-Az bicep install | Out-Null }
 
 $account = $null
-$current = & az account show -o json 2>$null
+$current = Invoke-AzQuiet account show -o json
 if ($LASTEXITCODE -eq 0) { $account = $current | ConvertFrom-Json }
+if ($account) { Write-Verbose "Azure CLI context: tenant $($account.tenantId), subscription $($account.id)." }
 if (-not $account -or ($TenantId -and $account.tenantId -ne $TenantId)) {
     $loginArgs = @('login', '--output', 'none')
     if ($TenantId) { $loginArgs += @('--tenant', $TenantId) }
     if ($UseDeviceCode) { $loginArgs += '--use-device-code' }
-    # Not piped, so the device code and sign-in URL reach the console.
+    # Not piped, so the device code and sign-in URL reach the console. No --verbose/--debug: it
+    # acquires tokens.
+    Write-Verbose "az $($loginArgs -join ' ')"
     & az @loginArgs
     if ($LASTEXITCODE -ne 0) { throw "az login failed (exit $LASTEXITCODE)." }
 }
@@ -292,10 +382,12 @@ $account = Invoke-Az account show -o json | ConvertFrom-Json
 if ($TenantId -and $account.tenantId -ne $TenantId) {
     throw "Subscription '$($account.name)' is in tenant $($account.tenantId), not $TenantId."
 }
-Write-Host "Tenant:       $($account.tenantId)"
-Write-Host "Subscription: $($account.name) ($($account.id))"
-Write-Host "Signed in as: $($account.user.name)"
-Write-Host "Target:       $ResourceGroup, environment '$EnvironmentName', workload '$WorkloadName'"
+# What the question below confirms, so shown at every level unless -Yes skips the question.
+$show = if ($Yes) { 'Write-Info' } else { 'Write-Host' }
+& $show "Tenant:       $($account.tenantId)"
+& $show "Subscription: $($account.name) ($($account.id))"
+& $show "Signed in as: $($account.user.name)"
+& $show "Target:       $ResourceGroup, environment '$EnvironmentName', workload '$WorkloadName'"
 Confirm-Continue 'Deploy to this subscription?'
 
 # -- 2. Resource providers -----------------------------------------------------------------------
@@ -303,10 +395,10 @@ Write-Step 'Registering resource providers'
 $registered = Invoke-Az provider list --query "[?registrationState=='Registered'].namespace" -o json | ConvertFrom-Json
 $missing = $Providers | Where-Object { $registered -notcontains $_ }
 foreach ($namespace in $missing) {
-    Write-Host "Registering $namespace..."
+    Write-Info "Registering $namespace..."
     Invoke-Az provider register --namespace $namespace --wait --output none | Out-Null
 }
-if (-not $missing) { Write-Host 'All required providers are registered.' }
+if (-not $missing) { Write-Info 'All required providers are registered.' }
 
 # -- 3. Resource group ---------------------------------------------------------------------------
 Write-Step 'Resource group'
@@ -317,13 +409,13 @@ if ($exists) {
         throw "$ResourceGroup already exists in $groupLocation, not $Location."
     }
     $Location = $groupLocation
-    Write-Host "$ResourceGroup exists in $Location."
+    Write-Info "$ResourceGroup exists in $Location."
 }
 else {
     if (-not $Location) { $Location = Read-Host "Region for the new resource group $ResourceGroup (for example westeurope)" }
     $tagArgs = @("workload=$WorkloadName", "environment=$EnvironmentName") + ($Tags.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" })
     Invoke-Az group create -n $ResourceGroup -l $Location --tags @tagArgs --output none | Out-Null
-    Write-Host "Created $ResourceGroup in $Location."
+    Write-Info "Created $ResourceGroup in $Location."
 }
 
 if ($RemoveExistingResources -and $exists) {
@@ -332,57 +424,66 @@ if ($RemoveExistingResources -and $exists) {
     $kept = @($all | Where-Object { $_.type -eq 'Microsoft.KeyVault/vaults' })
     $doomed = @($all | Where-Object { $_.type -ne 'Microsoft.KeyVault/vaults' })
     if ($doomed.Count -eq 0) {
-        Write-Host 'Nothing to delete.'
+        Write-Info 'Nothing to delete.'
     }
     else {
+        # What the name prompt below confirms, so shown at every level.
         Write-Host "These $($doomed.Count) resources in $ResourceGroup will be deleted:"
         $doomed | Sort-Object type, name | ForEach-Object { Write-Host ("  {0,-55} {1}" -f $_.type, $_.name) }
         foreach ($vault in $kept) { Write-Host "Kept: Key Vault '$($vault.name)' and its secrets (purge protection reserves the name for 90 days)." }
-        Write-Warning 'This loses the artifact bundles and source assets in storage, the images in the registry and the worker disks. After the deployment, run azure-post-deploy.ps1 again (the identities, and so the GitHub variables, change), deploy the API image and run a first acquisition.'
+        Write-Warning 'This loses the artifact bundles and source assets in storage, the images in the registry and the worker disks. After the deployment, run azure-post-deploy.ps1 again (the identities, and so the GitHub variables, change), deploy the API image and run a first acquisition.' @script:WarnAtAllLevels
         $typed = Read-Host "Type the resource group name ($ResourceGroup) to delete them"
         if ($typed -cne $ResourceGroup) { throw 'Stopped: the name did not match, nothing was deleted.' }
         Remove-GroupResources $doomed
-        Write-Host "Deleted $($doomed.Count) resources."
+        Write-Info "Deleted $($doomed.Count) resources."
     }
 }
 elseif ($RemoveExistingResources) {
-    Write-Host 'The resource group is new; nothing to remove.'
+    Write-Info 'The resource group is new; nothing to remove.'
 }
 
-$me = & az ad signed-in-user show --query id -o tsv 2>$null
+$me = Invoke-AzQuiet ad signed-in-user show --query id -o tsv
 if ($LASTEXITCODE -eq 0 -and $me) {
     $roles = Invoke-Az role assignment list --assignee $me --all --include-inherited --include-groups `
         --query "[?roleDefinitionName=='Owner' || roleDefinitionName=='User Access Administrator' || roleDefinitionName=='Role Based Access Control Administrator'].scope" -o json | ConvertFrom-Json
     $groupId = Invoke-Az group show -n $ResourceGroup --query id -o tsv
+    Write-Debug "Scopes where you can assign roles: $(@($roles) -join ', ')"
     if (-not ($roles | Where-Object { $groupId.StartsWith($_, [StringComparison]::OrdinalIgnoreCase) })) {
         Write-Warning 'No Owner or User Access Administrator role found for you on this resource group; role assignments in the template will fail.'
     }
+}
+else {
+    Write-Verbose "Skipped the role check: az ad signed-in-user show returned no user (exit $LASTEXITCODE), as for a service principal."
 }
 
 # -- 4. Parameters -------------------------------------------------------------------------------
 Write-Step 'Parameters'
 if ($ParameterFile) {
     $paramPath = (Resolve-Path -LiteralPath $ParameterFile).Path
-    Write-Host "Using $paramPath."
+    Write-Info "Using $paramPath."
 }
 else {
     if (-not $CostProfile) { $CostProfile = if ($EnvironmentName -like 'dev*') { 'cheapest' } else { 'standard' } }
-    Write-Host "Cost profile: $CostProfile."
+    Write-Info "Cost profile: $CostProfile."
 
     # Infrastructure redeploys must keep the running image, or the app is reset to the default tag.
     $apiImage = $null
     $siteName = "app-$WorkloadName-$EnvironmentName"
-    $fx = & az webapp config show -g $ResourceGroup -n $siteName --query linuxFxVersion -o tsv 2>$null
+    $fx = Invoke-AzQuiet webapp config show -g $ResourceGroup -n $siteName --query linuxFxVersion -o tsv
     if ($LASTEXITCODE -eq 0 -and $fx -match '^DOCKER\|[^/]+/(.+)$') {
         $apiImage = $Matches[1]
-        Write-Host "Keeping the running API image $apiImage."
+        Write-Info "Keeping the running API image $apiImage."
+    }
+    else {
+        Write-Verbose "No running API image found on $siteName (exit $LASTEXITCODE, linuxFxVersion '$fx'); the template default is used."
     }
 
     # The scheduler is created off; keep it on when azure-post-deploy.ps1 has already turned it on.
-    $schedulerState = & az resource show -g $ResourceGroup -n "logic-worker-$WorkloadName-$EnvironmentName" `
-        --resource-type Microsoft.Logic/workflows --query properties.state -o tsv 2>$null
+    $schedulerState = Invoke-AzQuiet resource show -g $ResourceGroup -n "logic-worker-$WorkloadName-$EnvironmentName" `
+        --resource-type Microsoft.Logic/workflows --query properties.state -o tsv
     $schedulerEnabled = $LASTEXITCODE -eq 0 -and $schedulerState -eq 'Enabled'
-    if ($schedulerEnabled) { Write-Host 'Keeping scheduled acquisition runs on.' }
+    Write-Verbose "Scheduler state: '$schedulerState' (exit $LASTEXITCODE)."
+    if ($schedulerEnabled) { Write-Info 'Keeping scheduled acquisition runs on.' }
 
     $allTags = [ordered]@{}
     foreach ($entry in $Tags.GetEnumerator()) { $allTags[$entry.Key] = [string]$entry.Value }
@@ -410,16 +511,19 @@ else {
 
     $paramPath = Join-Path $RepoRoot "infra/main.$EnvironmentName.local.bicepparam"
     Set-Content -LiteralPath $paramPath -Value ($lines -join "`n") -Encoding utf8NoBOM
-    Write-Host "Wrote $paramPath."
+    Write-Info "Wrote $paramPath."
+    Write-Debug "Generated parameters (no secret values):`n$($lines -join "`n")"
 }
 
 $passwordWasSet = [bool][Environment]::GetEnvironmentVariable($PasswordVariable)
+Write-Verbose "Worker password: $(if ($passwordWasSet) { "from $PasswordVariable" } else { 'prompted' }); the value is never shown."
 if (-not $passwordWasSet) {
     while ($true) {
         $first = [Net.NetworkCredential]::new('', (Read-Host 'Worker VM administrator password' -AsSecureString)).Password
         $second = [Net.NetworkCredential]::new('', (Read-Host 'Repeat the password' -AsSecureString)).Password
-        if ($first -ne $second) { Write-Warning 'The passwords do not match.'; continue }
-        if (-not (Test-VmPassword $first)) { Write-Warning 'Use 12-123 characters with three of: lowercase, uppercase, digit, symbol.'; continue }
+        # These explain why the prompt repeats, so they show at every level.
+        if ($first -ne $second) { Write-Warning 'The passwords do not match.' @script:WarnAtAllLevels; continue }
+        if (-not (Test-VmPassword $first)) { Write-Warning 'Use 12-123 characters with three of: lowercase, uppercase, digit, symbol.' @script:WarnAtAllLevels; continue }
         break
     }
     [Environment]::SetEnvironmentVariable($PasswordVariable, $first)
@@ -438,9 +542,11 @@ try {
     $targetCheapest = (& $paramValue 'costProfile' 'standard') -eq 'cheapest'
     $targetDiskType = & $paramValue 'workerDiskType' $(if ($targetCheapest) { 'StandardSSD_LRS' } else { 'Premium_LRS' })
     $targetPremiumRegistry = (& $paramValue 'enablePrivateNetworking' 'true') -ne 'false' -and -not $targetCheapest
+    Write-Verbose "Target settings: cheapest profile $targetCheapest, worker disk type $targetDiskType, Premium registry $targetPremiumRegistry."
 
     function Assert-WorkerDeallocated {
         $power = Invoke-Az vm get-instance-view -g $ResourceGroup -n $vmName --query "instanceView.statuses[?starts_with(code, 'PowerState/')].code | [0]" -o tsv
+        Write-Verbose "$vmName power state: $power"
         if ($power -ne 'PowerState/deallocated') {
             throw "$vmName is $($power -replace 'PowerState/', ''), and its disks can only change type while it is deallocated. An acquisition run may be in progress: wait for the scheduler to deallocate it (or run az vm deallocate -g $ResourceGroup -n $vmName when no run is active), then run the script again."
         }
@@ -451,11 +557,13 @@ try {
     $vmName = "vm-worker-$prefix"
     $disks = @(Invoke-Az disk list -g $ResourceGroup --query "[?name=='osdisk-worker-$prefix' || name=='datadisk-worker-$prefix'].{id:id, name:name, sku:sku.name}" -o json | ConvertFrom-Json)
     $disksToConvert = @($disks | Where-Object { $_.sku -ne $targetDiskType })
+    Write-Debug "Worker disks: $(@($disks | ForEach-Object { "$($_.name) $($_.sku)" }) -join ', ')"
     foreach ($disk in $disksToConvert) { $conversions += "Change disk '$($disk.name)' from $($disk.sku) to $targetDiskType (contents kept; the VM must be deallocated)" }
 
     $registryEndpoints = @()
     if (-not $targetPremiumRegistry) {
         $registry = @(Invoke-Az acr list -g $ResourceGroup --query '[].{name:name, sku:sku.name, endpoints:privateEndpointConnections[].privateEndpoint.id}' -o json | ConvertFrom-Json) | Select-Object -First 1
+        if ($registry) { Write-Debug "Registry $($registry.name): $($registry.sku), $(@($registry.endpoints | Where-Object { $_ }).Count) private endpoint(s)." }
         if ($registry -and $registry.sku -eq 'Premium' -and $registry.endpoints) {
             $registryEndpoints = @($registry.endpoints)
             $conversions += "Delete the private endpoint(s) of registry '$($registry.name)' so it can move from Premium to Basic (images kept; the API then pulls over the registry's public endpoint)"
@@ -463,22 +571,28 @@ try {
     }
 
     if ($conversions.Count -eq 0) {
-        Write-Host 'Everything can be updated in place.'
+        Write-Info 'Everything can be updated in place.'
     }
     else {
-        $conversions | ForEach-Object { Write-Host "- $_" }
+        # The error, warning or question below is about this list, and with -WhatIfOnly it is part of
+        # the result, so it shows at every level unless -Yes -ReplaceIncompatible leaves nothing to ask.
+        $show = if ($Yes -and $ReplaceIncompatible -and -not $WhatIfOnly) { 'Write-Info' } else { 'Write-Host' }
+        $conversions | ForEach-Object { & $show "- $_" }
         if ($ReplaceIncompatible -and $disksToConvert.Count -gt 0) { Assert-WorkerDeallocated }
         if (-not $ReplaceIncompatible) {
             $message = 'These existing resources cannot move to the new settings in place. Run the script again with -ReplaceIncompatible to convert them, or with -RemoveExistingResources to start over.'
-            if ($WhatIfOnly) { Write-Warning $message } else { throw $message }
+            if ($WhatIfOnly) { Write-Warning $message @script:WarnAtAllLevels } else { throw $message }
         }
     }
 
     # -- 6. What-if and deployment ---------------------------------------------------------------
     if (-not $SkipWhatIf) {
         Write-Step 'What-if'
-        Invoke-Az deployment group what-if -g $ResourceGroup -p $paramPath --result-format ResourceIdOnly | Write-Host
-        Write-Host 'Nested modules that depend on values from other modules show as unevaluated; role assignments show as unsupported. Both are expected.'
+        # What the question below confirms, or with -WhatIfOnly the result, so shown at every level
+        # unless -Yes skips the question.
+        $show = if ($Yes -and -not $WhatIfOnly) { 'Write-Info' } else { 'Write-Host' }
+        Invoke-AzSensitive deployment group what-if -g $ResourceGroup -p $paramPath --result-format ResourceIdOnly | ForEach-Object { & $show $_ }
+        Write-Info 'Nested modules that depend on values from other modules show as unevaluated; role assignments show as unsupported. Both are expected.'
         if ($WhatIfOnly) { return }
         Confirm-Continue 'Deploy these changes?'
     }
@@ -489,21 +603,24 @@ try {
         if ($disksToConvert.Count -gt 0) {
             Assert-WorkerDeallocated
             foreach ($disk in $disksToConvert) {
-                Write-Host "Converting $($disk.name) to $targetDiskType..."
+                Write-Info "Converting $($disk.name) to $targetDiskType..."
                 Invoke-Az disk update --ids $disk.id --sku $targetDiskType --output none | Out-Null
             }
         }
         foreach ($endpoint in $registryEndpoints) {
-            Write-Host "Deleting private endpoint $(Split-Path -Leaf $endpoint)..."
+            Write-Info "Deleting private endpoint $(Split-Path -Leaf $endpoint)..."
             Invoke-Az network private-endpoint delete --ids $endpoint --output none | Out-Null
         }
     }
 
     Write-Step 'Deploying'
     $deploymentName = "$WorkloadName-$EnvironmentName-$((Get-Date).ToUniversalTime().ToString('yyyyMMddHHmm'))"
-    Write-Host "Deployment '$deploymentName' (a first deployment takes about 20-30 minutes)..."
-    $json = & az deployment group create -g $ResourceGroup -n $deploymentName -p $paramPath -o json --only-show-errors 2>$null
-    if ($LASTEXITCODE -ne 0) {
+    Write-Info "Deployment '$deploymentName' (a first deployment takes about 20-30 minutes)..."
+    try {
+        $json = Invoke-AzSensitive deployment group create -g $ResourceGroup -n $deploymentName -p $paramPath -o json --only-show-errors 2>$null
+    }
+    catch {
+        Write-Verbose $_.Exception.Message
         Write-DeploymentFailure $deploymentName
         throw "Deployment '$deploymentName' failed. Fix the errors above and run the script again; it redeploys incrementally over the resources that were created."
     }
@@ -511,19 +628,26 @@ try {
 }
 finally {
     if (-not $passwordWasSet) { [Environment]::SetEnvironmentVariable($PasswordVariable, $null) }
+    # Times the step that ended here, also after -WhatIfOnly or a failure.
+    Complete-Step
 }
 
 # -- 7. Outputs and hand-off ---------------------------------------------------------------------
 Write-Step 'Outputs'
 $outputs = $result.properties.outputs
 foreach ($property in $outputs.PSObject.Properties) {
-    Write-Host ("{0,-32} {1}" -f $property.Name, $property.Value.value)
+    Write-Info ("{0,-32} {1}" -f $property.Name, $property.Value.value)
 }
+Complete-Step
 
 $postDeployScript = Join-Path $PSScriptRoot 'azure-post-deploy.ps1'
 if ($PostDeploy) {
-    & $postDeployScript -ResourceGroup $ResourceGroup -SubscriptionId $account.id -DeploymentName $deploymentName -Repository $GitHubRepository
+    # Only a level the caller asked for is passed on, so a default run calls it as before.
+    $postDeployLogging = @{}
+    if ($script:LogLevelRequested) { $postDeployLogging.LogLevel = $script:LogLevelName }
+    Write-Verbose "Running $postDeployScript with -LogLevel $($script:LogLevelName)."
+    & $postDeployScript -ResourceGroup $ResourceGroup -SubscriptionId $account.id -DeploymentName $deploymentName -Repository $GitHubRepository @postDeployLogging
 }
 else {
-    Write-Host "`nNext: $postDeployScript -ResourceGroup $ResourceGroup"
+    Write-Info "`nNext: $postDeployScript -ResourceGroup $ResourceGroup"
 }

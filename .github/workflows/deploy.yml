@@ -3,7 +3,9 @@ name: Deploy
 # Builds the server image, pushes it to Azure Container Registry, starts it in
 # the App Service staging slot, waits for that slot to materialize and validate
 # the active artifact bundle onto instance-local disk, smoke-tests it and only
-# then swaps it into production. Infrastructure comes from infra/main.bicep.
+# then swaps it into production. The staging slot is stopped again at the end so
+# only production holds a copy of the index between deployments.
+# Infrastructure comes from infra/main.bicep.
 #
 # The environment needs these values, all non-secret outputs of infra/main.bicep:
 #   secrets.AZURE_CLIENT_ID  deployClientId (federated identity; no client secret)
@@ -108,12 +110,19 @@ jobs:
             ${{ steps.acr.outputs.server }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}
             ${{ steps.acr.outputs.server }}/${{ env.IMAGE_NAME }}:latest
 
+      # The last step stops the staging slot between deployments, so start it if it is stopped.
       - name: Start the new image in the staging slot
+        id: staging
         run: |
           az webapp config container set \
             --resource-group "${{ vars.RESOURCE_GROUP }}" --name "${{ vars.WEBAPP_NAME }}" --slot "$SLOT" \
             --container-image-name "${{ steps.acr.outputs.server }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}"
-          az webapp restart --resource-group "${{ vars.RESOURCE_GROUP }}" --name "${{ vars.WEBAPP_NAME }}" --slot "$SLOT"
+          STATE="$(az webapp show --resource-group "${{ vars.RESOURCE_GROUP }}" --name "${{ vars.WEBAPP_NAME }}" --slot "$SLOT" --query state -o tsv)"
+          if [ "$STATE" = "Running" ]; then
+            az webapp restart --resource-group "${{ vars.RESOURCE_GROUP }}" --name "${{ vars.WEBAPP_NAME }}" --slot "$SLOT"
+          else
+            az webapp start --resource-group "${{ vars.RESOURCE_GROUP }}" --name "${{ vars.WEBAPP_NAME }}" --slot "$SLOT"
+          fi
 
       # /health is readiness: it answers 503 until the slot has downloaded,
       # verified and activated the active bundle locally (/live is liveness only).
@@ -164,3 +173,17 @@ jobs:
             --resource-group "${{ vars.RESOURCE_GROUP }}" --name "${{ vars.WEBAPP_NAME }}" \
             --slot "$SLOT" --target-slot production
           exit 1
+
+      # Each instance's 15 GB host disk is shared by both slots, and a running slot
+      # holds a full copy of the index. Staging now holds the previous release (or
+      # a candidate that failed), so stop it until the next deployment starts it.
+      # If production is unhealthy (a swap back failed), leave staging running for
+      # a manual swap. infra/README.md "Deployment and rollback" has the steps.
+      - name: Stop the staging slot to free its disk
+        if: always() && steps.staging.outcome != 'skipped'
+        run: |
+          if curl -fsS --max-time 30 "https://${{ steps.hosts.outputs.production }}/health" >/dev/null 2>&1; then
+            az webapp stop --resource-group "${{ vars.RESOURCE_GROUP }}" --name "${{ vars.WEBAPP_NAME }}" --slot "$SLOT"
+          else
+            echo "::warning::Production is not healthy, so the staging slot stays running for a manual swap."
+          fi

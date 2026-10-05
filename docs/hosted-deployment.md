@@ -111,6 +111,11 @@ unchanged version downloads nothing, and writes `sources.json` with each file's 
 PAC, RDP or a signed-in user. The cross-reference backup is recorded but not imported: restoring it
 needs a SQL Server the worker does not have, so bundles carry no XRef usages yet.
 
+`PrepareWorker -LogLevel <level>` (or `-Verbose`, `-Debug`) adds `-LogLevel <level>` to the acquire
+step's `args` and an `env` with the matching `MCP_LOG_LEVEL` (`ERROR`, `WARN`, `INFO`, or `DEBUG` for
+`Verbose` and `Debug`) to the build step, so scheduled runs log at that level. No level prints the
+client secret, a token or a SAS query string.
+
 Without `policy`, the worker applies the API's startup checks: this server's version, its index
 schema version, and the capabilities the indexer covers completely (none yet, see
 `src/indexer/capabilityCoverage.ts`).

@@ -349,6 +349,12 @@ only when their exact length and, when the blob reports one, Content-MD5 match
 the current service metadata; the script then hashes them into the combined
 proof.
 
+Both scripts take `-LogLevel Error|Warning|Info|Verbose|Debug` (default `Info`),
+and `-Verbose` or `-Debug` work too. `acquire-ude-assets.ps1` also sets AzCopy's
+`--log-level` from a level you pass and, at `Verbose`, shows the end of the
+AzCopy log when a transfer fails. No level prints the client secret, the token
+or the SAS query string.
+
 Do not attempt to substitute a Linux container merely because `pac auth`
 works there. Only reconsider Linux if Microsoft documents a supported X++
 installer and the complete acquisition/build flow passes on that platform.
@@ -565,7 +571,8 @@ At startup:
 7. Atomically make the complete local artifact store available at
    `D365_ARTIFACT_STORE_PATH`.
 8. Let `artifactStartup.ts` validate the selected bundle and activate its DB
-   into `D365_INDEX_DB_PATH`.
+   into `D365_INDEX_DB_PATH` as a hard link to the bundle's file, so the
+   instance holds one copy (a verified copy when the paths cannot be linked).
 9. Open the activated DB read-only.
 10. Mark the health endpoint ready only after a representative query passes.
 

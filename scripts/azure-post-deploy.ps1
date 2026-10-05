@@ -41,6 +41,14 @@
     them in your password manager. The script never rotates the exposed app-registration secret
     and never touches the XRef proof VM.
 
+    Logging: -LogLevel Error, Warning, Info (the default), Verbose or Debug; -Verbose and -Debug
+    also work. Verbose and Debug add detail and pass --verbose or --debug to az, except on calls
+    that send or return a secret or your -AcquisitionConfig (az --debug logs whole requests and
+    responses). A level you pass also applies to the Run Command scripts on the worker VM and the
+    Node worker (MCP_LOG_LEVEL). The acquisition steps (acquire-ude-sources.ps1, AzCopy) take it
+    from acquisition.json: PrepareWorker records it there, so FirstAcquisition and scheduled runs
+    use it; rerun PrepareWorker without it to restore the default.
+
 .EXAMPLE
     ./scripts/azure-post-deploy.ps1 -ResourceGroup rg-d365mcp-prod -DataverseUrl https://contoso.crm.dynamics.com -WorkerApplicationId 00000000-0000-0000-0000-000000000000
 
@@ -49,6 +57,9 @@
 
 .EXAMPLE
     ./scripts/azure-post-deploy.ps1 -ResourceGroup rg-d365mcp-prod -Step ResumeScheduler,GitHub,Deploy
+
+.EXAMPLE
+    ./scripts/azure-post-deploy.ps1 -ResourceGroup rg-d365mcp-prod -Step SetupWorker -LogLevel Verbose
 #>
 #Requires -Version 7.2
 [CmdletBinding()]
@@ -103,11 +114,37 @@ param(
     [switch]$KeepVaultAccess,
 
     # Leave the worker VM running when the script ends (it is deallocated by default).
-    [switch]$LeaveVmRunning
+    [switch]$LeaveVmRunning,
+
+    # How much the script prints: Error, Warning, Info (default), Verbose or Debug. -Verbose and -Debug also work.
+    [ValidateSet('Error', 'Warning', 'Info', 'Verbose', 'Debug')]
+    [string]$LogLevel = 'Info'
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 3.0
+
+# -LogLevel, raised to at least Verbose or Debug by -Verbose or -Debug.
+$script:LogRank = @{ Error = 0; Warning = 1; Info = 2; Verbose = 3; Debug = 4 }[$LogLevel]
+if ($VerbosePreference -eq 'Continue' -and $script:LogRank -lt 3) { $script:LogRank = 3 }
+if ($DebugPreference -in @('Continue', 'Inquire')) { $script:LogRank = 4 }
+$script:LogLevelName = @('Error', 'Warning', 'Info', 'Verbose', 'Debug')[$script:LogRank]
+# True only when you passed -LogLevel, -Verbose or -Debug, so a default run sends the VM the same
+# scripts and acquisition.json as before, even when your session's preferences raise the level here.
+$script:LogLevelRequested = $PSBoundParameters.ContainsKey('LogLevel') -or [bool]$PSBoundParameters['Verbose'] -or
+    [bool]$PSBoundParameters['Debug']
+$VerbosePreference = if ($script:LogRank -ge 3) { 'Continue' } else { 'SilentlyContinue' }
+# Never 'Inquire': nothing in this run should stop to ask.
+$DebugPreference = if ($script:LogRank -ge 4) { 'Continue' } else { 'SilentlyContinue' }
+# Only ever lowered, so -WarningAction, -InformationAction and your session's preferences still
+# apply at Info and above.
+if ($script:LogRank -lt 1) { $WarningPreference = 'SilentlyContinue' }
+if ($script:LogRank -lt 2) { $InformationPreference = 'SilentlyContinue' }
+# az --debug logs whole requests and responses, so calls that send or return a secret go through
+# Invoke-AzSensitive, which never adds these.
+$script:AzLogArgs = @(if ($script:LogRank -ge 4) { '--debug' } elseif ($script:LogRank -ge 3) { '--verbose' })
+# MCP_LOG_LEVEL of the Node worker on the VM, which has nothing between INFO and DEBUG.
+$script:NodeLogLevel = @{ Error = 'ERROR'; Warning = 'WARN'; Info = 'INFO'; Verbose = 'DEBUG'; Debug = 'DEBUG' }[$script:LogLevelName]
 
 # -- Environment (filled from the deployment outputs by Resolve-Environment) ------------------
 $ApiKeysSecretName = 'mcp-api-keys'
@@ -119,13 +156,39 @@ $script:BundlePromoted = $false
 $script:VmStarted = $false
 
 # -- Helpers ------------------------------------------------------------------------------------
-function Write-Step([string]$Text) { Write-Host "`n== $Text ==" -ForegroundColor Cyan }
+# Write-Host ignores the preference variables, so Info-level messages go through this helper.
+function Write-Info([object]$Object, [ConsoleColor]$ForegroundColor) {
+    if ($script:LogRank -lt 2) { return }
+    $color = @{}
+    if ($PSBoundParameters.ContainsKey('ForegroundColor')) { $color['ForegroundColor'] = $ForegroundColor }
+    Write-Host $Object @color
+}
 
-# Runs az and throws on failure. Never pass secret values through this helper's error text.
+function Write-Step([string]$Text) { Write-Info "`n== $Text ==" -ForegroundColor Cyan }
+
+# Runs az and throws on failure. Never pass secret values through this helper's error text. It
+# echoes the command line at Verbose and adds --verbose/--debug, so a call that sends or returns a
+# secret uses Invoke-AzSensitive instead.
 function Invoke-Az {
+    Write-Verbose "az $args"
+    $output = & az @args @script:AzLogArgs
+    if ($LASTEXITCODE -ne 0) { throw "az $($args[0..1] -join ' ') failed (exit $LASTEXITCODE)." }
+    return $output
+}
+
+# Invoke-Az for calls that send or return a secret, or content you supplied: never adds
+# --verbose/--debug and never echoes the command line.
+function Invoke-AzSensitive {
+    Write-Verbose "az $($args[0..1] -join ' ') (may carry a secret: arguments and az logging left out)"
     $output = & az @args
     if ($LASTEXITCODE -ne 0) { throw "az $($args[0..1] -join ' ') failed (exit $LASTEXITCODE)." }
     return $output
+}
+
+# Invoke-Az without the throw, for cleanup that must go on when a call fails.
+function Invoke-AzBestEffort {
+    Write-Verbose "az $args"
+    & az @args @script:AzLogArgs
 }
 
 function Confirm-Continue([string]$Question) {
@@ -145,8 +208,9 @@ function ConvertTo-PlainText([Security.SecureString]$Value) {
 function Start-WorkerVm {
     $state = Invoke-Az vm get-instance-view -g $ResourceGroup -n $WorkerVm `
         --query "instanceView.statuses[?starts_with(code, 'PowerState/')].code | [0]" -o tsv
+    Write-Verbose "$WorkerVm is $state."
     if ($state -ne 'PowerState/running') {
-        Write-Host "Starting $WorkerVm..."
+        Write-Info "Starting $WorkerVm..."
         Invoke-Az vm start -g $ResourceGroup -n $WorkerVm --output none | Out-Null
     }
     $script:VmStarted = $true
@@ -154,39 +218,58 @@ function Start-WorkerVm {
 
 function Stop-WorkerVm([switch]$NoWait) {
     if ($script:VmStarted -and -not $LeaveVmRunning) {
-        Write-Host "Deallocating $WorkerVm..."
-        if ($NoWait) { & az vm deallocate -g $ResourceGroup -n $WorkerVm --no-wait --output none }
-        else { & az vm deallocate -g $ResourceGroup -n $WorkerVm --output none }
+        Write-Info "Deallocating $WorkerVm..."
+        if ($NoWait) { Invoke-AzBestEffort vm deallocate -g $ResourceGroup -n $WorkerVm --no-wait --output none }
+        else { Invoke-AzBestEffort vm deallocate -g $ResourceGroup -n $WorkerVm --output none }
         $script:VmStarted = $false
     }
+}
+
+# First lines of every VM script when a level was requested: the same Verbose and Debug preferences
+# ('Continue', never 'Inquire': Run Command cannot answer a prompt) and the Node worker's level.
+# Empty otherwise, so a default run sends the same scripts as before.
+function Get-VmLogLevelScript {
+    if (-not $script:LogLevelRequested) { return '' }
+    return @"
+`$VerbosePreference = '$VerbosePreference'
+`$DebugPreference = '$DebugPreference'
+`$env:MCP_LOG_LEVEL = '$script:NodeLogLevel'
+Write-Output 'Log level: $script:LogLevelName'
+
+"@
 }
 
 # Writes a VM script to a temp file for az's '@file' syntax. Passing a multi-line script inline
 # breaks on Windows, where az is a batch file that cuts arguments at line breaks.
 function New-ScriptFile([string]$Name, [string]$Script) {
     $file = Join-Path ([IO.Path]::GetTempPath()) "d365mcp-$Name-$PID.ps1"
-    Set-Content -LiteralPath $file -Value $Script -Encoding utf8NoBOM
+    Set-Content -LiteralPath $file -Value ((Get-VmLogLevelScript) + $Script) -Encoding utf8NoBOM
     return $file
 }
 
 # Runs a PowerShell script on the worker VM as SYSTEM (action Run Command, up to ~90 minutes).
-# The script must print 'STEP-OK' on its last line when it succeeds.
-function Invoke-WorkerScript([string]$Name, [string]$Script) {
+# The script must print 'STEP-OK' on its last line when it succeeds. -Sensitive sends a script
+# that holds content you supplied without az logging (az --debug logs the request body).
+function Invoke-WorkerScript([string]$Name, [string]$Script, [switch]$Sensitive) {
     Start-WorkerVm
     $file = New-ScriptFile $Name $Script
+    $az = if ($Sensitive) { 'Invoke-AzSensitive' } else { 'Invoke-Az' }
     try {
-        Write-Host "Running '$Name' on $WorkerVm (this can take a while)..."
-        $result = Invoke-Az vm run-command invoke -g $ResourceGroup -n $WorkerVm `
+        Write-Info "Running '$Name' on $WorkerVm (this can take a while)..."
+        $result = & $az vm run-command invoke -g $ResourceGroup -n $WorkerVm `
             --command-id RunPowerShellScript --scripts "@$file" -o json | ConvertFrom-Json
     }
     finally {
         Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue
     }
+    Write-Debug "'$Name' statuses: $(@($result.value | ForEach-Object code) -join ', ')"
     $stdout = ($result.value | Where-Object code -like '*StdOut*').message
     $stderr = ($result.value | Where-Object code -like '*StdErr*').message
-    if ($stdout) { Write-Host $stdout }
-    if ($stderr) { Write-Warning $stderr }
-    if ($stdout -notmatch 'STEP-OK\s*$') { throw "'$Name' did not finish on the VM; see the output above." }
+    # A failed script's output is the error message, so it shows at every level.
+    $failed = $stdout -notmatch 'STEP-OK\s*$'
+    if ($stdout) { if ($failed) { Write-Host $stdout } else { Write-Info $stdout } }
+    if ($stderr) { Write-Warning $stderr -WarningAction (($failed -and $script:LogRank -lt 1) ? 'Continue' : $WarningPreference) }
+    if ($failed) { throw "'$Name' did not finish on the VM; see the output above." }
 }
 
 # PowerShell lines that write $Json to $Path on the VM (UTF-8 without BOM, which Node requires).
@@ -221,6 +304,7 @@ function Invoke-WithVaultAccess([string]$Vault, [scriptblock]$Action) {
     $me = Invoke-Az ad signed-in-user show --query id -o tsv
     $vaultId = Invoke-Az keyvault show -n $Vault --query id -o tsv
     $myIp = (Invoke-RestMethod -Uri 'https://api.ipify.org').Trim()
+    Write-Verbose "Opening $Vault to $myIp/32 for $me with a temporary 'Key Vault Secrets Officer' role."
     Invoke-Az role assignment create --assignee-object-id $me --assignee-principal-type User `
         --role 'Key Vault Secrets Officer' --scope $vaultId --output none | Out-Null
     try {
@@ -229,11 +313,11 @@ function Invoke-WithVaultAccess([string]$Vault, [scriptblock]$Action) {
         & $Action
     }
     finally {
-        Write-Host "Closing $Vault to public traffic again..."
-        & az keyvault network-rule remove -n $Vault --ip-address "$myIp/32" --output none
-        & az keyvault update -n $Vault --public-network-access Disabled --output none
+        Write-Info "Closing $Vault to public traffic again..."
+        Invoke-AzBestEffort keyvault network-rule remove -n $Vault --ip-address "$myIp/32" --output none
+        Invoke-AzBestEffort keyvault update -n $Vault --public-network-access Disabled --output none
         if (-not $KeepVaultAccess) {
-            & az role assignment delete --assignee $me --role 'Key Vault Secrets Officer' --scope $vaultId --output none
+            Invoke-AzBestEffort role assignment delete --assignee $me --role 'Key Vault Secrets Officer' --scope $vaultId --output none
         }
     }
 }
@@ -244,21 +328,26 @@ function Set-VaultSecret([string]$Vault, [string]$Name, [string]$Value) {
     $vaultUri = ([string](Invoke-Az keyvault show -n $Vault --query properties.vaultUri -o tsv)).TrimEnd('/')
     # https://<vault>.vault.azure.net -> https://vault.azure.net (and the same in other clouds).
     $resource = 'https://' + ([Uri]$vaultUri).Host.Split('.', 2)[1]
+    Write-Verbose "Writing secret '$Name' to $vaultUri with a token for $resource (the value goes in the request body)."
     $body = @{ value = $Value } | ConvertTo-Json
+    $lastError = $null
     for ($attempt = 1; $attempt -le 12; $attempt++) {
         try {
-            $token = Invoke-Az account get-access-token --resource $resource --query accessToken -o tsv
+            $token = Invoke-AzSensitive account get-access-token --resource $resource --query accessToken -o tsv
             Invoke-RestMethod -Method Put -Uri "$vaultUri/secrets/$($Name)?api-version=7.4" `
                 -Headers @{ Authorization = "Bearer $token" } -ContentType 'application/json' -Body $body | Out-Null
-            Write-Host "Stored secret '$Name' in $Vault."
+            Write-Info "Stored secret '$Name' in $Vault."
             return
         }
         catch {
-            Write-Host "Waiting for vault access to apply (attempt $attempt of 12): $($_.Exception.Message)"
+            $lastError = $_.Exception.Message
+            Write-Info "Waiting for vault access to apply (attempt $attempt of 12): $lastError"
             Start-Sleep -Seconds 15
         }
         finally { $token = $null }
     }
+    # Below Info the attempts above are hidden, and the cause is part of the error.
+    if ($script:LogRank -lt 2) { Write-Host "Last attempt: $lastError" }
     throw "Could not write secret '$Name' to $Vault. Check that your IP and role were applied."
 }
 
@@ -283,8 +372,10 @@ function Resolve-Environment {
         $name = Invoke-Az deployment group list -g $ResourceGroup `
             --query "[?properties.provisioningState=='Succeeded' && properties.outputs.webAppName != null] | sort_by(@, &properties.timestamp) | [-1].name" -o tsv
         if (-not $name) { throw "No successful infra/main.bicep deployment found in $ResourceGroup. Pass -DeploymentName." }
+        Write-Verbose "No -DeploymentName: using the newest successful infra/main.bicep deployment, '$name'."
     }
     $outputs = Invoke-Az deployment group show -g $ResourceGroup -n $name --query properties.outputs -o json | ConvertFrom-Json
+    Write-Debug "Deployment outputs: $(@($outputs.PSObject.Properties.Name) -join ', ')"
     $value = {
         param($key)
         $entry = $outputs.PSObject.Properties[$key]
@@ -306,8 +397,10 @@ function Resolve-Environment {
     $timeout = $outputs.PSObject.Properties['workerRunTimeoutHours']
     $script:RunTimeoutHours = if ($timeout -and $timeout.Value.value) { [int]$timeout.Value.value } else { 6 }
 
-    Write-Host "Subscription $($account.name) ($SubscriptionId), tenant $TenantId"
-    Write-Host "Resource group $ResourceGroup, deployment '$name': web app $WebApp, worker $WorkerVm"
+    Write-Info "Subscription $($account.name) ($SubscriptionId), tenant $TenantId"
+    Write-Info "Resource group $ResourceGroup, deployment '$name': web app $WebApp, worker $WorkerVm"
+    Write-Verbose ("Registry $Registry, deploy identity $DeployClientId, artifacts $ArtifactAccountUrl/$ArtifactContainer, " +
+        "worker identity $WorkerClientId, vaults $ApiVault and $WorkerVault, scheduler $Scheduler, run timeout $RunTimeoutHours h")
 }
 
 # -- Steps --------------------------------------------------------------------------------------
@@ -315,12 +408,14 @@ function Step-PauseScheduler {
     Write-Step 'Pausing the acquisition scheduler'
     Invoke-Az resource update -g $ResourceGroup -n $Scheduler --resource-type Microsoft.Logic/workflows `
         --set properties.state=Disabled --output none | Out-Null
-    Write-Host "$Scheduler is disabled."
+    Write-Info "$Scheduler is disabled."
 }
 
 function Step-SeedApiKeys {
     Write-Step 'Seeding MCP_API_KEYS in the API vault'
+    # Errors are discarded (the vault may still be closed to you), so this runs without az logging.
     $exists = & az keyvault secret list --vault-name $ApiVault --query "[?name=='$ApiKeysSecretName'] | length(@)" -o tsv 2>$null
+    Write-Debug "Existing '$ApiKeysSecretName' count: '$exists' (az exit $LASTEXITCODE; empty when you cannot list the vault yet)."
     if ($exists -eq '1') { Confirm-Continue "'$ApiKeysSecretName' already exists. Replace it with new keys?" }
 
     $clientKey = New-ApiKey
@@ -336,6 +431,7 @@ function Step-SeedApiKeys {
 
 function Step-SeedWorkerSecret {
     Write-Step 'Storing the Power Platform client secret in the worker vault'
+    # Part of the prompt below, so it shows at every level.
     Write-Host 'Use a credential for a dedicated worker app registration, not the exposed one from the handoff.'
     $secure = Read-Host "Client secret for '$WorkerSecretName'" -AsSecureString
     $plain = ConvertTo-PlainText $secure
@@ -352,7 +448,7 @@ function Step-SetupWorker {
     $commit = ([string](Invoke-RestMethod -Uri "https://api.github.com/repos/$Repository/commits/master" `
                 -Headers @{ Accept = 'application/vnd.github.sha' })).Trim()
     if ($commit -notmatch '^[0-9a-f]{40}$') { throw "Could not resolve the master commit of $Repository." }
-    Write-Host "Worker build: $Repository master at $commit."
+    Write-Info "Worker build: $Repository master at $commit."
     # Helper installed on the VM: reads a worker-vault secret with the worker identity at run time,
     # so acquisition.json and command lines never carry secret values.
     $secretHelper = @'
@@ -459,7 +555,7 @@ Write-Output 'STEP-OK'
         Replace('__REPOSITORY__', $Repository).Replace('__COMMIT__', $commit)
 
     Invoke-WorkerScript 'setup-worker' $vmScript
-    Write-Host 'The worker is installed. Next: -Step PrepareWorker -DataverseUrl <url> -WorkerApplicationId <app id>.'
+    Write-Info 'The worker is installed. Next: -Step PrepareWorker -DataverseUrl <url> -WorkerApplicationId <app id>.'
 }
 
 # The acquisition the scheduler runs: download the X++ SDK and assets for the environment's
@@ -471,7 +567,8 @@ function New-AcquisitionConfig {
         '-DataverseEnvironmentUri', $DataverseUrl, '-SecretName', $WorkerSecretName,
         '-CacheRoot', "$WorkerRoot\cache", '-SourcesFile', '${WORK_DIR}\sources.json')
     if ($AppVersion) { $sourcesArgs += @('-AppVersion', $AppVersion) }
-    return [ordered]@{
+    if ($script:LogLevelRequested) { $sourcesArgs += @('-LogLevel', $script:LogLevelName) }
+    $config = [ordered]@{
         runsRoot          = "$WorkerRoot\runs"
         sourceDatabase    = 'd365_index.db'
         bundleOptionsFile = 'bundle-options.json'
@@ -492,12 +589,25 @@ function New-AcquisitionConfig {
             })
         destination       = Get-ArtifactDestination
     }
+    if ($script:LogLevelRequested) { $config.build[0]['env'] = [ordered]@{ MCP_LOG_LEVEL = $script:NodeLogLevel } }
+    return $config
 }
 
 function Step-PrepareWorker {
     Write-Step 'Preparing the worker for scheduled acquisition'
-    $pin = if ($AppVersion) { "-AppVersion '$AppVersion'" } else { '' }
+    $options = @()
+    if ($AppVersion) { $options += "-AppVersion '$AppVersion'" }
+    if ($script:LogLevelRequested) {
+        $options += "-LogLevel $($script:LogLevelName)"
+        Write-Verbose "acquisition.json records log level $($script:LogLevelName) for scheduled runs."
+    }
     $json = New-AcquisitionConfig | ConvertTo-Json -Depth 10
+    Write-Debug "acquisition.json:`n$json"
+    # A worker build from before -LogLevel would fail on it with a parameter error; say what to do.
+    $check = ''
+    if ($script:LogLevelRequested) {
+        $check = "`n" + 'if (-not (Get-Command -Name $sources).Parameters.ContainsKey(''LogLevel'')) { throw "$sources does not take -LogLevel. Run -Step SetupWorker to install the current worker build." }'
+    }
     # The preflight reads the secret from the worker vault, signs in to Dataverse, reads the F&O
     # version and resolves the three download URLs without downloading. The config is written
     # only when that passes.
@@ -505,17 +615,18 @@ function Step-PrepareWorker {
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $sources = '__ROOT__\app\scripts\worker\acquire-ude-sources.ps1'
-if (-not (Test-Path -LiteralPath $sources)) { throw "$sources is missing. Run -Step SetupWorker to install the current worker build." }
-& $sources -TenantId '__TENANT__' -ApplicationId '__APP__' -DataverseEnvironmentUri '__URL__' -SecretName '__SECRET__' -CacheRoot '__ROOT__\cache' -Preflight __PIN__
+if (-not (Test-Path -LiteralPath $sources)) { throw "$sources is missing. Run -Step SetupWorker to install the current worker build." }__CHECK__
+& $sources -TenantId '__TENANT__' -ApplicationId '__APP__' -DataverseEnvironmentUri '__URL__' -SecretName '__SECRET__' -CacheRoot '__ROOT__\cache' -Preflight __OPTIONS__
 __WRITE__
 Write-Output 'STEP-OK'
 '@.Replace('__ROOT__', $WorkerRoot).Replace('__TENANT__', $PowerPlatformTenantId).Replace('__APP__', $WorkerApplicationId).
-        Replace('__URL__', $DataverseUrl).Replace('__SECRET__', $WorkerSecretName).Replace('__PIN__', $pin).
-        Replace('__WRITE__', (Get-WriteFileScript "$WorkerRoot\acquisition.json" $json))
+        Replace('__URL__', $DataverseUrl).Replace('__SECRET__', $WorkerSecretName).Replace('__OPTIONS__', ($options -join ' ')).
+        Replace('__CHECK__', $check).Replace('__WRITE__', (Get-WriteFileScript "$WorkerRoot\acquisition.json" $json))
     try {
         Invoke-WorkerScript 'prepare-worker' $vmScript
     }
     catch {
+        # Part of the error, so it shows at every level.
         Write-Host @"
 
 The worker could not reach the environment. Check, in this order:
@@ -530,7 +641,7 @@ The worker could not reach the environment. Check, in this order:
 "@ -ForegroundColor Yellow
         throw
     }
-    Write-Host "The worker is ready. acquisition.json follows the F&O version of $DataverseUrl."
+    Write-Info "The worker is ready. acquisition.json follows the F&O version of $DataverseUrl."
 }
 
 function Step-UploadConfig {
@@ -546,7 +657,7 @@ function Step-UploadConfig {
 $(Get-WriteFileScript "$WorkerRoot\acquisition.json" ($config | ConvertTo-Json -Depth 20))
 Write-Output 'STEP-OK'
 "@
-    Invoke-WorkerScript 'upload-config' $vmScript
+    Invoke-WorkerScript 'upload-config' $vmScript -Sensitive
 }
 
 function Step-FirstAcquisition {
@@ -585,7 +696,8 @@ Write-Output 'ACQUISITION-OK'
         Replace('__CONTAINER__', $ArtifactContainer).Replace('__CLIENT__', $WorkerClientId)
 
     # Managed Run Command, like the scheduler, so a multi-hour run is not cut off at 90 minutes.
-    Write-Host "Starting run '$runId' (up to $RunTimeoutHours hours)..."
+    Write-Info "Starting run '$runId' (up to $RunTimeoutHours hours)..."
+    Write-Verbose 'acquire-ude-sources.ps1 and AzCopy use the log level in acquisition.json (set by PrepareWorker), not this run''s.'
     $file = New-ScriptFile 'first-acquisition' $vmScript
     try {
         Invoke-Az vm run-command create -g $ResourceGroup --vm-name $WorkerVm --name first-acquisition `
@@ -596,31 +708,40 @@ Write-Output 'ACQUISITION-OK'
     }
 
     $deadline = (Get-Date).AddHours($RunTimeoutHours).AddMinutes(15)
+    Write-Verbose "Polling run command 'first-acquisition' on $WorkerVm every minute until $($deadline.ToString('yyyy-MM-dd HH:mm'))."
     $state = $null
     $view = $null
     while ($state -notin @('Succeeded', 'Failed', 'TimedOut', 'Canceled')) {
         if ((Get-Date) -gt $deadline) { throw "Run '$runId' has not finished after $RunTimeoutHours hours; check run command 'first-acquisition' on $WorkerVm." }
         Start-Sleep -Seconds 60
         # The projection makes absent fields null. A failed poll is retried at the next minute
-        # rather than abandoning a running acquisition.
+        # rather than abandoning a running acquisition. Its output is parsed and its errors are
+        # discarded, so it runs without az logging.
         $json = & az vm run-command show -g $ResourceGroup --vm-name $WorkerVm --name first-acquisition --instance-view `
             --query '{state: instanceView.executionState, exitCode: instanceView.exitCode, output: instanceView.output, error: instanceView.error}' -o json 2>$null
-        if ($LASTEXITCODE -ne 0 -or -not $json) { Write-Host "$(Get-Date -Format HH:mm) (status unavailable, retrying)"; continue }
+        if ($LASTEXITCODE -ne 0 -or -not $json) {
+            Write-Info "$(Get-Date -Format HH:mm) (status unavailable, retrying)"
+            Write-Verbose "az vm run-command show exited with $LASTEXITCODE."
+            continue
+        }
         $view = $json | ConvertFrom-Json
         $state = [string]$view.state
-        Write-Host "$(Get-Date -Format HH:mm) $state"
+        Write-Info "$(Get-Date -Format HH:mm) $state"
+        Write-Debug "Run command exit code '$($view.exitCode)', $(([string]$view.output).Length) characters of output so far."
     }
 
     $output = [string]$view.output
-    if ($output) { Write-Host $output }
-    if ($view.error) { Write-Warning $view.error }
-    & az vm run-command delete -g $ResourceGroup --vm-name $WorkerVm --name first-acquisition --yes --output none
+    # A failed run's output is the error message, so it shows at every level.
+    $failed = $state -ne 'Succeeded' -or $view.exitCode -ne 0 -or $output -notmatch 'ACQUISITION-OK\s*$'
+    if ($output) { if ($failed) { Write-Host $output } else { Write-Info $output } }
+    if ($view.error) { Write-Warning $view.error -WarningAction (($failed -and $script:LogRank -lt 1) ? 'Continue' : $WarningPreference) }
+    Invoke-AzBestEffort vm run-command delete -g $ResourceGroup --vm-name $WorkerVm --name first-acquisition --yes --output none
 
-    if ($state -ne 'Succeeded' -or $view.exitCode -ne 0 -or $output -notmatch 'ACQUISITION-OK\s*$') {
+    if ($failed) {
         throw "Acquisition run '$runId' ended as $state (exit $($view.exitCode)); see the output above. Fix it before deploying the API."
     }
     $script:BundlePromoted = $true
-    Write-Host "Run '$runId' validated and promoted a bundle."
+    Write-Info "Run '$runId' validated and promoted a bundle."
 }
 
 function Step-ResumeScheduler {
@@ -632,18 +753,21 @@ function Step-ResumeScheduler {
     Stop-WorkerVm
     Invoke-Az resource update -g $ResourceGroup -n $Scheduler --resource-type Microsoft.Logic/workflows `
         --set properties.state=Enabled --output none | Out-Null
-    Write-Host "$Scheduler is enabled."
+    Write-Info "$Scheduler is enabled."
 }
 
 function Step-GitHub {
     Write-Step "Configuring the GitHub 'production' environment"
     if (-not (Get-Command gh -ErrorAction SilentlyContinue)) { throw 'Install the GitHub CLI and run gh auth login first.' }
 
+    # gh's own logging stays off: GH_DEBUG can print tokens.
+    Write-Verbose "gh api -X PUT repos/$Repository/environments/production"
     & gh api -X PUT "repos/$Repository/environments/production" --silent
     if ($LASTEXITCODE -ne 0) { throw 'Could not create the production environment.' }
 
     $values = [ordered]@{ AZURE_CLIENT_ID = $DeployClientId; AZURE_TENANT_ID = $TenantId; AZURE_SUBSCRIPTION_ID = $SubscriptionId }
     foreach ($name in $values.Keys) {
+        Write-Verbose "gh secret set $name --env production --repo $Repository (value not shown)"
         & gh secret set $name --env production --repo $Repository --body $values[$name]
         if ($LASTEXITCODE -ne 0) { throw "Could not set secret $name." }
     }
@@ -651,16 +775,18 @@ function Step-GitHub {
     $smoke = $script:SmokeKey
     if (-not $smoke) { $smoke = ConvertTo-PlainText (Read-Host 'ci-smoke API key (from your password manager)' -AsSecureString) }
     # Piped on stdin so the key is not on a command line.
+    Write-Verbose "gh secret set MCP_SMOKE_API_KEY --env production --repo $Repository (value on stdin)"
     $smoke | & gh secret set MCP_SMOKE_API_KEY --env production --repo $Repository
     if ($LASTEXITCODE -ne 0) { throw 'Could not set secret MCP_SMOKE_API_KEY.' }
     $smoke = $null
 
     $vars = [ordered]@{ RESOURCE_GROUP = $ResourceGroup; WEBAPP_NAME = $WebApp; ACR_NAME = $Registry }
     foreach ($name in $vars.Keys) {
+        Write-Verbose "gh variable set $name --env production --repo $Repository"
         & gh variable set $name --env production --repo $Repository --body $vars[$name]
         if ($LASTEXITCODE -ne 0) { throw "Could not set variable $name." }
     }
-    Write-Host "The production environment has 4 secrets and 3 variables."
+    Write-Info "The production environment has 4 secrets and 3 variables."
 }
 
 function Step-Deploy {
@@ -669,6 +795,8 @@ function Step-Deploy {
         Confirm-Continue 'The API stays unhealthy until a first bundle is promoted. Has an acquisition run succeeded?'
     }
     $previous = & gh run list --repo $Repository --workflow deploy.yml --limit 1 --json databaseId --jq '.[0].databaseId'
+    Write-Debug "Latest Deploy run before this one: '$previous'."
+    Write-Verbose "gh workflow run deploy.yml --repo $Repository --ref master"
     & gh workflow run deploy.yml --repo $Repository --ref master
     if ($LASTEXITCODE -ne 0) { throw 'Could not start the Deploy workflow.' }
     $runId = $null
@@ -678,9 +806,10 @@ function Step-Deploy {
         if ($latest -and $latest -ne $previous) { $runId = $latest }
     }
     if (-not $runId) { throw "The Deploy run did not appear; check https://github.com/$Repository/actions." }
+    Write-Verbose "gh run watch $runId --repo $Repository --exit-status"
     & gh run watch $runId --repo $Repository --exit-status
     if ($LASTEXITCODE -ne 0) { throw 'The Deploy workflow failed; see the run log on GitHub.' }
-    Write-Host "Deployed. Connect clients to https://$WebAppHost/mcp with the $ClientKeyName key."
+    Write-Info "Deployed. Connect clients to https://$WebAppHost/mcp with the $ClientKeyName key."
 }
 
 # -- Main ---------------------------------------------------------------------------------------
@@ -704,14 +833,21 @@ if ($selected -contains 'UploadConfig') {
     Assert-NoSecretInConfig (Get-Content -LiteralPath $AcquisitionConfig -Raw)
 }
 
+Write-Verbose "Log level $($script:LogLevelName): az gets $($script:AzLogArgs -join ' ') except on calls that carry a secret or your -AcquisitionConfig."
+Write-Verbose "Steps: $($selected -join ', ')"
+Write-Debug "canPrepare $canPrepare, AcquisitionConfig '$AcquisitionConfig', LogLevelRequested $($script:LogLevelRequested)"
 Resolve-Environment
 if (-not $PowerPlatformTenantId) { $PowerPlatformTenantId = $TenantId }
 
 try {
-    foreach ($name in $selected) { & "Step-$name" }
+    foreach ($name in $selected) {
+        $timer = [Diagnostics.Stopwatch]::StartNew()
+        & "Step-$name"
+        Write-Verbose "$name finished in $($timer.Elapsed.ToString('hh\:mm\:ss'))."
+    }
     if ($Step -contains 'All' -and -not $canPrepare -and -not $AcquisitionConfig) {
-        Write-Host "`nStopped before the first acquisition. Prepare the worker and finish with:"
-        Write-Host "  ./scripts/azure-post-deploy.ps1 -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId -Repository $Repository -Step PrepareWorker,FirstAcquisition,ResumeScheduler,GitHub,Deploy -DataverseUrl <url> -WorkerApplicationId <app id>"
+        Write-Info "`nStopped before the first acquisition. Prepare the worker and finish with:"
+        Write-Info "  ./scripts/azure-post-deploy.ps1 -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId -Repository $Repository -Step PrepareWorker,FirstAcquisition,ResumeScheduler,GitHub,Deploy -DataverseUrl <url> -WorkerApplicationId <app id>"
     }
 }
 finally {

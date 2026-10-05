@@ -27,12 +27,63 @@ param(
 
     [Security.SecureString]$ClientSecret,
 
-    [switch]$MetadataOnly
+    [switch]$MetadataOnly,
+
+    # How much the script prints: Error, Warning, Info (default), Verbose or Debug. -Verbose and
+    # -Debug also work. A level you set also sets AzCopy's --log-level. No level prints the client
+    # secret, a token or a SAS query string.
+    [ValidateSet("Error", "Warning", "Info", "Verbose", "Debug")]
+    [string]$LogLevel = "Info"
 )
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version 2.0
+
+# -Verbose and -Debug raise the level; the preference variables then follow the resolved level.
+$script:LogRank = @{ Error = 0; Warning = 1; Info = 2; Verbose = 3; Debug = 4 }[$LogLevel]
+if ($VerbosePreference -eq "Continue" -and $script:LogRank -lt 3) { $script:LogRank = 3 }
+if ($DebugPreference -in @("Continue", "Inquire")) { $script:LogRank = 4 }
+$script:LogLevelName = @("Error", "Warning", "Info", "Verbose", "Debug")[$script:LogRank]
+# True only when the caller passed -LogLevel, -Verbose or -Debug, so a default run calls AzCopy
+# exactly as before.
+$script:LogLevelRequested = $PSBoundParameters.ContainsKey("LogLevel") -or [bool]$PSBoundParameters["Verbose"] -or
+    [bool]$PSBoundParameters["Debug"]
+$VerbosePreference = if ($script:LogRank -ge 3) { "Continue" } else { "SilentlyContinue" }
+# Never "Inquire" (what -Debug sets in Windows PowerShell 5.1): Run Command cannot answer prompts.
+$DebugPreference = if ($script:LogRank -ge 4) { "Continue" } else { "SilentlyContinue" }
+# Only ever lowered, so -WarningAction, -InformationAction and the caller's preferences still apply
+# at Info and above.
+if ($script:LogRank -lt 1) { $WarningPreference = "SilentlyContinue" }
+if ($script:LogRank -lt 2) { $InformationPreference = "SilentlyContinue" }
+# The in-process download's progress bar is Info-level output too.
+if ($script:LogRank -lt 2) { $ProgressPreference = "SilentlyContinue" }
+# AzCopy's own log lives in the staging folder, which is removed after each download; at Verbose
+# and Debug its last lines are shown when AzCopy fails.
+$script:AzCopyLogLevel = "ERROR"
+if ($script:LogLevelRequested) {
+    $script:AzCopyLogLevel = @("ERROR", "WARNING", "INFO", "INFO", "DEBUG")[$script:LogRank]
+}
+Write-Verbose "Log level $($script:LogLevelName); PowerShell $($PSVersionTable.PSVersion)."
+
 Add-Type -AssemblyName System.Net.Http
+
+# Write-Host ignores the preference variables, so Info-level progress goes through here.
+function Write-Info {
+    param(
+        [string]$Text,
+
+        [ConsoleColor]$ForegroundColor
+    )
+
+    if ($script:LogRank -lt 2) {
+        return
+    }
+    $colour = @{}
+    if ($PSBoundParameters.ContainsKey("ForegroundColor")) {
+        $colour.ForegroundColor = $ForegroundColor
+    }
+    Write-Host $Text @colour
+}
 
 function Get-PlainTextSecret {
     param(
@@ -63,6 +114,17 @@ function Get-RedactedText {
     # SAS signature parameter that appears outside a recognizable URL.
     $redacted = [regex]::Replace($Text, '(https?://[^\s"''?]+)\?[^\s"'']*', '$1?<redacted>')
     return [regex]::Replace($redacted, '(?i)(sig=)[^&\s"'']+', '$1<redacted>')
+}
+
+# An asset URL fit for log output: the query string, which holds the SAS, is dropped before the
+# text is redacted, so a path the redaction pattern does not recognize cannot expose it.
+function Get-DisplayUri {
+    param(
+        [Parameter(Mandatory = $true)]
+        [Uri]$Uri
+    )
+
+    return Get-RedactedText -Text $Uri.GetLeftPart([UriPartial]::Path)
 }
 
 function Get-FileContentMd5 {
@@ -138,7 +200,11 @@ function Get-AssetUri {
         "OData-Version" = "4.0"
     }
 
-    $response = Invoke-RestMethod -Method Get -Uri $metadataUri -Headers $headers
+    Write-Debug "GET $metadataUri (correlation id $($headers.Correlationid))"
+    # The request carries the access token and the response is the SAS URL, so the cmdlet's own
+    # verbose and debug output stays off at every level.
+    $response = Invoke-RestMethod -Method Get -Uri $metadataUri -Headers $headers `
+        -Verbose:$false -Debug:$false
     $uriText = ([string]$response).Trim().Trim('"')
     $assetUri = $null
     if (-not [Uri]::TryCreate($uriText, [UriKind]::Absolute, [ref]$assetUri)) {
@@ -151,6 +217,7 @@ function Get-AssetUri {
         throw "The Dev Tools service returned an unexpected host for '$AssetName'."
     }
 
+    Write-Verbose "$AssetName is at $(Get-DisplayUri -Uri $assetUri)"
     return $assetUri
 }
 
@@ -211,6 +278,10 @@ function Get-AssetMetadata {
             if ($null -ne $response.Content.Headers.ContentMD5) {
                 $contentMd5 = [Convert]::ToBase64String($response.Content.Headers.ContentMD5)
             }
+            Write-Debug ("HEAD for {0}: HTTP {1}, {2} bytes, Content-MD5 {3}, type '{4}'" -f
+                $AssetName, [int]$response.StatusCode, $response.Content.Headers.ContentLength,
+                $(if ($null -eq $contentMd5) { "absent" } else { $contentMd5 }),
+                [string]$response.Content.Headers.ContentType)
             return [pscustomobject]@{
                 ResourceName = $AssetName
                 FileName = Get-ResponseFileName -Response $response -AssetUri $AssetUri `
@@ -266,12 +337,14 @@ function Save-Asset {
                 "$($metadata.ContentLength), got $existingLength."
         }
 
-        Write-Host "Validating existing $AssetName asset..."
+        Write-Verbose "Reusing $destinationPath ($existingLength bytes, the expected length)."
+        Write-Info "Validating existing $AssetName asset..."
         Assert-ContentMd5 -Path $destinationPath -ExpectedContentMd5 $metadata.ContentMd5 `
             -AssetName $AssetName
         $existingHash = (
             Get-FileHash -LiteralPath $destinationPath -Algorithm SHA256
         ).Hash.ToLowerInvariant()
+        Write-Debug "SHA-256 of ${destinationPath}: $existingHash"
         return [pscustomobject]@{
             ResourceName = $AssetName
             FileName = $metadata.FileName
@@ -294,30 +367,67 @@ function Save-Asset {
         $env:AZCOPY_JOB_PLAN_LOCATION = Join-Path $stagingDirectory "plans"
 
         try {
-            Write-Host "Downloading $AssetName with AzCopy..."
+            Write-Info "Downloading $AssetName with AzCopy..."
             # Limitation: the Dev Tools service hands back a pre-signed SAS URL
             # for a storage account this identity does not own, so AzCopy's
             # environment-based auth (AZCOPY_AUTO_LOGIN_TYPE, managed identity,
             # service principal) does not apply, and AzCopy accepts a SAS only
             # as part of the source URL. The SAS is therefore visible on this
             # child process's command line for the lifetime of the transfer.
-            # It is short-lived and never echoed: AzCopy output is captured,
-            # redacted before any error message, and then discarded. Omit
-            # AzCopy (no -AzCopyPath and not on PATH) to keep the SAS in-process.
+            # It is short-lived and never echoed: AzCopy output and its log are
+            # captured, redacted before any error message or Verbose/Debug line,
+            # and then discarded. Omit AzCopy (no -AzCopyPath and not on PATH)
+            # to keep the SAS in-process.
+            $azCopyOptions = @(
+                "--from-to=BlobLocal", "--overwrite=false", "--check-length=true",
+                "--output-type=json", "--output-level=essential",
+                "--log-level=$script:AzCopyLogLevel"
+            )
+            Write-Verbose ("$AzCopyExecutable copy " +
+                "$(Get-DisplayUri -Uri $AssetUri)?<SAS not shown> $stagingDirectory " +
+                ($azCopyOptions -join " "))
+            $azCopyTimer = [Diagnostics.Stopwatch]::StartNew()
             $previousErrorActionPreference = $ErrorActionPreference
             # Windows PowerShell 5.1 turns redirected native stderr into
             # terminating errors under Stop; rely on the exit code instead.
             $ErrorActionPreference = "Continue"
             try {
                 $azCopyOutput = & $AzCopyExecutable copy $AssetUri.AbsoluteUri $stagingDirectory `
-                    --from-to=BlobLocal --overwrite=false --check-length=true `
-                    --output-type=json --output-level=essential --log-level=ERROR 2>&1
+                    @azCopyOptions 2>&1
                 $azCopyExitCode = $LASTEXITCODE
             }
             finally {
                 $ErrorActionPreference = $previousErrorActionPreference
             }
+            Write-Verbose ("AzCopy exited with code $azCopyExitCode after " +
+                "$([int]$azCopyTimer.Elapsed.TotalSeconds)s.")
+            if ($script:LogRank -ge 4) {
+                foreach ($azCopyLine in @($azCopyOutput)) {
+                    Write-Debug ("AzCopy: " + (Get-RedactedText -Text ([string]$azCopyLine)))
+                }
+            }
             if ($azCopyExitCode -ne 0) {
+                if ($script:LogRank -ge 3) {
+                    # The log goes with the staging folder, so show how it ends first.
+                    $azCopyLogs = @(
+                        Get-ChildItem -LiteralPath $env:AZCOPY_LOG_LOCATION -Filter "*.log" -File `
+                            -ErrorAction SilentlyContinue
+                    )
+                    foreach ($azCopyLog in $azCopyLogs) {
+                        # Best effort: a log that cannot be read must not hide the AzCopy error.
+                        try {
+                            $logTail = @(
+                                Get-Content -LiteralPath $azCopyLog.FullName -Tail 40
+                            ) -join [Environment]::NewLine
+                            Write-Verbose ("End of AzCopy log $($azCopyLog.Name):" +
+                                [Environment]::NewLine + (Get-RedactedText -Text $logTail))
+                        }
+                        catch {
+                            Write-Verbose ("Could not read AzCopy log $($azCopyLog.Name): " +
+                                (Get-RedactedText -Text $_.Exception.Message))
+                        }
+                    }
+                }
                 $azCopyTail = (
                     @($azCopyOutput | ForEach-Object { [string]$_ }) |
                         Select-Object -Last 5
@@ -358,6 +468,7 @@ function Save-Asset {
         }
 
         $hash = (Get-FileHash -LiteralPath $destinationPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        Write-Debug "SHA-256 of ${destinationPath}: $hash"
         return [pscustomobject]@{
             ResourceName = $AssetName
             FileName = $metadata.FileName
@@ -371,6 +482,9 @@ function Save-Asset {
         }
     }
 
+    Write-Verbose ("Downloading $AssetName in-process from " +
+        "$(Get-DisplayUri -Uri $AssetUri)?<SAS not shown> to $destinationPath")
+    $downloadTimer = [Diagnostics.Stopwatch]::StartNew()
     $response = $Client.GetAsync(
         $AssetUri,
         [Net.Http.HttpCompletionOption]::ResponseHeadersRead
@@ -434,7 +548,10 @@ function Save-Asset {
             throw
         }
         Move-Item -LiteralPath $partialPath -Destination $destinationPath
+        Write-Verbose ("Downloaded $actualLength bytes of $AssetName in " +
+            "$([int]$downloadTimer.Elapsed.TotalSeconds)s.")
         $hash = (Get-FileHash -LiteralPath $destinationPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        Write-Debug "SHA-256 of ${destinationPath}: $hash"
 
         return [pscustomobject]@{
             ResourceName = $AssetName
@@ -454,12 +571,17 @@ function Save-Asset {
 }
 
 $environmentUri = $DataverseEnvironmentUri.TrimEnd("/") + "/"
+Write-Verbose ("Tenant $TenantId, app $ApplicationId, environment $environmentUri, " +
+    "version $AppVersion, assets $($AssetNames -join ', '), output $OutputDirectory.")
 if ($null -eq $ClientSecret) {
     $ClientSecret = Read-Host "Client secret value" -AsSecureString
 }
 
 $plainSecret = Get-PlainTextSecret -SecureValue $ClientSecret
 try {
+    Write-Verbose "Requesting a client-credentials token from tenant $TenantId for $environmentUri."
+    # The body carries the client secret and the response the token, so the cmdlet's own verbose
+    # and debug output stays off at every level.
     $tokenResponse = Invoke-RestMethod -Method Post `
         -Uri "https://login.microsoftonline.com/$TenantId/oauth2/token" `
         -ContentType "application/x-www-form-urlencoded" `
@@ -468,7 +590,8 @@ try {
             client_secret = $plainSecret
             grant_type = "client_credentials"
             resource = $environmentUri
-        }
+        } `
+        -Verbose:$false -Debug:$false
 }
 finally {
     $plainSecret = $null
@@ -477,6 +600,10 @@ finally {
 
 if ([string]::IsNullOrWhiteSpace([string]$tokenResponse.access_token)) {
     throw "Microsoft Entra ID did not return an access token."
+}
+$tokenLifetime = $tokenResponse.PSObject.Properties["expires_in"]
+if ($null -ne $tokenLifetime) {
+    Write-Verbose "Got an access token that expires in $($tokenLifetime.Value)s."
 }
 
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
@@ -491,7 +618,10 @@ else {
     }
 }
 if ($null -ne $resolvedAzCopyPath) {
-    Write-Host "Using AzCopy: $resolvedAzCopyPath"
+    Write-Info "Using AzCopy: $resolvedAzCopyPath"
+}
+else {
+    Write-Verbose "AzCopy is not on PATH and -AzCopyPath is not set; downloading in-process."
 }
 
 $httpClient = [Net.Http.HttpClient]::new()
@@ -499,7 +629,8 @@ $httpClient.Timeout = [Threading.Timeout]::InfiniteTimeSpan
 
 try {
     $assetResults = foreach ($assetName in $AssetNames) {
-        Write-Host "Resolving $assetName metadata..."
+        $assetTimer = [Diagnostics.Stopwatch]::StartNew()
+        Write-Info "Resolving $assetName metadata..."
         $assetUri = Get-AssetUri -AssetName $assetName -Version $AppVersion `
             -EnvironmentUri $environmentUri -AccessToken $tokenResponse.access_token
         if ($MetadataOnly) {
@@ -509,6 +640,7 @@ try {
             Save-Asset -Client $httpClient -AssetUri $assetUri -AssetName $assetName `
                 -DestinationRoot $OutputDirectory -AzCopyExecutable $resolvedAzCopyPath
         }
+        Write-Verbose "$assetName took $([int]$assetTimer.Elapsed.TotalSeconds)s."
     }
 }
 finally {
@@ -526,5 +658,5 @@ $proof = [pscustomobject]@{
 $proofPath = Join-Path $OutputDirectory "ude-assets-proof.json"
 $proof | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $proofPath -Encoding UTF8
 
-Write-Host "UDE asset evidence written to:"
-Write-Host "  $proofPath"
+Write-Info "UDE asset evidence written to:"
+Write-Info "  $proofPath"

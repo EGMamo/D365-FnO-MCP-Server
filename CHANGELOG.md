@@ -16,6 +16,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Visual Studio extension: choose which tools Copilot may use. After the connection test passes,
   Configure Connection shows a checkbox list of the server's tools; **Select Tools...** edits it
   later. The local gateway hides unchecked tools from `tools/list` and refuses calls to them.
+- `-LogLevel Error|Warning|Info|Verbose|Debug` on `azure-deploy.ps1`, `azure-post-deploy.ps1`,
+  `scripts/worker/acquire-ude-sources.ps1`, `acquire-ude-assets.ps1` and `verify-windows-xpp.ps1`
+  (default `Info`, output unchanged); `-Verbose` and `-Debug` also work and never stop for input.
+  `Verbose` adds each az command, decisions and step timings and passes `--verbose` to az; `Debug`
+  adds internal values and `--debug`. Calls that send or return a secret never get az logging flags,
+  and no level prints a secret, token or SAS query string. `azure-post-deploy.ps1` passes a level you
+  set to the Run Command scripts, and `PrepareWorker` records it in `acquisition.json` for
+  `acquire-ude-sources.ps1`, AzCopy (`--log-level`) and the Node worker (`MCP_LOG_LEVEL`).
 - `costProfile` parameter in `infra/main.bicep` (`standard` or `cheapest`). `cheapest` keeps the
   same architecture at the lowest cost: P0v3 App Service plan, Standard SSD worker disks, Basic
   ACR without a private endpoint, and the `/health` availability test from 2 locations every 15
@@ -240,6 +248,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The hosted API could not fit a full-size index on App Service: each running slot kept the
+  downloaded bundle and a copy of its database (about 12 GB for the 5.9 GB index), and the
+  production and staging slots share each instance's 15 GB host disk. Startup from Azure Blob now
+  hard-links the database into `D365_INDEX_DB_PATH` and its free-space check asks for one copy; when
+  a test link between the two paths fails (separate mounts) it copies as before, and a copy now
+  checks its own room even when a local bundle is reused. The Deploy workflow starts `staging` if
+  it is stopped and stops it at the end while production is healthy, so only production holds a
+  copy between deployments. `infra/README.md` has the new manual rollback steps.
 - `prepare-bundle` crashed with exit code 134 (JavaScript heap out of memory) on a full X++ SDK:
   the index pass's cleanup loaded every label row in every language into memory to find stale
   ones. SQLite now finds and deletes stale objects and labels itself, so memory no longer grows
