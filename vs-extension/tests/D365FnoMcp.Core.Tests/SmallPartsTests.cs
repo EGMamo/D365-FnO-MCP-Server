@@ -131,3 +131,67 @@ public class SettingsStoreTests
     public void SecretNamesIgnoreUrlSpelling() =>
         Assert.Equal(SecretNames.ApiKey("https://app.example.net/mcp/"), SecretNames.ApiKey("https://app.example.net"));
 }
+
+public class ApiKeyEntryTests
+{
+    [Theory]
+    [InlineData("  new-key\r\n", null, "new-key")]
+    [InlineData("new-key", "saved-key", "new-key")]
+    [InlineData("", "saved-key", "saved-key")]
+    [InlineData("   ", "saved-key", "saved-key")]
+    [InlineData("", null, null)]
+    [InlineData("", "  ", null)]
+    public void ResolvesTypedOrSavedKey(string entered, string? saved, string? expected) =>
+        Assert.Equal(expected, ApiKeyEntry.Resolve(entered, saved));
+}
+
+public class ToolSelectionTests
+{
+    private static readonly ToolInfo[] Hosted = [new("b_tool", "B"), new("a_tool", "A")];
+
+    [Fact]
+    public void AvailableAddsTheLocalContextToolAndSorts() =>
+        Assert.Equal(
+            new[] { "a_tool", "b_tool", McpGateway.ContextToolName },
+            ToolSelection.Available(Hosted).Select(tool => tool.Name));
+
+    [Fact]
+    public void SelectingEverythingSavesNullSoNewToolsStayOn()
+    {
+        IReadOnlyList<ToolInfo> available = ToolSelection.Available(Hosted);
+        Assert.Null(ToolSelection.ToSetting(available, available.Select(tool => tool.Name)));
+        Assert.Equal(new[] { "a_tool" }, ToolSelection.ToSetting(available, ["a_tool"]));
+        Assert.Empty(ToolSelection.ToSetting(available, [])!);
+    }
+
+    [Fact]
+    public void NullAllowsEveryTool()
+    {
+        Assert.True(ToolSelection.IsAllowed(null, "anything"));
+        Assert.False(ToolSelection.IsAllowed(ToolSelection.ToSet(["a_tool"]), "b_tool"));
+    }
+
+    [Fact]
+    public void ShortDescriptionKeepsTheFirstLine() =>
+        Assert.Equal("Searches metadata.", ToolSelection.ShortDescription("  Searches metadata.\nDetails here."));
+
+    [Fact]
+    public void SettingsRoundTripTheAllowList()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        try
+        {
+            var store = new SettingsStore(Path.Combine(dir, "settings.json"));
+            Assert.Null(store.Load().AllowedTools);
+            store.Save(new ExtensionSettings { AllowedTools = ["a_tool"] });
+            Assert.Equal(new[] { "a_tool" }, store.Load().AllowedTools);
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+        }
+    }
+}

@@ -79,6 +79,7 @@ public class ConnectionTesterTests
 
         Assert.True(report.Succeeded, report.Summary());
         Assert.Equal(3, report.ToolCount);
+        Assert.Equal(new[] { "a", "b", "c" }, report.Tools.Select(tool => tool.Name));
         // The MCP session opened for the test is closed again.
         Assert.Contains(server.Requests, r => r.StartsWith("DELETE /mcp", StringComparison.Ordinal));
     }

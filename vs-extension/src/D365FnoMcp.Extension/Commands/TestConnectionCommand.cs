@@ -42,6 +42,15 @@ internal sealed class TestConnectionCommand : Command
         }
 
         string apiKey = this.services.Secrets.Read(SecretNames.ApiKey(settings.ServerUrl)) ?? string.Empty;
+        if (apiKey.Length == 0)
+        {
+            await shell.ShowPromptAsync(
+                $"No API key is saved for {settings.ServerUrl}. Use Extensions > D365 F&O MCP > Set API Key... to enter it.",
+                PromptOptions.AlertConfirm,
+                cancellationToken);
+            return;
+        }
+
         ConnectionReport report = await new ConnectionTester(this.services.Http).TestAsync(settings.ServerUrl, apiKey, cancellationToken);
         await this.services.WriteOutputAsync($"Connection test for {settings.ServerUrl}:{Environment.NewLine}{report.Summary()}", cancellationToken);
         await shell.ShowPromptAsync(

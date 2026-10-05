@@ -137,6 +137,42 @@ public class McpGatewayTests
     }
 
     [Fact]
+    public async Task OffersOnlyAllowedTools()
+    {
+        var upstream = new Upstream();
+        await using var gateway = new McpGateway(new HttpClient(upstream), new ContextProvider());
+        await gateway.StartAsync("https://app.example.net", "upstream-secret", null, CancellationToken.None);
+        using var client = new HttpClient();
+        client.DefaultRequestHeaders.Authorization =
+            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", gateway.BearerToken);
+        async Task<JsonNode> Post(string json)
+        {
+            using HttpResponseMessage response = await client.PostAsync(gateway.Endpoint, new StringContent(json, Encoding.UTF8, "application/json"));
+            return JsonNode.Parse(await response.Content.ReadAsStringAsync())!;
+        }
+
+        const string list = """{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}""";
+        IEnumerable<string?> Names(JsonNode body) => body["result"]!["tools"]!.AsArray().Select(tool => (string?)tool!["name"]);
+
+        gateway.AllowedTools = new HashSet<string> { McpGateway.ContextToolName };
+        Assert.Equal(new[] { McpGateway.ContextToolName }, Names(await Post(list)));
+
+        int before = upstream.RequestCount;
+        JsonNode refused = await Post("""{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"metadata_search","arguments":{}}}""");
+        Assert.Equal(-32602, (int)refused["error"]!["code"]!);
+        Assert.Equal(9, (int)refused["id"]!);
+        Assert.Equal(before, upstream.RequestCount);
+
+        gateway.AllowedTools = new HashSet<string> { "metadata_search" };
+        Assert.Equal(new[] { "metadata_search" }, Names(await Post(list)));
+        JsonNode contextRefused = await Post("""{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"workspace_get_context","arguments":{}}}""");
+        Assert.NotNull(contextRefused["error"]);
+
+        gateway.AllowedTools = null;
+        Assert.Equal(new[] { "metadata_search", McpGateway.ContextToolName }, Names(await Post(list)));
+    }
+
+    [Fact]
     public async Task RefusesAPlainHttpRemoteUpstream()
     {
         await using var gateway = new McpGateway(new HttpClient(new Upstream()), new ContextProvider());

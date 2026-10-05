@@ -24,6 +24,9 @@ public sealed class ConnectionReport
 
     public int? ToolCount { get; set; }
 
+    /// <summary>Hosted tools from tools/list, for the tool picker.</summary>
+    public List<ToolInfo> Tools { get; } = new();
+
     public string Summary()
     {
         var builder = new StringBuilder();
@@ -160,6 +163,14 @@ public sealed class ConnectionTester
             }
 
             report.ToolCount = tools.Count;
+            foreach (JsonNode? tool in tools)
+            {
+                if ((string?)tool?["name"] is { Length: > 0 } name)
+                {
+                    report.Tools.Add(new(name, ToolSelection.ShortDescription((string?)tool?["description"])));
+                }
+            }
+
             report.Checks.Add(new("MCP", CheckStatus.Passed, $"{serverName} answered initialize and lists {tools.Count} tools"));
             return true;
         }

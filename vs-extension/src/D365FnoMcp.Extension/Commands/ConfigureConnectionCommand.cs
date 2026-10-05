@@ -55,22 +55,9 @@ internal sealed class ConfigureConnectionCommand : Command
             return;
         }
 
-        string? savedKey = this.services.Secrets.Read(SecretNames.ApiKey(serverUrl));
-        string? entered = await shell.ShowPromptAsync(
-            savedKey is null
-                ? "API key for this server (it is stored in Windows Credential Manager):"
-                : "API key for this server. Leave empty to keep the saved key:",
-            InputPromptOptions.Default with { Title = "D365 F&O MCP" },
-            cancellationToken);
-        if (entered is null)
+        string? apiKey = await ApiKeyPrompt.AskAsync(shell, this.services.Secrets, serverUrl, cancellationToken);
+        if (apiKey is null)
         {
-            return;
-        }
-
-        string apiKey = string.IsNullOrWhiteSpace(entered) ? savedKey ?? string.Empty : entered.Trim();
-        if (apiKey.Length == 0)
-        {
-            await shell.ShowPromptAsync("An API key is required.", PromptOptions.ErrorConfirm, cancellationToken);
             return;
         }
 
@@ -80,6 +67,14 @@ internal sealed class ConfigureConnectionCommand : Command
             !await shell.ShowPromptAsync($"The connection test failed:{Environment.NewLine}{Environment.NewLine}{report.Summary()}{Environment.NewLine}{Environment.NewLine}Save these settings anyway?", PromptOptions.OKCancel.WithCancelAsDefault(), cancellationToken))
         {
             return;
+        }
+
+        // Once the connection is validated, the tool list is known: let the user choose which
+        // tools Copilot may use. Cancelling keeps the previous choice.
+        List<string>? allowedTools = settings.AllowedTools;
+        if (report.Succeeded)
+        {
+            (_, allowedTools) = await ToolPicker.ChooseAsync(shell, serverUrl, report.Tools, allowedTools, cancellationToken);
         }
 
         string? solutionDirectory = await this.GetSolutionDirectoryAsync(cancellationToken);
@@ -118,6 +113,7 @@ internal sealed class ConfigureConnectionCommand : Command
         try
         {
             gateway = await this.services.RestartGatewayAsync(serverUrl, apiKey, cancellationToken);
+            gateway.AllowedTools = ToolSelection.ToSet(allowedTools);
         }
         catch (Exception ex) when (ex is IOException or HttpRequestException or InvalidOperationException)
         {
@@ -138,6 +134,7 @@ internal sealed class ConfigureConnectionCommand : Command
         this.services.Secrets.Write(SecretNames.ApiKey(serverUrl), apiKey);
         settings.ServerUrl = serverUrl;
         settings.McpConfigurationPath = path;
+        settings.AllowedTools = allowedTools;
         this.services.Settings.Save(settings);
 
         await this.services.WriteOutputAsync(
@@ -145,7 +142,8 @@ internal sealed class ConfigureConnectionCommand : Command
             cancellationToken);
         await shell.ShowPromptAsync(
             $"Saved. The local '{settings.McpServerName}' gateway was written to{Environment.NewLine}{path}{Environment.NewLine}{Environment.NewLine}" +
-            "In Copilot Chat, switch to Agent mode, open Tools and enable the d365-fno tools.",
+            "In Copilot Chat, switch to Agent mode, open Tools and enable the d365-fno tools. " +
+            "To change which tools are offered later, use Extensions > D365 F&O MCP > Select Tools...",
             PromptOptions.InformationConfirm,
             cancellationToken);
     }

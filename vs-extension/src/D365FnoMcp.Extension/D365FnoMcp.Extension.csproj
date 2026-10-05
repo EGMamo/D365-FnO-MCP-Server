@@ -14,6 +14,11 @@
     <PackageReference Include="Microsoft.VisualStudio.Extensibility.Build" Version="17.14.40608" />
   </ItemGroup>
   <ItemGroup>
+    <!-- Remote UI loads each control's XAML from an embedded resource named after the control's type. -->
+    <None Remove="UI\ToolSelectionControl.xaml" />
+    <EmbeddedResource Include="UI\ToolSelectionControl.xaml" LogicalName="D365FnoMcp.Extension.UI.ToolSelectionControl.xaml" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\D365FnoMcp.Core\D365FnoMcp.Core.csproj" />
   </ItemGroup>
 </Project>

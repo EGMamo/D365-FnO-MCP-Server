@@ -73,6 +73,26 @@ internal sealed class ExtensionServices : IWorkspaceContextProvider, IAsyncDispo
         }
     }
 
+    /// <summary>Saves the allowed tools and applies them to the running gateway without restarting it.</summary>
+    public async Task SetAllowedToolsAsync(List<string>? allowedTools, CancellationToken cancellationToken)
+    {
+        await this.gatewayLock.WaitAsync(cancellationToken);
+        try
+        {
+            ExtensionSettings settings = this.Settings.Load();
+            settings.AllowedTools = allowedTools;
+            this.Settings.Save(settings);
+            if (this.gateway is not null)
+            {
+                this.gateway.AllowedTools = ToolSelection.ToSet(allowedTools);
+            }
+        }
+        finally
+        {
+            this.gatewayLock.Release();
+        }
+    }
+
     public async Task WriteOutputAsync(string text, CancellationToken cancellationToken)
     {
         await this.outputLock.WaitAsync(cancellationToken);
@@ -150,7 +170,10 @@ internal sealed class ExtensionServices : IWorkspaceContextProvider, IAsyncDispo
     private async Task<McpGateway> StartGatewayAsync(string serverUrl, string apiKey, CancellationToken cancellationToken)
     {
         string? sdkVersion = PackagesDirectoryLocator.SdkVersion(PackagesDirectoryLocator.Detect());
-        var created = new McpGateway(this.GatewayHttp, this);
+        var created = new McpGateway(this.GatewayHttp, this)
+        {
+            AllowedTools = ToolSelection.ToSet(this.Settings.Load().AllowedTools),
+        };
         try
         {
             await created.StartAsync(serverUrl, apiKey, sdkVersion, cancellationToken);

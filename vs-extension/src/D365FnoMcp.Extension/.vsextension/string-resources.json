@@ -1,5 +1,7 @@
 {
   "D365FnoMcp.Menu.DisplayName": "D365 F&O MCP",
   "D365FnoMcp.ConfigureConnection.DisplayName": "Configure Connection...",
+  "D365FnoMcp.SetApiKey.DisplayName": "Set API Key...",
+  "D365FnoMcp.SelectTools.DisplayName": "Select Tools...",
   "D365FnoMcp.TestConnection.DisplayName": "Test Connection"
 }

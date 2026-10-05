@@ -11,7 +11,20 @@ The extension needs Visual Studio 2022 17.14 or later, or Visual Studio 2026.
    [latest release](https://github.com/EGMamo/D365-FnO-MCP-Server/releases/latest). The release
    notes list its SHA-256 checksum.
 2. Close Visual Studio and double-click the file to install it.
-3. Start Visual Studio and open **Extensions > D365 F&O MCP > Configure Connection...**.
+3. Start Visual Studio and open **Extensions > D365 F&O MCP > Configure Connection...**. It asks
+   for the server URL, then in a second box for the API key: your client key from the server's
+   `MCP_API_KEYS` setting (the part after `name=`).
+
+To enter or replace only the key later, use **Extensions > D365 F&O MCP > Set API Key...**. It
+tests the key, stores it in Windows Credential Manager and restarts the local gateway with it.
+
+Once the connection test passes, Configure Connection shows the server's tools with a checkbox
+each, plus the local `workspace_get_context`. Only checked tools are offered to Copilot; the
+gateway also refuses calls to unchecked ones. To change the choice later, use **Extensions > D365
+F&O MCP > Select Tools...**, which re-validates the connection, shows the same list and applies the
+change to the running gateway without a restart. Copilot may keep its earlier tool list until you
+refresh the tools in Copilot Chat. With every tool checked, tools the server adds later are offered
+too; with a partial selection, new tools stay off until you check them.
 
 To update, install a newer release the same way. Builds of unreleased commits are available as the
 `vs-extension-vsix` artifact of each CI run. They keep the version in
@@ -49,13 +62,16 @@ Visual Studio extension gateway
 ```
 
 - The Azure URL and API key are entered through **Extensions > D365 F&O MCP > Configure
-  Connection...**. The API key is stored in Windows Credential Manager.
+  Connection...**; **Set API Key...** changes only the key. The API key is stored in Windows
+  Credential Manager (generic credential `D365FnoMcp:api-key:<server URL>`), never in a settings
+  file. Visual Studio's extension prompts cannot mask input, so the key is visible while typed.
 - The generated `.mcp.json` contains only a loopback URL and an ephemeral bearer token. It never
   contains the Azure URL or Azure key.
 - Other MCP server entries and inputs in the file are preserved.
 - **Test Connection** checks `/health`, performs MCP `initialize`, and lists hosted tools.
 - The gateway forwards hosted tools, resources and prompts and adds
-  `workspace_get_context`.
+  `workspace_get_context`, limited to the tools selected in **Select Tools...** (stored as
+  `AllowedTools` in `%LOCALAPPDATA%\D365FnoMcp\settings.json`; absent means all tools).
 
 ## Workspace context
 
