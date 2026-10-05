@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `costProfile` parameter in `infra/main.bicep` (`standard` or `cheapest`). `cheapest` keeps the
+  same architecture at the lowest cost: P0v3 App Service plan, Standard SSD worker disks, Basic
+  ACR without a private endpoint, and the `/health` availability test from 2 locations every 15
+  minutes. `main.dev.bicepparam` and `azure-deploy.ps1` (`-CostProfile`, defaulting to `cheapest`
+  for environment names starting with `dev`) use it; `apiPlanSku` and `workerDiskType` still
+  override it.
+- `azure-deploy.ps1 -ReplaceIncompatible` converts existing resources a profile change cannot
+  update in place (worker disk type while the VM is deallocated, the registry private endpoint that
+  blocks a Premium to Basic downgrade); without it the script stops before deploying and says so.
+  `-RemoveExistingResources` deletes every resource in the group except the Key Vaults after listing
+  them and asking for the resource group name to be typed.
 - Automated worker preparation: `azure-post-deploy.ps1 -Step PrepareWorker -DataverseUrl <url>
   -WorkerApplicationId <app id>` checks through Run Command that the worker can read its secret,
   sign in to Dataverse, read the Finance and Operations version and resolve the downloads, then

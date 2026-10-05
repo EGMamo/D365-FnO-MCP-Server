@@ -4,6 +4,8 @@ using 'main.bicep'
 
 param environmentName = 'dev'
 param location = 'westeurope'
+// Lowest-cost settings for dev; see costProfile in main.bicep.
+param costProfile = 'cheapest'
 param tags = {
   owner: 'd365-mcp'
 }
