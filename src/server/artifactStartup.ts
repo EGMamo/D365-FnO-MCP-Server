@@ -74,6 +74,43 @@ function filesystemFreeBytes(directory: string): number {
   return Number(stats.bavail) * Number(stats.bsize);
 }
 
+/**
+ * True when a file in `fromDirectory` can be hard-linked into `toDirectory`.
+ * A matching st_dev is not enough: link(2) also refuses to cross mount points
+ * (for example two volumes or bind mounts on one disk), so try it.
+ */
+function canHardLink(fromDirectory: string, toDirectory: string): boolean {
+  const name = `.link-probe-${process.pid}-${Date.now()}`;
+  const probe = path.join(fromDirectory, name);
+  const linked = path.join(toDirectory, name);
+  try {
+    fs.writeFileSync(probe, '', { flag: 'wx', mode: 0o600 });
+    fs.linkSync(probe, linked);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    fs.rmSync(linked, { force: true });
+    fs.rmSync(probe, { force: true });
+  }
+}
+
+function assertFreeSpace(
+  manifest: ArtifactManifest,
+  directory: string,
+  bytes: number,
+  freeBytes: (directory: string) => number
+): void {
+  const available = freeBytes(directory);
+  const needed = bytes + FREE_SPACE_MARGIN_BYTES;
+  if (available < needed) {
+    throw new Error(
+      `Insufficient local disk for artifact ${manifest.bundleId}: ${directory} has ` +
+        `${available} free bytes; ${needed} are required.`
+    );
+  }
+}
+
 function assertCapacity(
   manifest: ArtifactManifest,
   bundlesRoot: string,
@@ -81,23 +118,19 @@ function assertCapacity(
   freeBytes: (directory: string) => number
 ): void {
   const bundleBytes = manifest.index.bytes + manifest.validationReport.bytes;
-  const sameFilesystem = fs.statSync(bundlesRoot).dev === fs.statSync(indexDirectory).dev;
-  const requirements = sameFilesystem
-    ? [{ directory: bundlesRoot, bytes: bundleBytes + manifest.index.bytes }]
-    : [
-        { directory: bundlesRoot, bytes: bundleBytes },
-        { directory: indexDirectory, bytes: manifest.index.bytes },
-      ];
-  for (const requirement of requirements) {
-    const available = freeBytes(requirement.directory);
-    const needed = requirement.bytes + FREE_SPACE_MARGIN_BYTES;
-    if (available < needed) {
-      throw new Error(
-        `Insufficient local disk for artifact ${manifest.bundleId}: ${requirement.directory} has ` +
-          `${available} free bytes; ${needed} are required.`
-      );
-    }
+  // When activation can hard-link the database, the bundle and the active index
+  // share a single copy (App Service slots share a small host disk).
+  if (canHardLink(bundlesRoot, indexDirectory)) {
+    assertFreeSpace(manifest, bundlesRoot, bundleBytes, freeBytes);
+    return;
   }
+  const sameFilesystem = fs.statSync(bundlesRoot).dev === fs.statSync(indexDirectory).dev;
+  if (sameFilesystem) {
+    assertFreeSpace(manifest, bundlesRoot, bundleBytes + manifest.index.bytes, freeBytes);
+    return;
+  }
+  assertFreeSpace(manifest, bundlesRoot, bundleBytes, freeBytes);
+  assertFreeSpace(manifest, indexDirectory, manifest.index.bytes, freeBytes);
 }
 
 /** Removes interrupted downloads and every cached bundle other than `keepBundleId`. */
@@ -105,8 +138,8 @@ function pruneLocalBundles(bundlesRoot: string, keepBundleId: string | null): vo
   const keep = keepBundleId?.slice('sha256:'.length);
   for (const entry of fs.readdirSync(bundlesRoot, { withFileTypes: true })) {
     if (entry.name === keep) continue;
-    // Touch only what this store writes: bundle directories and download staging.
-    if (!/^[a-f0-9]{64}$/.test(entry.name) && !entry.name.startsWith('.downloading-')) continue;
+    // Touch only what this store writes: bundle directories, download staging and link probes.
+    if (!/^[a-f0-9]{64}$/.test(entry.name) && !/^\.(downloading|link-probe)-/.test(entry.name)) continue;
     fs.rmSync(path.join(bundlesRoot, entry.name), { recursive: true, force: true });
   }
 }
@@ -117,7 +150,8 @@ function pruneLocalBundles(bundlesRoot: string, keepBundleId: string | null): vo
  * download the pinned immutable bundle into a staging directory on local disk,
  * validate manifest, hashes, compatibility, provenance and SQLite integrity,
  * atomically publish the local bundle directory, then activate its database
- * into `indexDbPath`. Callers open the index and report ready only afterwards.
+ * into `indexDbPath` as a hard link (a copy when the filesystem cannot link).
+ * Callers open the index read-only and report ready only afterwards.
  */
 export async function materializeAzureArtifactIndex(
   options: AzureArtifactStartupOptions
@@ -147,17 +181,23 @@ export async function materializeAzureArtifactIndex(
     }
   }
   const reusedLocalBundle = bundle !== null;
+  const freeBytes = options.freeBytes ?? filesystemFreeBytes;
   if (!bundle) {
     bundle = await options.store.materializeBundle(active.bundleId, {
       localStoreRoot: localRoot,
       policy,
-      beforeDownload: (manifest) =>
-        assertCapacity(manifest, bundlesRoot, indexDirectory, options.freeBytes ?? filesystemFreeBytes),
+      beforeDownload: (manifest) => assertCapacity(manifest, bundlesRoot, indexDirectory, freeBytes),
     });
   }
 
   writePinnedArtifactPointers(localRoot, snapshot.pointers);
-  activateValidatedArtifactBundle(bundle, options.indexDbPath);
+  // This process owns the local bundle and serves the index read-only, so link instead of copying.
+  // A reused bundle skipped the capacity check, so a fallback copy checks its own room.
+  const validated = bundle;
+  activateValidatedArtifactBundle(validated, options.indexDbPath, {
+    link: true,
+    beforeCopy: () => assertFreeSpace(validated.manifest, indexDirectory, validated.manifest.index.bytes, freeBytes),
+  });
   return {
     bundle,
     pointerRevision: snapshot.pointers.revision,

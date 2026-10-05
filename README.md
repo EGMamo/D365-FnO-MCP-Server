@@ -154,8 +154,11 @@ With `D365_ARTIFACT_SOURCE=azure-blob`, every API replica materializes the activ
 
 Any failure logs `Artifact startup failed; refusing to serve` and exits with code 1, so the platform
 restarts the replica. `D365_ARTIFACT_STORE_PATH` and `D365_INDEX_DB_PATH` must be on instance-local
-disk (for App Service, not the `/home` share) with room for the bundle plus one database copy.
-A promotion takes effect when a replica restarts; for App Service, warm a staging slot against
+disk (for App Service, not the `/home` share) with room for the bundle. When the two paths can
+be hard-linked (one mount) the active database is a link to the bundle's file, so the replica holds
+a single copy; otherwise it is copied and needs room for a second one.
+A promotion takes effect when a replica restarts; for App Service, warm a staging slot running the
+same image against
 `/health` (`WEBSITE_SWAP_WARMUP_PING_PATH=/health`, `WEBSITE_SWAP_WARMUP_PING_STATUSES=200`) and
 swap, and roll back by promoting the previous pointer and restarting.
 

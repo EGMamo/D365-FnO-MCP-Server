@@ -241,6 +241,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   fs.rmSync(root, { recursive: true, force: true });
 });
 
@@ -473,6 +474,25 @@ describe('Azure startup materialization', () => {
     return spy.mock.calls.map(([name]) => String(name)).filter((name) => name.endsWith('d365_index.db'));
   }
 
+  /** The active index is the bundle's own file, and activation left no candidate behind. */
+  function expectSingleLinkedCopy(prepared: Awaited<ReturnType<typeof startup>>) {
+    const bundled = fs.statSync(path.join(prepared.bundle.directory, 'd365_index.db'));
+    const active = fs.statSync(indexDbPath);
+    expect(active.ino).toBe(bundled.ino);
+    expect(active.dev).toBe(bundled.dev);
+    expect(active.nlink).toBe(2);
+    expect(fs.readdirSync(path.dirname(indexDbPath))).toEqual(['d365_index.db']);
+  }
+
+  function readFixtureName(): string {
+    const database = openDbReadOnly(indexDbPath);
+    try {
+      return (database.prepare('SELECT name FROM ax_objects').get() as { name: string }).name;
+    } finally {
+      database.close();
+    }
+  }
+
   it('downloads, validates and activates the pinned active bundle on instance-local disk', async () => {
     const bundle = createBundle(FIRST_TIME);
     await publishAndPromote(bundle);
@@ -489,13 +509,8 @@ describe('Azure startup materialization', () => {
     expect(fs.readdirSync(path.join(localStore, 'bundles'))).toEqual([
       bundle.manifest.bundleId.slice('sha256:'.length),
     ]);
-    const database = openDbReadOnly(indexDbPath);
-    try {
-      const row = database.prepare('SELECT name FROM ax_objects').get() as { name: string };
-      expect(row.name).toBe('AzureBlobFixture');
-    } finally {
-      database.close();
-    }
+    expectSingleLinkedCopy(prepared);
+    expect(readFixtureName()).toBe('AzureBlobFixture');
   });
 
   it('reuses a validated local copy and prunes superseded bundles and interrupted downloads', async () => {
@@ -508,6 +523,7 @@ describe('Azure startup materialization', () => {
       await writer.promote(second.manifest.bundleId, 1, policy, SECOND_TIME);
     });
     fs.mkdirSync(path.join(localStore, 'bundles', '.downloading-crashed'));
+    fs.writeFileSync(path.join(localStore, 'bundles', '.link-probe-1-1'), '');
 
     const getBlob = vi.spyOn(container, 'getBlob');
     const upgraded = await startup();
@@ -522,6 +538,9 @@ describe('Azure startup materialization', () => {
     const restarted = await startup();
     expect(restarted.reusedLocalBundle).toBe(true);
     expect(downloadedBlobs(getBlob)).toHaveLength(0);
+    // Re-activating a file over a link to itself keeps one copy and leaves no candidate.
+    expectSingleLinkedCopy(restarted);
+    expect(readFixtureName()).toBe('AzureBlobFixture');
   });
 
   it('replaces a corrupt local copy with a fresh download', async () => {
@@ -533,6 +552,43 @@ describe('Azure startup materialization', () => {
     const again = await startup();
     expect(again.reusedLocalBundle).toBe(false);
     expect(again.bundle.manifest.bundleId).toBe(bundle.manifest.bundleId);
+    expectSingleLinkedCopy(again);
+    expect(readFixtureName()).toBe('AzureBlobFixture');
+  });
+
+  it('copies and re-verifies the database when the filesystem cannot hard-link it', async () => {
+    const bundle = createBundle(FIRST_TIME);
+    await publishAndPromote(bundle);
+    const link = vi.spyOn(fs, 'linkSync').mockImplementation(() => {
+      throw Object.assign(new Error('EXDEV: cross-device link not permitted'), { code: 'EXDEV' });
+    });
+
+    const prepared = await startup();
+
+    // The capacity probe and the activation both try to link.
+    expect(link).toHaveBeenCalledTimes(2);
+    const bundled = path.join(prepared.bundle.directory, 'd365_index.db');
+    expect(fs.statSync(indexDbPath).ino).not.toBe(fs.statSync(bundled).ino);
+    expect(fs.readFileSync(indexDbPath).equals(fs.readFileSync(bundled))).toBe(true);
+    expect(fs.readdirSync(path.dirname(indexDbPath))).toEqual(['d365_index.db']);
+    expect(readFixtureName()).toBe('AzureBlobFixture');
+  });
+
+  it('fails closed on an unexpected hard-link error without activating anything', async () => {
+    const bundle = createBundle(FIRST_TIME);
+    await publishAndPromote(bundle);
+    const realLink = fs.linkSync.bind(fs);
+    vi.spyOn(fs, 'linkSync')
+      .mockImplementationOnce((from, to) => realLink(from, to))
+      .mockImplementationOnce(() => {
+        throw Object.assign(new Error('EIO: i/o error, link'), { code: 'EIO' });
+      });
+
+    await expect(startup()).rejects.toThrow(/EIO/);
+    expect(fs.readdirSync(path.dirname(indexDbPath))).toEqual([]);
+    expect(fs.readdirSync(path.join(localStore, 'bundles'))).toEqual([
+      bundle.manifest.bundleId.slice('sha256:'.length),
+    ]);
   });
 
   it('fails closed when the remote store has no active bundle', async () => {
@@ -559,5 +615,40 @@ describe('Azure startup materialization', () => {
     await expect(startup(() => bundle.manifest.index.bytes)).rejects.toThrow(/Insufficient local disk/);
     expect(downloadedBlobs(getBlob)).toHaveLength(0);
     expect(fs.existsSync(indexDbPath)).toBe(false);
+  });
+
+  it('needs room for one database copy when the bundle and the index share a filesystem', async () => {
+    const bundle = createBundle(FIRST_TIME);
+    await publishAndPromote(bundle);
+    const margin = 256 * 1024 * 1024;
+    const oneCopy = bundle.manifest.index.bytes + bundle.manifest.validationReport.bytes + margin;
+
+    await expect(startup(() => oneCopy - 1)).rejects.toThrow(/Insufficient local disk/);
+    const prepared = await startup(() => oneCopy);
+    expectSingleLinkedCopy(prepared);
+  });
+
+  it('needs room for a second copy when the paths cannot be hard-linked, also when reusing a bundle', async () => {
+    const bundle = createBundle(FIRST_TIME);
+    await publishAndPromote(bundle);
+    const margin = 256 * 1024 * 1024;
+    const oneCopy = bundle.manifest.index.bytes + bundle.manifest.validationReport.bytes + margin;
+    // Same st_dev but link(2) refuses, as across two mounts of one disk.
+    vi.spyOn(fs, 'linkSync').mockImplementation(() => {
+      throw Object.assign(new Error('EXDEV: cross-device link not permitted'), { code: 'EXDEV' });
+    });
+    const getBlob = vi.spyOn(container, 'getBlob');
+
+    await expect(startup(() => oneCopy)).rejects.toThrow(/Insufficient local disk/);
+    expect(downloadedBlobs(getBlob)).toHaveLength(0);
+    await startup(() => oneCopy + bundle.manifest.index.bytes);
+
+    // A restart reuses the local bundle without downloading, and the copy still checks its room.
+    const reused = startup(() => bundle.manifest.index.bytes + margin - 1);
+    await expect(reused).rejects.toThrow(/Insufficient local disk/);
+    expect(fs.readdirSync(path.dirname(indexDbPath))).toEqual(['d365_index.db']);
+    expect(fs.readdirSync(path.join(localStore, 'bundles'))).toEqual([
+      bundle.manifest.bundleId.slice('sha256:'.length),
+    ]);
   });
 });

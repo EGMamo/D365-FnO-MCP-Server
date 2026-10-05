@@ -364,27 +364,66 @@ export function stageAndActivateArtifactBundle(
   return activateValidatedArtifactBundle(validateArtifactBundle(directory, policy), targetDatabase);
 }
 
+export interface ActivateArtifactBundleOptions {
+  /**
+   * Hard-link the bundle's database into place instead of copying it, so the
+   * bundle and the active index share one file on disk. Only for bundles that
+   * nothing ever writes to: SQLite names its journal after the path it opened,
+   * so a writer through one link would hide its journal from readers of the
+   * other. Falls back to a verified copy when the filesystem cannot link.
+   */
+  link?: boolean;
+  /** Runs before the database is copied (never before a link), e.g. to check free space. */
+  beforeCopy?: () => void;
+}
+
+/** Link errors that mean this filesystem or file cannot be hard-linked, so a copy is needed. */
+const LINK_UNSUPPORTED_CODES = new Set(['EXDEV', 'EPERM', 'ENOTSUP', 'EOPNOTSUPP', 'EMLINK', 'ENOSYS']);
+
+function tryHardLink(source: string, destination: string): boolean {
+  try {
+    fs.linkSync(source, destination);
+    return true;
+  } catch (error) {
+    if (LINK_UNSUPPORTED_CODES.has((error as NodeJS.ErrnoException).code ?? '')) return false;
+    throw error;
+  }
+}
+
 /**
- * Copies an already validated bundle's database next to `targetDatabase`,
- * re-verifies the copy and atomically activates it.
+ * Places an already validated bundle's database next to `targetDatabase`,
+ * by hard link when `options.link` allows it or else by a re-verified copy,
+ * and atomically activates it.
  */
 export function activateValidatedArtifactBundle(
   validated: ValidatedArtifactBundle,
-  targetDatabase: string
+  targetDatabase: string,
+  options: ActivateArtifactBundleOptions = {}
 ): ValidatedArtifactBundle {
   const target = path.resolve(targetDatabase);
   fs.mkdirSync(path.dirname(target), { recursive: true });
+  const source = path.join(validated.directory, ARTIFACT_DATABASE_FILE);
   const candidate = path.join(
     path.dirname(target),
     `.${path.basename(target)}.${process.pid}.${Date.now()}.candidate`
   );
   try {
-    fs.copyFileSync(path.join(validated.directory, ARTIFACT_DATABASE_FILE), candidate, fs.constants.COPYFILE_EXCL);
-    if (sha256File(candidate) !== validated.manifest.index.sha256) {
-      throw new Error('Staged artifact database SHA-256 changed during local copy.');
+    if (options.link && tryHardLink(source, candidate)) {
+      // A link shares the bytes validation just hashed, so the multi-GB re-hash is skipped;
+      // the size check is a cheap guard against the bundle file being rewritten since.
+      if (fs.statSync(candidate).size !== validated.manifest.index.bytes) {
+        throw new Error('Artifact database size changed after validation.');
+      }
+    } else {
+      options.beforeCopy?.();
+      fs.copyFileSync(source, candidate, fs.constants.COPYFILE_EXCL);
+      if (sha256File(candidate) !== validated.manifest.index.sha256) {
+        throw new Error('Staged artifact database SHA-256 changed during local copy.');
+      }
     }
     activateIndexFile(candidate, target);
   } finally {
+    // Also covers rename() leaving the candidate in place when it is already a link to the target.
     fs.rmSync(candidate, { force: true });
   }
   return validated;

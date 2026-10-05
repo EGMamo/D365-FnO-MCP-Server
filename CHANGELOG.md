@@ -248,6 +248,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The hosted API could not fit a full-size index on App Service: each running slot kept the
+  downloaded bundle and a copy of its database (about 12 GB for the 5.9 GB index), and the
+  production and staging slots share each instance's 15 GB host disk. Startup from Azure Blob now
+  hard-links the database into `D365_INDEX_DB_PATH` and its free-space check asks for one copy; when
+  a test link between the two paths fails (separate mounts) it copies as before, and a copy now
+  checks its own room even when a local bundle is reused. The Deploy workflow starts `staging` if
+  it is stopped and stops it at the end while production is healthy, so only production holds a
+  copy between deployments. `infra/README.md` has the new manual rollback steps.
 - `prepare-bundle` crashed with exit code 134 (JavaScript heap out of memory) on a full X++ SDK:
   the index pass's cleanup loaded every label row in every language into memory to find stale
   ones. SQLite now finds and deletes stale objects and labels itself, so memory no longer grows

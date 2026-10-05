@@ -77,9 +77,10 @@ Before a bundle can be promoted or consumed:
    versions against the manifest.
 
 The hosted API must not open SQLite directly from Blob Storage or a shared network filesystem. Each
-replica validates the selected immutable bundle, copies `d365_index.db` to a sibling candidate on
-local ephemeral/persistent disk, verifies the copied hash, closes its old handle, and atomically
-renames the candidate into the configured active path. It then reopens that local file read-only.
+replica validates the selected immutable bundle, places `d365_index.db` in a sibling candidate on
+local ephemeral/persistent disk (a hard link to the validated file, or a copy whose hash is
+verified when the paths cannot be linked), closes its old handle, and atomically renames the
+candidate into the configured active path. It then reopens that local file read-only.
 Existing requests may finish against the prior read-only handle.
 
 Missing, rejected, partial, corrupt, incompatible or capability-deficient bundles fail closed and
