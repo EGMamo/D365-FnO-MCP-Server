@@ -77,13 +77,51 @@ protection reserves vault names for 90 days) before deploying. It lists them and
 resource group name, even with `-Yes`; storage bundles, registry images and the worker disks are
 lost, so run `azure-post-deploy.ps1`, the Deploy workflow and a first acquisition again afterwards.
 
+## Pausing an environment
+
+`scripts/azure-pause.ps1 -ResourceGroup <group>` cuts an idle environment to a few dollars a month
+while keeping what a resume needs. It deletes the App Service app and plan, the worker VM with its
+NIC and disks, the NAT gateway and its public IP, the private endpoints, the availability test, the
+alert rules and every GitHub federated credential on the deploy identity. It keeps the storage
+account (the artifact bundles the API loads), the Key Vaults, the managed identities with their
+role assignments, the registry
+and its images, Log Analytics and Application Insights, the VNet, NSGs and private DNS zones, and
+the scheduler Logic App (disabled). Only resources tagged with the deployment's `workload` and
+`environment` are deleted; names come from the newest successful deployment.
+
+Run it with `-WhatIfOnly` first to see the list. It stops while the worker VM is running, records
+the API image and scheduler state as `d365mcp-paused-*` tags on the resource group, then asks you
+to type the group name. What stays billed is mostly storage by GB and the registry (Basic about $5
+a month, Premium about $50, so move to `cheapest` first if it is still Premium).
+
+To resume, run `azure-deploy.ps1` with the same resource group and environment name. It recreates
+the deleted resources, deploys the image recorded at pause time and removes the tags; the API pulls
+the active bundle from storage when it starts, so no acquisition run is needed. The GitHub
+`production` environment's values stay valid because the identities were kept, but the Deploy
+workflow can sign in only after `azure-github-trust.ps1` (below) runs again. The new worker VM
+starts empty, so run `azure-post-deploy.ps1 -Step SetupWorker,PrepareWorker` before the next
+acquisition and `-Step ResumeScheduler` if scheduled runs were on.
+
+## GitHub trust
+
+The template names no GitHub owner or repository. `scripts/azure-github-trust.ps1 -ResourceGroup
+<group>` adds the one federated credential the Deploy workflow needs, `github-production` on the
+deploy identity, for the repository of the clone's `origin` remote (or `-Repository owner/name`).
+It looks up the owner and repository IDs on GitHub and uses the ID-based subject
+`repo:<owner>@<owner-id>/<name>@<repo-id>:environment:production`, which GitHub sends for
+repositories created, renamed or transferred after 15 July 2026; `-SubjectFormat Name` uses
+`repo:<owner>/<name>:environment:production` for older ones. It deletes any other GitHub credential
+on the identity, so one repository is trusted at a time. `-Remove` deletes them all.
+`azure-post-deploy.ps1 -Step GitHub` runs it before it configures the environment. After moving
+the repository, run it again from a clone of the new location: the owner ID changes.
+
 ## What it creates
 
 | Module | Resources |
 | --- | --- |
 | `monitoring` | Log Analytics workspace, workspace-based Application Insights (local auth off), action group |
 | `network` | VNet with app-integration, private-endpoint and worker subnets; NAT gateway for egress; deny-all inbound NSGs; private DNS zones for Blob, Key Vault and ACR |
-| `identities` | User-assigned identities for the API, the worker and the GitHub deploy workflow (OIDC federated credential, no secret) |
+| `identities` | User-assigned identities for the API, the worker and the GitHub deploy workflow. The deploy identity has no federated credential until `scripts/azure-github-trust.ps1` adds one |
 | `storage` | StorageV2 account with Shared Key and public blob access disabled; `d365-artifacts`, `d365-sources` and `d365-operations` containers; versioning and soft delete; lifecycle rules that never touch bundles |
 | `keyVault` (x2) | One RBAC vault for API secrets and one for worker secrets, purge protection on. Separate vaults keep the internet-facing API's identity away from the worker's Power Platform credential; vaults have no fixed cost |
 | `registry` | ACR with admin user and anonymous pull disabled (Premium with a private endpoint when private networking is on, except in the `cheapest` profile) |
@@ -249,8 +287,8 @@ Every VM step goes through Run Command, so the worker needs no RDP, Bastion or i
    with the destination from the deployment outputs (`PrepareWorker`).
 4. Publish, promote and verify a first bundle (`FirstAcquisition`); until then the API fails
    closed. Then re-enable the scheduler.
-5. Configure the GitHub `production` environment with the outputs listed in `deploy.yml` and run
-   the Deploy workflow.
+5. Let the repository's `production` jobs sign in as the deploy identity, configure that
+   environment with the outputs listed in `deploy.yml` (`GitHub`) and run the Deploy workflow.
 
 Two things only you can do, before `PrepareWorker`:
 

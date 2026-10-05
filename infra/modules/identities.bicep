@@ -1,16 +1,13 @@
 // Separate user-assigned identities for the read-only API, the acquisition
 // worker and the GitHub deployment workflow. Role assignments live next to the
 // resources they grant access to so each one is scoped as narrowly as possible.
+// The deploy identity trusts no repository here: scripts/azure-github-trust.ps1
+// adds the GitHub federated credential on demand, so nothing in the template
+// names a GitHub owner or repository.
 
 param location string
 param tags object
 param namePrefix string
-
-@description('GitHub repository (owner/name) whose deployment workflow may federate with the deploy identity.')
-param githubRepository string
-
-@description('GitHub environment the deployment workflow runs in.')
-param githubEnvironment string
 
 resource apiIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
   name: 'id-api-${namePrefix}'
@@ -28,18 +25,6 @@ resource deployIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-0
   name: 'id-deploy-${namePrefix}'
   location: location
   tags: tags
-}
-
-// GitHub Actions OIDC: only jobs in the named environment of this repository
-// can exchange their token for the deploy identity. No client secret exists.
-resource githubFederation 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-01-31' = {
-  parent: deployIdentity
-  name: 'github-${githubEnvironment}'
-  properties: {
-    issuer: 'https://token.actions.githubusercontent.com'
-    subject: 'repo:${githubRepository}:environment:${githubEnvironment}'
-    audiences: ['api://AzureADTokenExchange']
-  }
 }
 
 output apiIdentityId string = apiIdentity.id
