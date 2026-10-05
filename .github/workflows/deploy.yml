@@ -121,10 +121,15 @@ jobs:
       # The last step stops the staging slot between deployments, so start it if it is stopped.
       - name: Start the new image in the staging slot
         id: staging
+        env:
+          IMAGE: ${{ steps.acr.outputs.server }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}
         run: |
-          az webapp config container set \
-            --resource-group "${{ vars.RESOURCE_GROUP }}" --name "${{ vars.WEBAPP_NAME }}" --slot "$SLOT" \
-            --container-image-name "${{ steps.acr.outputs.server }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}"
+          # Patch the slot's own site config. `az webapp config container set --slot` and
+          # `az webapp config set --slot --linux-fx-version` also rewrite production's app settings
+          # (WEBSITES_ENABLE_APP_SERVICE_STORAGE), and an app-settings write restarts production.
+          BODY="$(jq -cn --arg fx "DOCKER|$IMAGE" '{properties: {linuxFxVersion: $fx}}')"
+          az rest --method patch --output none --body "$BODY" \
+            --url "/subscriptions/{subscriptionId}/resourceGroups/${{ vars.RESOURCE_GROUP }}/providers/Microsoft.Web/sites/${{ vars.WEBAPP_NAME }}/slots/$SLOT/config/web?api-version=2023-12-01"
           STATE="$(az webapp show --resource-group "${{ vars.RESOURCE_GROUP }}" --name "${{ vars.WEBAPP_NAME }}" --slot "$SLOT" --query state -o tsv)"
           if [ "$STATE" = "Running" ]; then
             az webapp restart --resource-group "${{ vars.RESOURCE_GROUP }}" --name "${{ vars.WEBAPP_NAME }}" --slot "$SLOT"

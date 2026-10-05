@@ -252,6 +252,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and failed to build it, because the deploy identity can push images but cannot read the registry
   resource that `az acr show` asks for. It now takes the login server from `az acr login
   --expose-token` and stops if it is still empty.
+- The Deploy workflow would have restarted production while setting the new image on the staging
+  slot: `az webapp config container set --slot staging` also rewrites production's app settings, so
+  production would download its bundle again and answer 503 during the deployment. The workflow now
+  patches the staging slot's site config directly, and the image rollback steps in
+  `infra/README.md` do the same.
 - The hosted API could not fit a full-size index on App Service: each running slot kept the
   downloaded bundle and a copy of its database (about 12 GB for the 5.9 GB index), and the
   production and staging slots share each instance's 15 GB host disk. Startup from Azure Blob now

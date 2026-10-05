@@ -181,8 +181,11 @@ Rollback paths:
 - **Image:** after a successful deployment the stopped `staging` slot holds the previous image;
   after a failed one it holds the candidate that failed. Check with `az webapp config show --slot
   staging --query linuxFxVersion`, and if needed point it at a known-good tag (deployments tag
-  images with the commit SHA) with `az webapp config container set --slot staging
-  --container-image-name <registry>/d365-fno-mcp-server:<tag>`. Then start it (`az webapp start
+  images with the commit SHA) with `az rest --method patch --url
+  "/subscriptions/{subscriptionId}/resourceGroups/<resource-group>/providers/Microsoft.Web/sites/<web-app>/slots/staging/config/web?api-version=2023-12-01"
+  --body '{"properties":{"linuxFxVersion":"DOCKER|<registry>/d365-fno-mcp-server:<tag>"}}'`, as the
+  Deploy workflow does. Avoid `az webapp config container set --slot staging`: it also rewrites
+  production's app settings, which restarts production. Then start `staging` (`az webapp start
   --slot staging`), wait until its `/health` answers 200, swap, and stop `staging` again.
 - **Index:** run `node F:\worker\app\dist\src\index.js artifact rollback --expected-revision <n>`
   on the worker VM through Run Command (`az vm start`, then `az vm run-command invoke
