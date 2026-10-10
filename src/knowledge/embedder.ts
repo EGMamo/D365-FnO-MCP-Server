@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { Worker } from 'node:worker_threads';
 
 /**
  * Local sentence embeddings for the knowledge filter and the digest duplicate check.
@@ -18,6 +19,8 @@ export interface Embedder {
   readonly model: string;
   /** Unit-length vectors, so a dot product is the cosine similarity. */
   embed(text: string): Promise<Float32Array>;
+  /** Releases a worker-backed embedder's thread; in-process embedders have nothing to release. */
+  close?(): Promise<void>;
 }
 
 function hasModelFiles(dir: string): boolean {
@@ -92,6 +95,74 @@ export async function loadEmbedder(dir: string): Promise<Embedder> {
       norm = Math.sqrt(norm) || 1;
       for (let i = 0; i < width; i++) vector[i] /= norm;
       return vector;
+    },
+  };
+}
+
+/**
+ * Loads the model in a worker thread and returns an embedder that sends each request there, so a
+ * tool call's embedding never blocks other sessions on the event loop. Rejects when the worker
+ * cannot start (for example when this module runs from TypeScript source without a loader);
+ * callers can then fall back to `loadEmbedder`.
+ */
+export async function loadWorkerEmbedder(dir: string): Promise<Embedder> {
+  const extension = path.extname(fileURLToPath(import.meta.url));
+  const worker = new Worker(new URL(`./embedderWorker${extension}`, import.meta.url), { workerData: { dir } });
+  const pending = new Map<number, { resolve(vector: Float32Array): void; reject(error: Error): void }>();
+  let nextId = 0;
+  let failure: Error | null = null;
+
+  // Hold the process open only while requests are in flight.
+  const settle = (id: number) => {
+    const entry = pending.get(id);
+    pending.delete(id);
+    if (pending.size === 0) worker.unref();
+    return entry;
+  };
+  const fail = (error: Error) => {
+    failure ??= error;
+    for (const id of [...pending.keys()]) settle(id)?.reject(failure);
+  };
+
+  await new Promise<void>((resolve, reject) => {
+    const onError = (error: Error) => reject(error);
+    const onExit = (code: number) => reject(new Error(`Embedding worker exited during startup (code ${code})`));
+    worker.once('error', onError);
+    worker.once('exit', onExit);
+    worker.once('message', (message: { ready: boolean; error?: string }) => {
+      worker.off('error', onError);
+      worker.off('exit', onExit);
+      if (message.ready) resolve();
+      else reject(new Error(message.error ?? 'Embedding worker failed to load the model'));
+    });
+  }).catch(async (error: unknown) => {
+    await worker.terminate();
+    throw error;
+  });
+
+  worker.unref();
+  worker.on('message', (message: { id: number; vector?: Float32Array; error?: string }) => {
+    const entry = settle(message.id);
+    if (!entry) return;
+    if (message.vector) entry.resolve(message.vector);
+    else entry.reject(new Error(message.error ?? 'Embedding failed'));
+  });
+  worker.on('error', fail);
+  worker.on('exit', (code) => fail(new Error(`Embedding worker exited (code ${code})`)));
+
+  return {
+    model: EMBEDDING_MODEL_NAME,
+    embed(text: string): Promise<Float32Array> {
+      if (failure) return Promise.reject(failure);
+      const id = nextId++;
+      return new Promise((resolve, reject) => {
+        pending.set(id, { resolve, reject });
+        worker.ref();
+        worker.postMessage({ id, text });
+      });
+    },
+    async close(): Promise<void> {
+      await worker.terminate();
     },
   };
 }

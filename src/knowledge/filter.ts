@@ -1,6 +1,6 @@
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { logger } from '../utils/logger.js';
-import { findEmbeddingModelDir, loadEmbedder, type Embedder } from './embedder.js';
+import { findEmbeddingModelDir, loadEmbedder, loadWorkerEmbedder, type Embedder } from './embedder.js';
 import { buildTopicVectors, PassageCache, passageCachePath, scoreQuery, type TopicVectors } from './semantic.js';
 import { globMatches, loadTopics, rowMatches, type KnowledgeTopic } from './topics.js';
 
@@ -292,8 +292,8 @@ export class KnowledgeFilter {
 
     if (section.notes.length === 0 && !section.filtered && !section.reordered) return result;
     const content = [...result.content];
-    if (changed) content[index] = { ...first, text: JSON.stringify(payload, null, 2) };
-    content.push({ type: 'text', text: JSON.stringify({ knowledge: section }, null, 2) });
+    if (changed) content[index] = { ...first, text: JSON.stringify(payload) };
+    content.push({ type: 'text', text: JSON.stringify({ knowledge: section }) });
     return { ...result, content };
   }
 
@@ -351,7 +351,12 @@ export function startKnowledgeFilter(kbDir: string | null): { current(): Knowled
         return;
       }
       const started = Date.now();
-      const embedder = await loadEmbedder(modelDir);
+      const embedder = await loadWorkerEmbedder(modelDir).catch((error: unknown) => {
+        logger.warn('Embedding worker unavailable; running embeddings on the main thread', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return loadEmbedder(modelDir);
+      });
       filter = await KnowledgeFilter.create(kbDir, { embedder, cache: new PassageCache(passageCachePath(modelDir)) });
       logger.info('Knowledge filter ready with embeddings', {
         topics: filter.topicCount,

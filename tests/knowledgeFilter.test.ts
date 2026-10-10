@@ -166,6 +166,21 @@ describe('task guidance', () => {
 const modelDir = findEmbeddingModelDir();
 
 describe.skipIf(!modelDir)('knowledge embeddings (needs npm run fetch-model)', () => {
+  it('embeds in a worker thread with the same vectors as in-process', async () => {
+    // The worker script is the compiled one, so this goes through the build (tests/mcpIntegration builds dist/).
+    const builtUrl = new URL('../dist/src/knowledge/embedder.js', import.meta.url).href;
+    const built = (await import(builtUrl)) as typeof import('../src/knowledge/embedder.js');
+    const worker = await built.loadWorkerEmbedder(modelDir!);
+    try {
+      const inProcess = await loadEmbedder(modelDir!);
+      const [a, b] = await Promise.all([worker.embed('ttsbegin and ttscommit'), worker.embed('color groups')]);
+      expect(Array.from(a)).toEqual(Array.from(await inProcess.embed('ttsbegin and ttscommit')));
+      expect(Array.from(b)).toEqual(Array.from(await inProcess.embed('color groups')));
+    } finally {
+      await worker.close?.();
+    }
+  }, 60_000);
+
   it('adds a note by meaning when no rule matches', async () => {
     const kbDir = fs.mkdtempSync(path.join(os.tmpdir(), 'd365-kb-semantic-'));
     try {

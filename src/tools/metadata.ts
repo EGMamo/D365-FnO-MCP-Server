@@ -61,7 +61,7 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
     'get_usage_snapshot_status',
     'Inspect compiler usage import provenance and completeness. Check this before interpreting empty find_usages results as no usages. Static references are not runtime execution counts.',
     {},
-    async () => ({ content: [{ type: 'text' as const, text: JSON.stringify(getUsageSnapshotStatus(db), null, 2) }] })
+    async () => ({ content: [{ type: 'text' as const, text: JSON.stringify(getUsageSnapshotStatus(db)) }] })
   );
   server.tool(
     'search_symbols',
@@ -96,9 +96,9 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
         const explained = explainSearchHits(query, results as { name: string; type: string; package: string; id: number }[]).map(
           ({ hit, match, explanation }) => ({ ...hit, match, explanation })
         );
-        return { content: [{ type: 'text', text: JSON.stringify(explained, null, 2) }] };
+        return { content: [{ type: 'text', text: JSON.stringify(explained) }] };
       }
-      return { content: [{ type: 'text', text: JSON.stringify(results, null, 2) }] };
+      return { content: [{ type: 'text', text: JSON.stringify(results) }] };
     }
   );
 
@@ -110,7 +110,7 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
       const obj = dbUtils.getObjectByName(db, tableName, 'Table');
       if (!obj) return { content: [{ type: 'text', text: dbUtils.notFoundMessage(db, 'Table', tableName, 'Table') }] };
       const xrefs = dbUtils.getXrefsTo(db, obj.name, 'Table', xrefLimit);
-      return { content: [{ type: 'text', text: JSON.stringify(capLists({ ...obj, xrefs }, ['fields', 'methods', 'xrefs'], maxItems), null, 2) }] };
+      return { content: [{ type: 'text', text: JSON.stringify(capLists({ ...obj, xrefs }, ['fields', 'methods', 'xrefs'], maxItems)) }] };
     }
   );
 
@@ -122,7 +122,7 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
       const obj = dbUtils.getObjectByName(db, className, 'Class');
       if (!obj) return { content: [{ type: 'text', text: dbUtils.notFoundMessage(db, 'Class', className, 'Class') }] };
       const children = dbUtils.getXrefsTo(db, obj.name, 'Class', childLimit, 'extends');
-      return { content: [{ type: 'text', text: JSON.stringify({ class: obj.name, children }, null, 2) }] };
+      return { content: [{ type: 'text', text: JSON.stringify({ class: obj.name, children }) }] };
     }
   );
 
@@ -136,7 +136,7 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
       const method = obj.methods.find((m) => m.name === methodName) ??
         obj.methods.find((m) => m.name.toLowerCase() === methodName.toLowerCase());
       if (!method) return { content: [{ type: 'text', text: `Method ${methodName} not found in ${className}.` }] };
-      return { content: [{ type: 'text', text: JSON.stringify(method, null, 2) }] };
+      return { content: [{ type: 'text', text: JSON.stringify(method) }] };
     }
   );
 
@@ -160,7 +160,7 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
           xrefs = xrefs.concat(dbUtils.getXrefsTo(db, name, t, remaining));
         }
       }
-      return { content: [{ type: 'text', text: JSON.stringify(xrefs.slice(0, limit), null, 2) }] };
+      return { content: [{ type: 'text', text: JSON.stringify(xrefs.slice(0, limit)) }] };
     }
   );
 
@@ -177,7 +177,7 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
     async ({ name, type, maxDepth = 2, limit = 200 }) => {
       const result = analyzeImpact(db, name, type, maxDepth, limit);
       if (!result) return { content: [{ type: 'text', text: dbUtils.notFoundMessage(db, `Object (${type})`, name, type) }] };
-      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      return { content: [{ type: 'text', text: JSON.stringify(result) }] };
     }
   );
 
@@ -192,7 +192,7 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
     },
     async ({ name, type, method, limit }) => {
       const usages = findUsageRefs(db, name, type, method, limit);
-      return { content: [{ type: 'text', text: JSON.stringify(usages, null, 2) }] };
+      return { content: [{ type: 'text', text: JSON.stringify(usages) }] };
     }
   );
 
@@ -210,7 +210,7 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
         isExtensible: obj.properties.isExtensible === 'true',
         values: obj.enumValues,
       };
-      return { content: [{ type: 'text', text: JSON.stringify(capLists(result, ['values'], maxItems), null, 2) }] };
+      return { content: [{ type: 'text', text: JSON.stringify(capLists(result, ['values'], maxItems)) }] };
     }
   );
 
@@ -230,7 +230,7 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
         stringSize: Number(obj.properties.stringSize ?? 0),
         edtType: obj.properties.edtType ?? '',
       };
-      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      return { content: [{ type: 'text', text: JSON.stringify(result) }] };
     }
   );
 
@@ -249,7 +249,7 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
         dataSources: obj.dataSources,
         controls: obj.controls,
       };
-      return { content: [{ type: 'text', text: JSON.stringify(capLists(result, ['dataSources', 'controls'], maxItems), null, 2) }] };
+      return { content: [{ type: 'text', text: JSON.stringify(capLists(result, ['dataSources', 'controls'], maxItems)) }] };
     }
   );
 
@@ -266,7 +266,7 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
         title: obj.properties.title ?? '',
         dataSources: obj.dataSources,
       };
-      return { content: [{ type: 'text', text: JSON.stringify(capLists(result, ['dataSources'], maxItems), null, 2) }] };
+      return { content: [{ type: 'text', text: JSON.stringify(capLists(result, ['dataSources'], maxItems)) }] };
     }
   );
 
@@ -288,7 +288,7 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
         fields: obj.fields,
         dataSources: obj.dataSources,
       };
-      return { content: [{ type: 'text', text: JSON.stringify(capLists(result, ['fields', 'dataSources'], maxItems), null, 2) }] };
+      return { content: [{ type: 'text', text: JSON.stringify(capLists(result, ['fields', 'dataSources'], maxItems)) }] };
     }
   );
 
@@ -340,7 +340,7 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
     },
     async ({ type, package: pkg, offset, limit }) => {
       const results = dbUtils.getAllObjects(db, type, pkg, offset, limit);
-      return { content: [{ type: 'text', text: JSON.stringify(results, null, 2) }] };
+      return { content: [{ type: 'text', text: JSON.stringify(results) }] };
     }
   );
 
@@ -350,7 +350,7 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
     {},
     async () => {
       const results = dbUtils.listPackages(db);
-      return { content: [{ type: 'text', text: JSON.stringify(results, null, 2) }] };
+      return { content: [{ type: 'text', text: JSON.stringify(results) }] };
     }
   );
 
@@ -360,7 +360,7 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
     {},
     async () => {
       const results = dbUtils.listModels(db);
-      return { content: [{ type: 'text', text: JSON.stringify(results, null, 2) }] };
+      return { content: [{ type: 'text', text: JSON.stringify(results) }] };
     }
   );
 
@@ -379,10 +379,10 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
           message:
             'Source files are not present on this server, so per-file staleness cannot be checked.',
         };
-        return { content: [{ type: 'text', text: JSON.stringify(report, null, 2) }] };
+        return { content: [{ type: 'text', text: JSON.stringify(report) }] };
       }
       const stale = await dbUtils.getIndexStaleness(db, limit, maxScan);
-      return { content: [{ type: 'text', text: JSON.stringify(stale, null, 2) }] };
+      return { content: [{ type: 'text', text: JSON.stringify(stale) }] };
     }
   );
 
@@ -392,7 +392,7 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
     {},
     async () => {
       const stats = getIndexStats(db);
-      return { content: [{ type: 'text', text: JSON.stringify(stats, null, 2) }] };
+      return { content: [{ type: 'text', text: JSON.stringify(stats) }] };
     }
   );
 }

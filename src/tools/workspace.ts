@@ -42,7 +42,7 @@ export function registerWorkspaceTools(server: McpServer, options: WorkspaceTool
       const respond = (payload: object, isError = false) => ({
         content: [{ type: 'text' as const, text: JSON.stringify({
           ...payload, provenance, capabilities, writeToolsEnabled: options.enableWriteTools === true,
-        }, null, 2) }],
+        }) }],
         ...(isError ? { isError: true } : {}),
       });
       if (!options.workspaceDir) {

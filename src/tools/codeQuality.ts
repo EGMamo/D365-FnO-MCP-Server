@@ -113,7 +113,7 @@ export async function checkBestPractices(db: Database, args: BestPracticeArgs): 
       result.compilerBestPractice = { importedFindings: n, importedAt: status.importedAt, hint: n ? 'Use get_bp_findings for the compiler diagnostics of this element.' : undefined };
     }
   }
-  return ok(JSON.stringify(result, null, 2));
+  return ok(JSON.stringify(result));
 }
 
 export interface FieldAccessArgs {
@@ -203,7 +203,7 @@ export async function fieldAccessReport(db: Database, args: FieldAccessArgs): Pr
     accesses: shown,
     notes,
     attribution: FIELD_ACCESS_ATTRIBUTION,
-  }, null, 2));
+  }));
 }
 
 export interface MethodSourceArgs {
@@ -247,7 +247,7 @@ export async function getMethodSource(db: Database, args: MethodSourceArgs): Pro
     used += Math.min(m.source.length, room);
     return { method: m.name, source: cut ? m.source.slice(0, room) : m.source, totalChars: m.source.length, truncated: cut };
   });
-  return ok(JSON.stringify({ object: { type: obj.type, name: obj.name }, sources, truncated }, null, 2));
+  return ok(JSON.stringify({ object: { type: obj.type, name: obj.name }, sources, truncated }));
 }
 
 export function registerCodeQualityTools(server: McpServer, db: Database): void {
@@ -309,8 +309,8 @@ export function registerCodeQualityTools(server: McpServer, db: Database): void 
     },
     async (args) => {
       const status = bpSnapshotStatus(db);
-      if (status.status !== 'imported') return ok(JSON.stringify({ status }, null, 2));
-      return ok(JSON.stringify({ status, ...queryBpFindings(db, args) }, null, 2));
+      if (status.status !== 'imported') return ok(JSON.stringify({ status }));
+      return ok(JSON.stringify({ status, ...queryBpFindings(db, args) }));
     }
   );
 }

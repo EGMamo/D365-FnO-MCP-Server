@@ -144,7 +144,7 @@ export function listTraceSessions(db: Database, source?: string, limit = 50): To
       db_ms: round(s.db_ms),
       db_share_pct: s.total_ms > 0 ? round((100 * s.db_ms) / s.total_ms) : null,
     })),
-  }, null, 2));
+  }));
 }
 
 interface MethodRow {
@@ -184,7 +184,7 @@ export function findNPlusOne(
       'Consider a join, exists join, set-based operation (insert_recordset/update_recordset/delete_from) or caching; ' +
       'use get_method_source on the aot match to confirm.',
     findings,
-  }, null, 2));
+  }));
 }
 
 interface SqlRow {
@@ -226,7 +226,7 @@ export async function findSlowSql(
       'a filter on a non-leading index field, or a large rowsFetched are the usual causes. Validate with the ' +
       'query plan (LCS/Query Store) before adding an index.',
     findings,
-  }, null, 2));
+  }));
 }
 
 export function getTopMethods(
@@ -253,7 +253,7 @@ export function getTopMethods(
       dbCalls: m.db_calls,
       rowsFetched: m.rows_fetched,
     })),
-  }, null, 2));
+  }));
 }
 
 export function searchTrace(db: Database, scope: Scope & { keyword: string; limit?: number }): ToolResult {
@@ -283,7 +283,7 @@ export function searchTrace(db: Database, scope: Scope & { keyword: string; limi
       tables: q.table_names, calledFrom: q.method_name, executions: q.executions,
       totalMs: round(q.total_ms), maxMs: round(q.max_ms),
     })),
-  }, null, 2));
+  }));
 }
 
 export function registerTraceTools(server: McpServer, db: Database): void {

@@ -85,7 +85,7 @@ function publicNameOwners(db: Database, value: string, exclude?: string): { enti
 }
 
 function json(value: unknown): ToolResult {
-  return ok(JSON.stringify(value, null, 2));
+  return ok(JSON.stringify(value));
 }
 
 function fileBlock(path: string, xml: string): string {
