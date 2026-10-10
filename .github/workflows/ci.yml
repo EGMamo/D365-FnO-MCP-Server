@@ -14,15 +14,31 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest]
+        # 26 is what the Docker image runs; 24 is the minimum in package.json engines.
+        node: ['26']
+        include:
+          - os: ubuntu-latest
+            node: '24'
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: '24'
+          node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
       - run: npm run check
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '26'
+      # Gates on high and critical advisories in what ships (runtime deps). Known
+      # moderate findings sit in the optional mssql driver, which the image omits.
+      - run: npm audit --omit=dev --audit-level=high
 
   vs-extension:
     strategy:
@@ -107,6 +123,14 @@ jobs:
             | grep -q '"serverInfo"'
           # The optional SQL Server driver must not be in the image.
           if docker exec mcp test -d node_modules/mssql; then echo "mssql should be omitted" && exit 1; fi
+      - name: Scan the image for vulnerabilities
+        uses: anchore/scan-action@v7
+        with:
+          image: d365-fno-mcp-server:ci
+          # Fail only on high or critical findings that have a fix available.
+          severity-cutoff: high
+          only-fixed: true
+          output-format: table
       - name: Container logs
         if: always()
         run: |

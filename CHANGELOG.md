@@ -213,6 +213,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `MCP_LOG_LEVEL` defaults to `INFO` instead of `DEBUG`, and log metadata can no longer overwrite a
+  line's `ts`, `level`, `scope` or `message`.
+- `serve` logs and exits with code 1 on an unhandled exception or rejection, and on a shutdown that
+  times out (it used to exit 0). Both paths close the database first.
+- CI tests on Node 26 (the image's runtime) as well as Node 24, runs `npm audit` on runtime
+  dependencies and scans the built image, failing on fixable high or critical findings.
+- The runtime image no longer ships npm or corepack; nothing in it runs them, and their bundled
+  dependencies carried fixable high-severity advisories.
 - `list_objects` pages in a deterministic `type, name, id` order.
 - Connections use a larger page cache, memory-mapped reads, in-memory temp tables and a busy timeout,
   and the index has an `ax_objects(package, type, name, id)` index.

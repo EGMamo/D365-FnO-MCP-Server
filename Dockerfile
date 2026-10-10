@@ -40,9 +40,13 @@ ENV NODE_ENV=production \
     D365_ENABLE_WRITE_TOOLS=0
 WORKDIR /app
 COPY package.json package-lock.json ./
+# npm and corepack are not used at runtime; dropping them removes their bundled
+# dependencies (and those dependencies' advisories) from the shipped image.
 RUN --mount=type=secret,id=npmrc,target=/root/.npmrc \
     --mount=type=secret,id=cafile,target=/etc/npm-cafile.crt \
-    npm ci --omit=dev --omit=optional && rm -rf /root/.npm
+    npm ci --omit=dev --omit=optional && rm -rf /root/.npm \
+    && rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
+       /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack
 COPY --from=build /app/dist ./dist
 # findKnowledgeDir() walks up from dist/src/tools, so the knowledge base must sit next to dist/.
 COPY d365-fno-assistant-knowledge ./d365-fno-assistant-knowledge
