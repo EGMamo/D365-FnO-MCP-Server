@@ -2,10 +2,10 @@ type LogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR' | 'FATAL';
 
 const LEVELS: Record<LogLevel | 'SILENT', number> = { DEBUG: 0, INFO: 1, WARN: 2, ERROR: 3, FATAL: 4, SILENT: 5 };
 
-/** Lowest level written, from MCP_LOG_LEVEL (read on every call so tests can change it). Defaults to DEBUG. */
+/** Lowest level written, from MCP_LOG_LEVEL (read on every call so tests can change it). Defaults to INFO. */
 function threshold(): number {
   const configured = process.env.MCP_LOG_LEVEL?.trim().toUpperCase();
-  return configured && configured in LEVELS ? LEVELS[configured as keyof typeof LEVELS] : LEVELS.DEBUG;
+  return configured && configured in LEVELS ? LEVELS[configured as keyof typeof LEVELS] : LEVELS.INFO;
 }
 
 /**
@@ -14,12 +14,13 @@ function threshold(): number {
  */
 function emit(level: LogLevel, message: string, meta?: Record<string, unknown>) {
   if (LEVELS[level] < threshold()) return;
+  // Meta goes first so it can never overwrite the fixed fields.
   const line = {
+    ...(meta ?? {}),
     ts: new Date().toISOString(),
     level,
     scope: 'D365-MCP',
     message,
-    ...(meta ?? {}),
   };
   process.stderr.write(`${JSON.stringify(line)}\n`);
 }

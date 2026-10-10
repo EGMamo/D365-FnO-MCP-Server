@@ -25,8 +25,13 @@ describe('logger', () => {
     logger.error('e');
   }
 
-  it('writes every level when MCP_LOG_LEVEL is unset', () => {
+  it('writes INFO and above when MCP_LOG_LEVEL is unset', () => {
     vi.stubEnv('MCP_LOG_LEVEL', undefined);
+    expect(capture(logEveryLevel)).toEqual(['INFO', 'WARN', 'ERROR']);
+  });
+
+  it('writes DEBUG when MCP_LOG_LEVEL asks for it', () => {
+    vi.stubEnv('MCP_LOG_LEVEL', 'debug');
     expect(capture(logEveryLevel)).toEqual(['DEBUG', 'INFO', 'WARN', 'ERROR']);
   });
 
@@ -42,6 +47,11 @@ describe('logger', () => {
 
   it('ignores an unknown MCP_LOG_LEVEL', () => {
     vi.stubEnv('MCP_LOG_LEVEL', 'verbose');
-    expect(capture(logEveryLevel)).toEqual(['DEBUG', 'INFO', 'WARN', 'ERROR']);
+    expect(capture(logEveryLevel)).toEqual(['INFO', 'WARN', 'ERROR']);
+  });
+
+  it('keeps the fixed fields when meta reuses their names', () => {
+    vi.stubEnv('MCP_LOG_LEVEL', undefined);
+    expect(capture(() => logger.warn('w', { level: 'DEBUG', ts: 'x' }))).toEqual(['WARN']);
   });
 });

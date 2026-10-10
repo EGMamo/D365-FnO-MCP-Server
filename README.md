@@ -101,7 +101,7 @@ Configuration comes from environment variables (a `.env` file in the working dir
 | `TRUST_PROXY_HOPS` | `0` | Number of trusted reverse-proxy hops. `0` ignores `X-Forwarded-For`; set this to the real hop count **only** when behind a trusted proxy. |
 | `MAX_CONCURRENT_SESSIONS` | `100` | Max simultaneous MCP sessions; further sessions receive HTTP `503`. |
 | `SESSION_IDLE_TIMEOUT_MS` | `1800000` | Idle sessions are closed after this period (swept every 60s). |
-| `MCP_LOG_LEVEL` | `DEBUG` | Lowest level written to the structured stderr log: `DEBUG`, `INFO`, `WARN`, `ERROR`, `FATAL` or `SILENT`. |
+| `MCP_LOG_LEVEL` | `INFO` | Lowest level written to the structured stderr log: `DEBUG`, `INFO`, `WARN`, `ERROR`, `FATAL` or `SILENT`. |
 
 CLI commands also read these; the server ignores them:
 

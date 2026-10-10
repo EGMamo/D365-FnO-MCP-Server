@@ -231,14 +231,24 @@ export async function startServer(): Promise<void> {
       });
   }
 
+  /** Best-effort close on an abnormal exit path; the process exits regardless. */
+  const closeDbQuietly = () => {
+    try {
+      db?.close();
+    } catch {
+      // Already exiting.
+    }
+  };
+
   let shuttingDown = false;
   const shutdown = (signal: string) => {
     if (shuttingDown) return;
     shuttingDown = true;
     logger.info('Shutting down...', { signal });
     const deadline = setTimeout(() => {
-      logger.warn('Shutdown timed out; exiting');
-      process.exit(0);
+      logger.error('Shutdown timed out; exiting');
+      closeDbQuietly();
+      process.exit(1);
     }, SHUTDOWN_TIMEOUT_MS);
     deadline.unref();
 
@@ -252,4 +262,17 @@ export async function startServer(): Promise<void> {
 
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
+
+  // A stray error leaves the process in an unknown state: log it and exit so
+  // the platform restarts a clean replica instead of serving from a broken one.
+  const crash = (kind: string) => (error: unknown) => {
+    logger.fatal(`Unhandled ${kind}; exiting`, {
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+    closeDbQuietly();
+    process.exit(1);
+  };
+  process.on('uncaughtException', crash('exception'));
+  process.on('unhandledRejection', crash('rejection'));
 }

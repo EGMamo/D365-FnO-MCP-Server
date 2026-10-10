@@ -21,7 +21,6 @@ import {
   computeBundleId,
   parseArtifactManifest,
   parseValidationReport,
-  sha256Buffer,
   sha256File,
 } from './artifactContract.js';
 import { getMeta, META_KEYS } from './db.js';
@@ -427,8 +426,4 @@ export function activateValidatedArtifactBundle(
     fs.rmSync(candidate, { force: true });
   }
   return validated;
-}
-
-export function hashArtifactManifestFile(directory: string): string {
-  return sha256Buffer(fs.readFileSync(path.join(directory, ARTIFACT_MANIFEST_FILE)));
 }
