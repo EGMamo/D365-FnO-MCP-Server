@@ -5,10 +5,37 @@ import * as dbUtils from '../indexer/db.js';
 import { getIndexStats } from '../indexer/buildIndex.js';
 import { loadObjectXml, sourceFileReadsAllowed } from '../indexer/sourceFiles.js';
 import { findUsageRefs, getUsageSnapshotStatus } from '../indexer/xrefUsage.js';
+import { capLists, DEFAULT_MAX_ITEMS } from './bounds.js';
+import { analyzeImpact, explainSearchHits } from './impact.js';
 
 /** Every object type the indexer stores, for tools that accept any indexed type. */
 export const INDEXED_OBJECT_TYPES = [
   'Table',
+  'TableExtension',
+  'View',
+  'Map',
+  'Service',
+  'ServiceGroup',
+  'Report',
+  'Menu',
+  'MenuExtension',
+  'MenuItemDisplayExtension',
+  'MenuItemActionExtension',
+  'MenuItemOutputExtension',
+  'WorkflowType',
+  'WorkflowApproval',
+  'WorkflowTask',
+  'WorkflowAutomatedTask',
+  'WorkflowCategory',
+  'AggregateMeasurement',
+  'AggregateDimension',
+  'KPI',
+
+  'FormExtension',
+  'EdtExtension',
+  'EnumExtension',
+  'DataEntityExtension',
+  'QueryExtension',
   'Class',
   'Enum',
   'Form',
@@ -57,23 +84,33 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
         .max(100)
         .default(20)
         .describe('Maximum matching objects to return (1-100; default 20).'),
+      explain: z
+        .boolean()
+        .default(false)
+        .describe('When true, each result states why it matched (exact, prefix, substring or token) and why it ranks where it does.'),
     },
     { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-    async ({ query, type, limit }) => {
+    async ({ query, type, limit, explain }) => {
       const results = dbUtils.searchSymbols(db, query, type, limit);
+      if (explain) {
+        const explained = explainSearchHits(query, results as { name: string; type: string; package: string; id: number }[]).map(
+          ({ hit, match, explanation }) => ({ ...hit, match, explanation })
+        );
+        return { content: [{ type: 'text', text: JSON.stringify(explained, null, 2) }] };
+      }
       return { content: [{ type: 'text', text: JSON.stringify(results, null, 2) }] };
     }
   );
 
   server.tool(
     'get_table_schema',
-    'Full table details',
-    { tableName: z.string(), xrefLimit: z.number().int().min(1).max(500).default(100) },
-    async ({ tableName, xrefLimit }) => {
+    'Full table details. Each list is capped at maxItems (default 1000); clipped lists are reported under "truncated".',
+    { tableName: z.string(), xrefLimit: z.number().int().min(1).max(500).default(100), maxItems: z.number().int().min(10).max(10_000).default(1000).describe('Maximum items returned per list (fields, methods, controls, ...); a clipped list is reported under "truncated".') },
+    async ({ tableName, xrefLimit, maxItems = DEFAULT_MAX_ITEMS }) => {
       const obj = dbUtils.getObjectByName(db, tableName, 'Table');
-      if (!obj) return { content: [{ type: 'text', text: `Table ${tableName} not found.` }] };
-      const xrefs = dbUtils.getXrefsTo(db, tableName, 'Table', xrefLimit);
-      return { content: [{ type: 'text', text: JSON.stringify({ ...obj, xrefs }, null, 2) }] };
+      if (!obj) return { content: [{ type: 'text', text: dbUtils.notFoundMessage(db, 'Table', tableName, 'Table') }] };
+      const xrefs = dbUtils.getXrefsTo(db, obj.name, 'Table', xrefLimit);
+      return { content: [{ type: 'text', text: JSON.stringify(capLists({ ...obj, xrefs }, ['fields', 'methods', 'xrefs'], maxItems), null, 2) }] };
     }
   );
 
@@ -83,8 +120,8 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
     { className: z.string(), childLimit: z.number().int().min(1).max(500).default(100) },
     async ({ className, childLimit }) => {
       const obj = dbUtils.getObjectByName(db, className, 'Class');
-      if (!obj) return { content: [{ type: 'text', text: `Class ${className} not found.` }] };
-      const children = dbUtils.getXrefsTo(db, className, 'Class', childLimit, 'extends');
+      if (!obj) return { content: [{ type: 'text', text: dbUtils.notFoundMessage(db, 'Class', className, 'Class') }] };
+      const children = dbUtils.getXrefsTo(db, obj.name, 'Class', childLimit, 'extends');
       return { content: [{ type: 'text', text: JSON.stringify({ class: obj.name, children }, null, 2) }] };
     }
   );
@@ -95,8 +132,9 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
     { className: z.string(), methodName: z.string() },
     async ({ className, methodName }) => {
       const obj = dbUtils.getObjectByName(db, className, 'Class');
-      if (!obj) return { content: [{ type: 'text', text: `Class ${className} not found.` }] };
-      const method = obj.methods.find((m) => m.name === methodName);
+      if (!obj) return { content: [{ type: 'text', text: dbUtils.notFoundMessage(db, 'Class', className, 'Class') }] };
+      const method = obj.methods.find((m) => m.name === methodName) ??
+        obj.methods.find((m) => m.name.toLowerCase() === methodName.toLowerCase());
       if (!method) return { content: [{ type: 'text', text: `Method ${methodName} not found in ${className}.` }] };
       return { content: [{ type: 'text', text: JSON.stringify(method, null, 2) }] };
     }
@@ -127,6 +165,23 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
   );
 
   server.tool(
+    'analyze_impact',
+    'Impact analysis: everything that structurally depends on an AOT object, walked transitively (extensions, subclasses, data sources, EDT use, ...), grouped by depth with the relationship that links each dependent. Bounded by maxDepth and limit; truncated=true means more exist. Declared references only, not compiler call sites: use find_usages for those.',
+    {
+      name: z.string(),
+      type: z.enum(INDEXED_OBJECT_TYPES),
+      maxDepth: z.number().int().min(1).max(4).default(2).describe('How many dependency levels to follow (1-4; default 2).'),
+      limit: z.number().int().min(1).max(500).default(200).describe('Maximum dependents to return (1-500; default 200).'),
+    },
+    { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    async ({ name, type, maxDepth = 2, limit = 200 }) => {
+      const result = analyzeImpact(db, name, type, maxDepth, limit);
+      if (!result) return { content: [{ type: 'text', text: dbUtils.notFoundMessage(db, `Object (${type})`, name, type) }] };
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
     'find_usages',
     'Find compiler-derived usage/call-site references imported from DynamicsXrefDB. This is distinct from structural/declared references returned by find_references.',
     {
@@ -143,11 +198,11 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
 
   server.tool(
     'get_enum_values',
-    'Enum details',
-    { enumName: z.string() },
-    async ({ enumName }) => {
+    'Enum details. The values list is capped at maxItems (default 1000); a clipped list is reported under "truncated".',
+    { enumName: z.string(), maxItems: z.number().int().min(10).max(10_000).default(1000).describe('Maximum items returned per list; a clipped list is reported under "truncated".') },
+    async ({ enumName, maxItems = DEFAULT_MAX_ITEMS }) => {
       const obj = dbUtils.getObjectByName(db, enumName, 'Enum');
-      if (!obj) return { content: [{ type: 'text', text: `Enum ${enumName} not found.` }] };
+      if (!obj) return { content: [{ type: 'text', text: dbUtils.notFoundMessage(db, 'Enum', enumName, 'Enum') }] };
       const result = {
         name: obj.name,
         package: obj.package,
@@ -155,7 +210,7 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
         isExtensible: obj.properties.isExtensible === 'true',
         values: obj.enumValues,
       };
-      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      return { content: [{ type: 'text', text: JSON.stringify(capLists(result, ['values'], maxItems), null, 2) }] };
     }
   );
 
@@ -165,7 +220,7 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
     { edtName: z.string() },
     async ({ edtName }) => {
       const obj = dbUtils.getObjectByName(db, edtName, 'Edt');
-      if (!obj) return { content: [{ type: 'text', text: `Edt ${edtName} not found.` }] };
+      if (!obj) return { content: [{ type: 'text', text: dbUtils.notFoundMessage(db, 'Edt', edtName, 'Edt') }] };
       const result = {
         name: obj.name,
         package: obj.package,
@@ -181,11 +236,11 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
 
   server.tool(
     'get_form_datasources',
-    'Form datasource and control info',
-    { formName: z.string() },
-    async ({ formName }) => {
+    'Form datasource and control info. Each list is capped at maxItems (default 1000); clipped lists are reported under "truncated".',
+    { formName: z.string(), maxItems: z.number().int().min(10).max(10_000).default(1000).describe('Maximum items returned per list (fields, methods, controls, ...); a clipped list is reported under "truncated".') },
+    async ({ formName, maxItems = DEFAULT_MAX_ITEMS }) => {
       const obj = dbUtils.getObjectByName(db, formName, 'Form');
-      if (!obj) return { content: [{ type: 'text', text: `Form ${formName} not found.` }] };
+      if (!obj) return { content: [{ type: 'text', text: dbUtils.notFoundMessage(db, 'Form', formName, 'Form') }] };
       const result = {
         name: obj.name,
         package: obj.package,
@@ -194,34 +249,34 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
         dataSources: obj.dataSources,
         controls: obj.controls,
       };
-      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      return { content: [{ type: 'text', text: JSON.stringify(capLists(result, ['dataSources', 'controls'], maxItems), null, 2) }] };
     }
   );
 
   server.tool(
     'get_query_datasources',
-    'Query datasource info',
-    { queryName: z.string() },
-    async ({ queryName }) => {
+    'Query datasource info. The list is capped at maxItems (default 1000); a clipped list is reported under "truncated".',
+    { queryName: z.string(), maxItems: z.number().int().min(10).max(10_000).default(1000).describe('Maximum items returned per list; a clipped list is reported under "truncated".') },
+    async ({ queryName, maxItems = DEFAULT_MAX_ITEMS }) => {
       const obj = dbUtils.getObjectByName(db, queryName, 'Query');
-      if (!obj) return { content: [{ type: 'text', text: `Query ${queryName} not found.` }] };
+      if (!obj) return { content: [{ type: 'text', text: dbUtils.notFoundMessage(db, 'Query', queryName, 'Query') }] };
       const result = {
         name: obj.name,
         package: obj.package,
         title: obj.properties.title ?? '',
         dataSources: obj.dataSources,
       };
-      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      return { content: [{ type: 'text', text: JSON.stringify(capLists(result, ['dataSources'], maxItems), null, 2) }] };
     }
   );
 
   server.tool(
     'get_data_entity_details',
-    'Data entity fields and datasources',
-    { entityName: z.string() },
-    async ({ entityName }) => {
+    'Data entity fields and datasources. Each list is capped at maxItems (default 1000); clipped lists are reported under "truncated".',
+    { entityName: z.string(), maxItems: z.number().int().min(10).max(10_000).default(1000).describe('Maximum items returned per list (fields, methods, controls, ...); a clipped list is reported under "truncated".') },
+    async ({ entityName, maxItems = DEFAULT_MAX_ITEMS }) => {
       const obj = dbUtils.getObjectByName(db, entityName, 'DataEntity');
-      if (!obj) return { content: [{ type: 'text', text: `DataEntity ${entityName} not found.` }] };
+      if (!obj) return { content: [{ type: 'text', text: dbUtils.notFoundMessage(db, 'DataEntity', entityName, 'DataEntity') }] };
       const result = {
         name: obj.name,
         package: obj.package,
@@ -233,19 +288,33 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
         fields: obj.fields,
         dataSources: obj.dataSources,
       };
-      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      return { content: [{ type: 'text', text: JSON.stringify(capLists(result, ['fields', 'dataSources'], maxItems), null, 2) }] };
     }
   );
 
   server.tool(
     'get_element_xml',
-    'Raw XML of any AOT object',
-    { name: z.string(), type: z.enum(INDEXED_OBJECT_TYPES) },
-    async ({ name, type }) => {
+    'Raw XML of any AOT object. Output is capped at maxChars (default 100000); a truncated result says so and reports the full length so you can raise the cap or narrow with a get_* tool.',
+    {
+      name: z.string(),
+      type: z.enum(INDEXED_OBJECT_TYPES),
+      maxChars: z.number().int().min(1000).max(2_000_000).default(100_000).describe('Maximum characters of XML to return.'),
+    },
+    async ({ name, type, maxChars = 100_000 }) => {
       const obj = dbUtils.getObjectByName(db, name, type);
-      if (!obj) return { content: [{ type: 'text', text: `Object ${name} of type ${type} not found.` }] };
+      if (!obj) return { content: [{ type: 'text', text: dbUtils.notFoundMessage(db, `Object (${type})`, name, type) }] };
       const xml = await loadObjectXml(obj);
-      if (xml) return { content: [{ type: 'text', text: xml }] };
+      if (xml) {
+        if (xml.length <= maxChars) return { content: [{ type: 'text', text: xml }] };
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `${xml.slice(0, maxChars)}\n<!-- TRUNCATED: returned ${maxChars} of ${xml.length} characters; call again with a larger maxChars (max 2000000) -->`,
+            },
+          ],
+        };
+      }
       return {
         content: [
           {

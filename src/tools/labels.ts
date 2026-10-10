@@ -21,7 +21,7 @@ export function registerLabelsTools(server: McpServer, db: Database) {
 
   server.tool(
     'search_labels',
-    'Search for labels by value, optionally scoped to one language',
+    'Substring search over label values (matches inside words), optionally scoped to one language. This scans every label row, which is seconds on very large label sets; prefer search_labels_fts for whole-word queries.',
     { query: z.string(), language: z.string().optional(), limit: z.number().int().min(1).max(500).default(20) },
     async ({ query, language, limit }) => {
       let sql = `SELECT label_id, language, value FROM ax_labels WHERE value LIKE ? ESCAPE '\\'`;

@@ -160,6 +160,8 @@ export function createUsageSchema(db: Database): void {
       raw_json TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_ax_usage_source ON ax_usage_refs(source_type, source_name, source_method);
+    CREATE INDEX IF NOT EXISTS idx_ax_usage_target_nocase
+      ON ax_usage_refs(target_name COLLATE NOCASE, target_type, target_method COLLATE NOCASE);
     CREATE TABLE IF NOT EXISTS ax_usage_snapshot (
       singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
       run_id TEXT NOT NULL,
@@ -264,10 +266,10 @@ export function findUsageRefs(
   targetMethod?: string,
   limit = 100
 ): UsageRef[] {
-  let sql = `SELECT * FROM ax_usage_refs WHERE target_name = ?`;
+  let sql = `SELECT * FROM ax_usage_refs WHERE target_name = ? COLLATE NOCASE`;
   const params: (string | number)[] = [targetName];
   if (targetType) { sql += ' AND target_type = ?'; params.push(targetType); }
-  if (targetMethod) { sql += ' AND target_method = ?'; params.push(targetMethod); }
+  if (targetMethod) { sql += ' AND target_method = ? COLLATE NOCASE'; params.push(targetMethod); }
   sql += ' ORDER BY source_name, source_method LIMIT ?';
   params.push(limit);
   const rows = db.prepare(sql).all(...params) as Record<string, unknown>[];

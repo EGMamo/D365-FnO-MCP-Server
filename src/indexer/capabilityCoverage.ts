@@ -37,31 +37,33 @@ export const CAPABILITY_COVERAGE: Readonly<Record<ArtifactCapabilityName, Capabi
   },
   dataModelMetadata: {
     completeness: 'partial',
-    counts: ['Table', 'Edt', 'Enum', 'DataEntity', 'Query'],
+    counts: ['Table', 'View', 'Map', 'Edt', 'Enum', 'DataEntity', 'Query'],
     note:
-      'Tables (fields, indexes, methods), EDTs, enums, data entities and queries are indexed. Views (AxView), ' +
-      'maps (AxMap), composite entities, table collections and table, EDT, enum and data entity extensions are not.',
+      'Tables (fields, indexes, methods), views (fields, query tables), maps (fields, mapped tables), EDTs, enums, ' +
+      'data entities and queries are indexed. Composite entities and table collections are not; extensions of ' +
+      'these types are indexed under the extensions capability.',
   },
   uiFormPatterns: {
     completeness: 'partial',
     counts: ['Form'],
     note:
       'Forms are indexed with data sources, control tree, design pattern, pattern version and caption. ' +
-      'Form extensions (AxFormExtension), menus (AxMenu) and tiles (AxTile) are not.',
+      'Form extensions are indexed by name and link only (see extensions); menus (AxMenu) and tiles (AxTile) are not.',
   },
   workflowServiceMetadata: {
-    completeness: 'absent',
-    counts: null,
+    completeness: 'partial',
+    counts: ['Service', 'ServiceGroup', 'WorkflowType', 'WorkflowApproval', 'WorkflowTask', 'WorkflowAutomatedTask', 'WorkflowCategory'],
     note:
-      'Workflow types, approvals, tasks and categories (AxWorkflow*) and services and service groups ' +
-      '(AxService, AxServiceGroup) are not indexed.',
+      'Services (class, external name, operations, link to the X++ class) and service groups (links to their ' +
+      'services) are parsed. Workflow types, approvals, tasks, automated tasks and categories are indexed by name ' +
+      'and package only: their elements, document classes and event handlers are not parsed.',
   },
   reportingAnalytics: {
-    completeness: 'absent',
-    counts: null,
+    completeness: 'partial',
+    counts: ['AggregateMeasurement', 'AggregateDimension', 'KPI'],
     note:
-      'Aggregate measurements, aggregate dimensions and KPIs (AxAggregateMeasurement, AxAggregateDimension, ' +
-      'AxKPI) are not indexed.',
+      'Aggregate measurements, aggregate dimensions and KPIs are indexed by name and package only: their ' +
+      'measures, dimension attributes and KPI definitions are not parsed.',
   },
   labelsResources: {
     completeness: 'partial',
@@ -72,15 +74,32 @@ export const CAPABILITY_COVERAGE: Readonly<Record<ArtifactCapabilityName, Capabi
   },
   extensions: {
     completeness: 'partial',
-    counts: ['SecurityRoleExtension', 'SecurityDutyExtension'],
+    counts: [
+      'SecurityRoleExtension',
+      'SecurityDutyExtension',
+      'TableExtension',
+      'FormExtension',
+      'EdtExtension',
+      'EnumExtension',
+      'DataEntityExtension',
+      'QueryExtension',
+      'MenuExtension',
+      'MenuItemDisplayExtension',
+      'MenuItemActionExtension',
+      'MenuItemOutputExtension',
+    ],
     note:
-      'Security role and duty extensions are indexed, and [ExtensionOf] classes are indexed as classes. Table, ' +
-      'form, enum, EDT, data entity, query and menu item extensions (AxTableExtension, AxFormExtension, ...) are not.',
+      'Security role, duty and table extensions (added fields and indexes) are indexed, as are form, EDT, enum ' +
+      '(with added values), data entity and query extensions (name and link to the extended object only: their ' +
+      'added controls, data sources and properties are not parsed), and [ExtensionOf] classes are indexed as ' +
+      'classes. Menu and menu item extensions are indexed by name and link only.',
   },
   reports: {
-    completeness: 'absent',
-    counts: null,
-    note: 'SSRS reports (AxReport) are not indexed; the output menu items that open them are.',
+    completeness: 'partial',
+    counts: ['Report'],
+    note:
+      'SSRS reports (AxReport) are indexed by name and package only: datasets, designs and parameters are not ' +
+      'parsed. The output menu items that open them are indexed with their report links.',
   },
   securityGraphs: {
     completeness: 'partial',

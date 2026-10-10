@@ -493,7 +493,7 @@ Versions must be four-part (`major.minor.build.revision`); a three-part marketin
 ## MCP tools
 
 Metadata:
-`search_symbols`, `list_objects`, `list_packages`, `list_models`, `get_table_schema`, `get_class_hierarchy`, `get_method_signature`, `get_enum_values`, `get_edt_details`, `get_form_datasources`, `get_query_datasources`, `get_data_entity_details`, `get_element_xml`, `find_references`, `find_usages`, `get_usage_snapshot_status`, `get_index_stats`, `get_index_staleness`, `get_visual_studio_workspace`
+`search_symbols`, `list_objects`, `list_packages`, `list_models`, `get_table_schema`, `get_class_hierarchy`, `get_method_signature`, `get_enum_values`, `get_edt_details`, `get_form_datasources`, `get_query_datasources`, `get_data_entity_details`, `get_element_xml`, `find_references`, `analyze_impact`, `find_usages`, `get_usage_snapshot_status`, `get_index_stats`, `get_index_staleness`, `get_visual_studio_workspace`
 
 Labels:
 `resolve_label`, `resolve_label_by_language`, `search_labels`, `search_labels_fts`
@@ -514,13 +514,13 @@ Release plans (after `index-release-plans`; see below):
 `search_release_plans` (keywords, product, wave and status as of today, or full details by plan ID), `check_feature_impact` (maps a feature or AOT name fragments to indexed objects, and to the objects in your packages that match or reference them)
 
 Code quality (heuristic checks modelled on AppChecker and TRUDUtils; not a replacement for the compiler):
-`check_xpp_best_practices` (tts balance, breakpoints, direct SQL, row-by-row DML in loops, nested `while select`, unused `forupdate`, CoC without `next`, empty `catch`, missing docs; on an indexed object or pasted source), `find_field_access` (read vs write uses of a table field across indexed code; needs raw XML), `get_bp_findings` (compiler best-practice results after `index-bp`)
+`get_method_source` (one method's X++ from stored XML, case-insensitive, size-capped), `check_xpp_best_practices` (tts balance, breakpoints, direct SQL, row-by-row DML in loops, nested `while select`, unused `forupdate`, CoC without `next`, empty `catch`, missing docs; on an indexed object or pasted source), `find_field_access` (read vs write uses of a table field across indexed code; needs raw XML), `get_bp_findings` (compiler best-practice results after `index-bp`)
 
 Security customizations:
 `convert_security_customizations` (turns a Security configuration export into AOT role, duty and privilege XML files, with an optional prefix or renames and checks against the index; returns files and writes nothing)
 
 X++ generators (grounded against the index):
-`create_coc_extension`, `create_table_extension`, `create_class_extension`, `generate_xpp_class`, `create_runbase_batch`, `create_sys_operation`
+`create_coc_extension`, `create_table_extension`, `create_class_extension`, `create_event_handler`, `create_form_event_handler`, `generate_xpp_class`, `create_runbase_batch`, `create_sys_operation`
 
 Write tools (only with `D365_ENABLE_WRITE_TOOLS=1`):
 `write_table_extension`, `apply_table_extension_change`
@@ -693,6 +693,8 @@ What the server reads, stores, sends and logs, and the limits of its results:
 
 ```bash
 npm install
+npm run check       # typecheck, lint, build, knowledge headers, full test suite
+npm run test:e2e    # rebuild and run the compiled HTTP/MCP suite only
 npm run typecheck   # tsc --noEmit
 npm run lint        # eslint src/ tests/
 npm run build       # emits to dist/
@@ -704,9 +706,14 @@ docker build -t d365-fno-mcp-server:local .   # hosted image (needs Docker with 
 Build before running the full suite: compiled-server integration tests launch `dist/src/index.js`
 and use real SDK clients over HTTP. They cover tool discovery, resources/prompts, disabled
 writes and indexing, an offline project write, a prebuilt index served without a packages directory
-under named API keys, and SDK version warnings. `.worktrees` are excluded from discovery. CI runs Node 24 on Linux and Windows
+under named API keys, SDK version warnings, and nonzero startup failures when the port is occupied.
+`npm run check` and `npm run test:e2e` build first so these tests always use current code.
+`.worktrees` are excluded from discovery. CI runs `npm run check` on Node 24 on Linux and Windows
 and builds and smoke-tests the container image; these checks do not substitute for a live Finance
 Operations compiler test.
+
+The current readiness evidence and remaining work are tracked in
+[docs/production-readiness.md](docs/production-readiness.md).
 
 An opt-in SQL contract test executes only read queries against a populated development xref
 database. Set `D365_RUN_SQL_INTEGRATION=1` and `D365_XREF_CONNECTION_STRING`, then run

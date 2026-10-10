@@ -1,0 +1,8 @@
+# Cursor Rules — D365 FnO MCP Server
+
+Canonical repo context: see `AGENTS.md` and `llms.txt`.
+
+- Use `zod` for validation.
+- Do not invent AOT names; resolve against the SQLite index.
+- Do not enable write tools unless explicitly requested (`D365_ENABLE_WRITE_TOOLS=1`).
+

@@ -217,3 +217,48 @@ describe('parseLabels with a label file id', () => {
     ]);
   });
 });
+
+describe('parseAxTableExtension / parseAxView / parseAxMap', () => {
+  it('reads the fields and indexes a table extension adds', () => {
+    const xml = `<AxTableExtension xmlns:i="http://www.w3.org/2001/XMLSchema-instance"><Name>CustTable.MyExt</Name>
+      <Fields><AxTableField xmlns="" i:type="AxTableFieldString"><Name>MyCode</Name><ExtendedDataType>Name</ExtendedDataType><Label>@SYS1</Label></AxTableField></Fields>
+      <Indexes><AxTableIndex><Name>MyIdx</Name></AxTableIndex></Indexes></AxTableExtension>`;
+    const r = parser.parseAxTableExtension(xml);
+    expect(r.fields).toEqual([expect.objectContaining({ name: 'MyCode', type: 'String', edt: 'Name', labelId: '@SYS1' })]);
+    expect(r.indexes).toEqual(['MyIdx']);
+  });
+
+  it('reads view fields and the tables its query reads, including nested data sources', () => {
+    const xml = `<AxView xmlns:i="http://www.w3.org/2001/XMLSchema-instance"><Name>MyView</Name><Label>@SYS2</Label>
+      <Fields><AxViewField xmlns="" i:type="AxViewFieldBound"><Name>Acct</Name><DataField>AccountNum</DataField></AxViewField></Fields>
+      <ViewMetadata><DataSources><AxQuerySimpleRootDataSource><Name>CustTable</Name><Table>CustTable</Table>
+        <DataSources><AxQuerySimpleEmbeddedDataSource><Name>Dir</Name><Table>DirPartyTable</Table></AxQuerySimpleEmbeddedDataSource></DataSources>
+      </AxQuerySimpleRootDataSource></DataSources></ViewMetadata></AxView>`;
+    const r = parser.parseAxView(xml);
+    expect(r.fields.map((f) => f.name)).toEqual(['Acct']);
+    expect(r.dataSources.map((d) => d.table)).toEqual(['CustTable', 'DirPartyTable']);
+    expect(r.label).toBe('@SYS2');
+  });
+
+  it('reads map fields and mapped tables', () => {
+    const xml = `<AxMap xmlns:i="http://www.w3.org/2001/XMLSchema-instance"><Name>MyMap</Name>
+      <Fields><AxMapField xmlns="" i:type="AxMapFieldString"><Name>Num</Name><ExtendedDataType>Name</ExtendedDataType></AxMapField></Fields>
+      <Mappings><AxTableMapping><MappingTable>CustTable</MappingTable></AxTableMapping></Mappings></AxMap>`;
+    const r = parser.parseAxMap(xml);
+    expect(r.fields).toEqual([expect.objectContaining({ name: 'Num', type: 'String', edt: 'Name' })]);
+    expect(r.mappings).toEqual(['CustTable']);
+  });
+});
+
+describe('parseAxService / parseAxServiceGroup', () => {
+  it('reads the class and operations of a service', () => {
+    const r = parser.parseAxService(`<AxService><Name>CustSvc</Name><Class>CustServiceClass</Class><ExternalName>Cust</ExternalName>
+      <ServiceOperations><AxServiceOperation><Name>GetCust</Name><Method>getCust</Method></AxServiceOperation></ServiceOperations></AxService>`);
+    expect(r).toEqual({ className: 'CustServiceClass', externalName: 'Cust', operations: [{ name: 'GetCust', method: 'getCust' }] });
+  });
+
+  it('reads the services of a service group', () => {
+    const r = parser.parseAxServiceGroup(`<AxServiceGroup><Name>G</Name><Services><AxServiceGroupService><Name>CustSvc</Name><Service>CustSvc</Service></AxServiceGroupService></Services></AxServiceGroup>`);
+    expect(r.services).toEqual(['CustSvc']);
+  });
+});

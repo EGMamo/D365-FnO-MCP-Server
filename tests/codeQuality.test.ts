@@ -226,8 +226,9 @@ describe('code quality tools', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it('check_xpp_best_practices reviews an indexed class', async () => {
-    const { json } = await call('check_xpp_best_practices', { objectName: 'MyJob' });
+  it.each(['MyJob', 'myjob'])('check_xpp_best_practices reviews indexed class %s', async (objectName) => {
+    const { res, json } = await call('check_xpp_best_practices', { objectName });
+    expect(res.isError).not.toBe(true);
     expect(json.target).toEqual({ type: 'Class', name: 'MyJob' });
     expect(json.findings.map((f: { rule: string }) => f.rule)).toContain('BalancedTtsStatement');
     expect(json.summary.Error).toBeGreaterThan(0);

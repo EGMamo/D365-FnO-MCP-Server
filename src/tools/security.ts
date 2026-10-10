@@ -39,7 +39,7 @@ function objectSummary(db: Database, type: string, name: string) {
   const obj = getObjectByName(db, name, type);
   if (!obj) return null;
   return {
-    name,
+    name: obj.name,
     type,
     label: obj.properties?.label ?? '',
     description: obj.properties?.description ?? '',
@@ -61,6 +61,7 @@ export function registerSecurityTools(server: McpServer, db: Database) {
     async ({ type, name, flatten, maxItems }) => {
       const aotType = SECURITY_TYPE_TO_AOT[type];
       const summary = objectSummary(db, aotType, name);
+      name = summary?.name ?? name;
 
       if (type === 'Role') {
         const def = getRoleDefinition(db, name);

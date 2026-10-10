@@ -100,6 +100,8 @@ describe('generator tool registration', () => {
     expect([...tools.keys()].sort()).toEqual([
       'create_class_extension',
       'create_coc_extension',
+      'create_event_handler',
+      'create_form_event_handler',
       'create_runbase_batch',
       'create_sys_operation',
       'create_table_extension',
@@ -509,5 +511,86 @@ describe('create_runbase_batch and create_sys_operation', () => {
     expect(parsed.service).toContain('class MyOpService');
     expect(parsed.controller).toContain('SysOperationServiceController');
     expect(parsed.uiBuilder).toContain('MyOpUIBuilder');
+  });
+});
+
+describe('create_event_handler', () => {
+  it('generates a pre/post handler for an indexed class method, using the indexed casing', async () => {
+    const post = await call('create_event_handler', {
+      handlerClass: 'SalesLineTypeHandler', kind: 'post', targetType: 'Class', targetName: 'saleslinetype', methodName: 'INSERT',
+    });
+    expect(post.isError).toBeFalsy();
+    expect(post.content[0].text).toContain('[PostHandlerFor(classStr(SalesLineType), methodStr(SalesLineType, insert))]');
+    expect(post.content[0].text).toContain('XppPrePostArgs _args');
+    const pre = await call('create_event_handler', {
+      handlerClass: 'SalesLineTypeHandler', kind: 'pre', targetType: 'Class', targetName: 'SalesLineType', methodName: 'insert',
+    });
+    expect(pre.content[0].text).toContain('[PreHandlerFor(');
+  });
+
+  it('rejects unknown targets, unknown methods and missing arguments', async () => {
+    const base = { handlerClass: 'H', targetType: 'Class' as const };
+    const ghost = await call('create_event_handler', { ...base, kind: 'pre', targetName: 'GhostClass', methodName: 'x' });
+    expect(ghost.isError).toBe(true);
+    const noMethod = await call('create_event_handler', { ...base, kind: 'pre', targetName: 'SalesLineType', methodName: 'nope' });
+    expect(noMethod.isError).toBe(true);
+    expect(noMethod.content[0].text).toContain('Indexed methods include');
+    const missing = await call('create_event_handler', { ...base, kind: 'post', targetName: 'SalesLineType' });
+    expect(missing.isError).toBe(true);
+    const dataOnClass = await call('create_event_handler', { ...base, kind: 'data', targetName: 'SalesLineType', event: 'Inserted' });
+    expect(dataOnClass.isError).toBe(true);
+  });
+
+  it('generates a table data event handler', async () => {
+    const t = seedDb([{ type: 'Table', name: 'CustTable' }]);
+    try {
+      const create = collectGeneratorTools(t).get('create_event_handler')!;
+      const res = await create({ handlerClass: 'CustTableHandler', kind: 'data', targetType: 'Table', targetName: 'custtable', event: 'Inserted' });
+      expect(res.content[0].text).toContain('[DataEventHandler(tableStr(CustTable), DataEventType::Inserted)]');
+      expect(res.content[0].text).toContain('public static void CustTable_Inserted(Common _sender, DataEventArgs _eventArgs)');
+      const noEvent = await create({ handlerClass: 'CustTableHandler', kind: 'data', targetType: 'Table', targetName: 'CustTable' });
+      expect(noEvent.isError).toBe(true);
+    } finally {
+      t.close();
+    }
+  });
+});
+
+describe('create_form_event_handler', () => {
+  const formDb = () => {
+    const d = seedDb([{ type: 'Form', name: 'CustTableForm' }]);
+    d.exec(`INSERT INTO ax_datasources (object_id, name, table_name) SELECT id, 'CustTable', 'CustTable' FROM ax_objects WHERE name = 'CustTableForm'`);
+    d.exec(`INSERT INTO ax_form_controls (object_id, name, type, parent_name) SELECT id, 'OkButton', 'Button', '' FROM ax_objects WHERE name = 'CustTableForm'`);
+    return d;
+  };
+
+  it('generates form, data source and control handlers grounded in the indexed form', async () => {
+    const d = formDb();
+    try {
+      const create = collectGeneratorTools(d).get('create_form_event_handler')!;
+      const f = await create({ handlerClass: 'H', formName: 'custtableform', scope: 'form', event: 'initialized' });
+      expect(f.content[0].text).toContain('[FormEventHandler(formStr(CustTableForm), FormEventType::Initialized)]');
+      const ds = await create({ handlerClass: 'H', formName: 'CustTableForm', scope: 'datasource', event: 'Written', elementName: 'custtable' });
+      expect(ds.content[0].text).toContain('[FormDataSourceEventHandler(formDataSourceStr(CustTableForm, CustTable), FormDataSourceEventType::Written)]');
+      const c = await create({ handlerClass: 'H', formName: 'CustTableForm', scope: 'control', event: 'Clicked', elementName: 'OkButton' });
+      expect(c.content[0].text).toContain('[FormControlEventHandler(formControlStr(CustTableForm, OkButton), FormControlEventType::Clicked)]');
+    } finally {
+      d.close();
+    }
+  });
+
+  it('rejects unknown forms, elements, events and missing element names', async () => {
+    const d = formDb();
+    try {
+      const create = collectGeneratorTools(d).get('create_form_event_handler')!;
+      expect((await create({ handlerClass: 'H', formName: 'Ghost', scope: 'form', event: 'Closed' })).isError).toBe(true);
+      const noEl = await create({ handlerClass: 'H', formName: 'CustTableForm', scope: 'control', event: 'Clicked', elementName: 'Nope' });
+      expect(noEl.isError).toBe(true);
+      expect(noEl.content[0].text).toContain('OkButton');
+      expect((await create({ handlerClass: 'H', formName: 'CustTableForm', scope: 'control', event: 'Clicked' })).isError).toBe(true);
+      expect((await create({ handlerClass: 'H', formName: 'CustTableForm', scope: 'form', event: 'Exploded' })).content[0].text).toContain('Supported:');
+    } finally {
+      d.close();
+    }
   });
 });

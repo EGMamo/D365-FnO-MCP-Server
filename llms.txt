@@ -1,0 +1,43 @@
+# D365 FnO MCP Server (Repository Summary)
+
+This repo contains a Model Context Protocol (MCP) server that indexes a Microsoft Dynamics 365
+Finance & Operations (D365 FnO) `PackagesLocalDirectory` and exposes grounded tools over
+Streamable HTTP.
+
+## Start here
+
+- Repo + agent guide: `AGENTS.md`
+- Full README + config table: `README.md`
+- Agent-centric install steps: `llms-install.md`
+- Operator docs (hosted deployments): `docs/hosted-deployment.md`
+- User/admin workflows: `docs/user-and-admin-guide.md`
+- Local agent definitions (Copilot/Claude): `docs/local-agents.md`
+
+## Repo map (high level)
+
+- `src/index.ts`: CLI entry (`serve`, `index`, `doctor`, `setup`, `artifact`, ...)
+- `src/server/`: MCP server + HTTP transport + API key auth + hosted startup
+- `src/indexer/`: scan/parse AOT XML + build SQLite index + optional importers
+- `src/tools/`: MCP tool handlers (metadata, labels, security, traces, generators, ...)
+- `tests/`: vitest
+- `agents/`: prebuilt agent profiles (edit `agents/source/`, then run `npm run build:agents`)
+
+## Common commands
+
+```bash
+npm install
+npm run build
+npm test
+
+# CLI (compiled)
+npm run start -- doctor
+npm run start -- index
+npm run start -- serve
+```
+
+## Guardrails
+
+- This project is read-only by default; write tools require `D365_ENABLE_WRITE_TOOLS=1` and are
+  refused in hosted mode.
+- Do not invent AOT names; resolve against the index and report unresolved items.
+

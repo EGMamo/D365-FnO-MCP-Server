@@ -13,8 +13,26 @@ const require = createRequire(import.meta.url);
 const { DatabaseSync: NodeDatabaseSync } = require('node:sqlite') as typeof import('node:sqlite');
 
 /** Opens a finalized deployment index without creating or migrating any schema. */
+/**
+ * Connection-level read tuning: a 64 MB page cache, memory-mapped reads, in-memory temp tables
+ * and a wait instead of an immediate SQLITE_BUSY. None of these change the file or its contents.
+ */
+function applyReadTuning(db: Database): void {
+  db.exec('PRAGMA busy_timeout = 5000');
+  db.exec('PRAGMA temp_store = MEMORY');
+  db.exec('PRAGMA cache_size = -65536');
+  db.exec('PRAGMA mmap_size = 268435456');
+}
+
 export function openDbReadOnly(dbPath: string): Database {
-  return new NodeDatabaseSync(dbPath, { readOnly: true });
+  const db = new NodeDatabaseSync(dbPath, { readOnly: true });
+  try {
+    applyReadTuning(db);
+  } catch (err) {
+    db.close();
+    throw err;
+  }
+  return db;
 }
 
 function transaction<Args extends unknown[], Result>(
@@ -52,6 +70,7 @@ export function openDb(dbPath: string): Database {
   db.exec('PRAGMA synchronous = NORMAL');
   // Required for ON DELETE CASCADE on child tables (SQLite defaults to off).
   db.exec('PRAGMA foreign_keys = ON');
+  applyReadTuning(db);
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS ax_objects (
@@ -184,6 +203,8 @@ export function openDb(dbPath: string): Database {
   }
 
   db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_ax_objects_name_nocase ON ax_objects(name COLLATE NOCASE, type, name);
+    CREATE INDEX IF NOT EXISTS idx_ax_objects_package ON ax_objects(package, type, name, id);
     CREATE INDEX IF NOT EXISTS idx_ax_fields_object_id ON ax_fields(object_id);
     CREATE INDEX IF NOT EXISTS idx_ax_methods_object_id ON ax_methods(object_id);
     CREATE INDEX IF NOT EXISTS idx_ax_enum_values_object_id ON ax_enum_values(object_id);
@@ -191,6 +212,8 @@ export function openDb(dbPath: string): Database {
     CREATE INDEX IF NOT EXISTS idx_ax_form_controls_object_id ON ax_form_controls(object_id);
     CREATE INDEX IF NOT EXISTS idx_ax_xref_from ON ax_xref(from_type, from_name);
     CREATE INDEX IF NOT EXISTS idx_ax_xref_to ON ax_xref(to_type, to_name);
+    CREATE INDEX IF NOT EXISTS idx_ax_xref_from_nocase ON ax_xref(from_type, from_name COLLATE NOCASE, xref_kind);
+    CREATE INDEX IF NOT EXISTS idx_ax_xref_to_nocase ON ax_xref(to_type, to_name COLLATE NOCASE, xref_kind);
     CREATE INDEX IF NOT EXISTS idx_ax_labels_source_file ON ax_labels(source_file);
     CREATE INDEX IF NOT EXISTS idx_ax_security_grants_object_id ON ax_security_grants(object_id);
     CREATE INDEX IF NOT EXISTS idx_ax_security_grants_target ON ax_security_grants(target_type, target_name);
@@ -1138,11 +1161,84 @@ export interface ObjectDetails extends ObjectRow {
   properties: Record<string, string>;
 }
 
-export function getObjectByName(db: Database, name: string, type: string): ObjectDetails | null {
+/** Names of fields that indexed table extensions (`Table.Suffix`) add to `tableName`. */
+export function getTableExtensionFieldNames(db: Database, tableName: string): string[] {
+  const escaped = tableName.replace(/[\\%_]/g, (c) => `\\${c}`);
+  const rows = db
+    .prepare(
+      `SELECT DISTINCT f.name FROM ax_fields f JOIN ax_objects o ON o.id = f.object_id
+       WHERE o.type = 'TableExtension' AND lower(o.name) LIKE ? ESCAPE '\\'`
+    )
+    .all(`${escaped.toLowerCase()}.%`) as { name: string }[];
+  return rows.map((r) => r.name);
+}
+
+/** Resolves the indexed object row without loading its fields, methods or other children. */
+export function getObjectHeader(db: Database, name: string, type: string): ObjectRow | null {
   // X++ names are case-insensitive: an exact match wins, otherwise any casing.
   const obj = (db.prepare(`SELECT * FROM ax_objects WHERE name = ? AND type = ?`).get(name, type) ??
     db.prepare(`SELECT * FROM ax_objects WHERE name = ? COLLATE NOCASE AND type = ? ORDER BY name LIMIT 1`).get(name, type)) as
     ObjectRow | undefined;
+  return obj ?? null;
+}
+
+/** Levenshtein distance, early-exiting once it exceeds `max`. */
+function editDistance(a: string, b: string, max: number): number {
+  if (Math.abs(a.length - b.length) > max) return max + 1;
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    let rowMin = i;
+    for (let j = 1; j <= b.length; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      if (cur[j] < rowMin) rowMin = cur[j];
+    }
+    if (rowMin > max) return max + 1;
+    prev = cur;
+  }
+  return prev[b.length];
+}
+
+/**
+ * "Did you mean" candidates for a name that did not resolve: indexed names of the same type that
+ * share a prefix or substring with the input, or are within a small edit distance of it.
+ * Bounded: at most 200 candidate rows are scored.
+ */
+export function suggestObjectNames(db: Database, name: string, type: string, limit = 5): string[] {
+  const q = name.trim().toLowerCase();
+  if (q.length < 2) return [];
+  const esc = (v: string) => v.replace(/[\\%_]/g, (c) => `\\${c}`);
+  const head = esc(q.slice(0, Math.min(3, q.length)));
+  const rows = db
+    .prepare(
+      `SELECT DISTINCT name FROM ax_objects
+       WHERE type = ? AND (name LIKE ? ESCAPE '\\' OR name LIKE ? ESCAPE '\\' OR name LIKE ? ESCAPE '\\')
+       LIMIT 200`
+    )
+    .all(type, `${head}%`, `%${esc(q)}%`, `%${esc(q.slice(-Math.min(4, q.length)))}`) as { name: string }[];
+  const max = Math.max(2, Math.floor(q.length / 3));
+  return rows
+    .map((r) => {
+      const n = r.name.toLowerCase();
+      const dist = editDistance(q, n, max + 4);
+      const contains = n.includes(q) || q.includes(n);
+      return { name: r.name, score: contains ? Math.min(dist, max) - 0.5 : dist, ok: contains || dist <= max };
+    })
+    .filter((c) => c.ok)
+    .sort((a, b) => a.score - b.score || a.name.localeCompare(b.name))
+    .slice(0, limit)
+    .map((c) => c.name);
+}
+
+/** Not-found message with "Did you mean" suggestions drawn from the index. */
+export function notFoundMessage(db: Database, label: string, name: string, type: string): string {
+  const base = `${label} ${name} not found.`;
+  const hints = suggestObjectNames(db, name, type);
+  return hints.length ? `${base} Did you mean: ${hints.join(', ')}? (use search_symbols to browse)` : base;
+}
+
+export function getObjectByName(db: Database, name: string, type: string): ObjectDetails | null {
+  const obj = getObjectHeader(db, name, type);
   if (!obj) return null;
 
   const fields = db.prepare(`SELECT * FROM ax_fields WHERE object_id = ?`).all(obj.id) as unknown as FieldRow[];
@@ -1195,19 +1291,19 @@ export interface SecurityGrantRow {
 
 /** Entry-point and data-entity grants of a privilege, in file order. */
 export function getSecurityGrants(db: Database, privilegeName: string): SecurityGrantRow[] {
+  const privilege = getObjectHeader(db, privilegeName, 'SecurityPrivilege');
+  if (!privilege) return [];
   return db
     .prepare(
-      `SELECT g.kind, g.target_type, g.target_name, g.child_name, g.grants
-         FROM ax_security_grants g JOIN ax_objects o ON o.id = g.object_id
-        WHERE o.type = 'SecurityPrivilege' AND o.name = ?
-        ORDER BY g.id`
+      `SELECT kind, target_type, target_name, child_name, grants
+         FROM ax_security_grants WHERE object_id = ? ORDER BY id`
     )
-    .all(privilegeName) as unknown as SecurityGrantRow[];
+    .all(privilege.id) as unknown as SecurityGrantRow[];
 }
 
 /** Outgoing cross-references of one object, optionally filtered by kind. */
 export function getXrefsFrom(db: Database, name: string, type: string, xrefKind?: string): Xref[] {
-  let sql = `SELECT * FROM ax_xref WHERE from_name = ? AND from_type = ?`;
+  let sql = `SELECT * FROM ax_xref WHERE from_name = ? COLLATE NOCASE AND from_type = ?`;
   const params: SQLInputValue[] = [name, type];
   if (xrefKind !== undefined) {
     sql += ` AND xref_kind = ?`;
@@ -1223,7 +1319,7 @@ export function getXrefsTo(
   limit?: number,
   xrefKind?: string
 ): Xref[] {
-  let sql = `SELECT * FROM ax_xref WHERE to_name = ? AND to_type = ?`;
+  let sql = `SELECT * FROM ax_xref WHERE to_name = ? COLLATE NOCASE AND to_type = ?`;
   const params: SQLInputValue[] = [name, type];
   if (xrefKind !== undefined) {
     sql += ` AND xref_kind = ?`;
@@ -1249,7 +1345,7 @@ export function getAllObjects(db: Database, type?: string, pkg?: string, offset:
     params.push(pkg);
   }
 
-  sql += ` LIMIT ? OFFSET ?`;
+  sql += ` ORDER BY type, name, id LIMIT ? OFFSET ?`;
   params.push(limit, offset);
 
   return db.prepare(sql).all(...params);

@@ -36,8 +36,11 @@
     "knowledge-check": "node dist/src/index.js knowledge-check",
     "fetch-model": "node dist/src/index.js fetch-model",
     "lint": "eslint src/ tests/",
+    "check": "npm run typecheck && npm run lint && npm run build && npm run knowledge-check && npm test",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:e2e": "npm run build && vitest run tests/mcpIntegration.test.ts",
+    "test:watch": "vitest",
+    "bench": "npm run build && node scripts/bench.mjs"
   },
   "dependencies": {
     "@azure/identity": "^4.13.3",

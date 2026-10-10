@@ -238,6 +238,81 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
             }
             break;
           }
+          case 'TableExtension': {
+            const parsed = parser.parseAxTableExtension(content, file.name, file.package);
+            writer.upsertFields(objectId, parsed.fields);
+            writer.upsertProperties(objectId, { indexes: parsed.indexes.join(',') });
+            const baseTable = file.name.split('.')[0];
+            if (baseTable && baseTable !== file.name) {
+              xrefs.push({ fromType: 'TableExtension', fromName: file.name, toType: 'Table', toName: baseTable, xrefKind: 'extends' });
+            }
+            for (const f of parsed.fields) {
+              if (f.edt) {
+                xrefs.push({ fromType: 'TableExtension', fromName: file.name, toType: 'Edt', toName: f.edt, xrefKind: 'uses' });
+              }
+            }
+            break;
+          }
+          case 'FormExtension':
+          case 'EdtExtension':
+          case 'EnumExtension':
+          case 'DataEntityExtension':
+          case 'QueryExtension':
+          case 'MenuExtension':
+          case 'MenuItemDisplayExtension':
+          case 'MenuItemActionExtension':
+          case 'MenuItemOutputExtension': {
+            if (file.type === 'EnumExtension') {
+              writer.upsertEnumValues(objectId, parser.parseAxEnum(content, file.name, file.package).values);
+            }
+            // Extensions are named Base.Suffix; link them to the object they extend.
+            const baseType = file.type.slice(0, -'Extension'.length);
+            const baseName = file.name.split('.')[0];
+            if (baseName && baseName !== file.name) {
+              xrefs.push({ fromType: file.type, fromName: file.name, toType: baseType, toName: baseName, xrefKind: 'extends' });
+            }
+            break;
+          }
+          case 'Service': {
+            const parsed = parser.parseAxService(content, file.name, file.package);
+            writer.upsertProperties(objectId, {
+              class: parsed.className,
+              externalName: parsed.externalName,
+              operations: parsed.operations.map((o) => o.method || o.name).join(','),
+            });
+            if (parsed.className) {
+              xrefs.push({ fromType: 'Service', fromName: file.name, toType: 'Class', toName: parsed.className, xrefKind: 'service_class' });
+            }
+            break;
+          }
+          case 'ServiceGroup': {
+            const parsed = parser.parseAxServiceGroup(content, file.name, file.package);
+            for (const service of parsed.services) {
+              xrefs.push({ fromType: 'ServiceGroup', fromName: file.name, toType: 'Service', toName: service, xrefKind: 'group_service' });
+            }
+            break;
+          }
+          case 'View': {
+            const parsed = parser.parseAxView(content, file.name, file.package);
+            writer.upsertFields(objectId, parsed.fields);
+            writer.upsertDataSources(objectId, parsed.dataSources);
+            writer.upsertProperties(objectId, { label: parsed.label });
+            for (const ds of parsed.dataSources) {
+              if (ds.table) {
+                xrefs.push({ fromType: 'View', fromName: file.name, toType: 'Table', toName: ds.table, xrefKind: 'datasource' });
+              }
+            }
+            break;
+          }
+          case 'Map': {
+            const parsed = parser.parseAxMap(content, file.name, file.package);
+            writer.upsertFields(objectId, parsed.fields);
+            writer.upsertProperties(objectId, { label: parsed.label });
+            for (const table of parsed.mappings) {
+              xrefs.push({ fromType: 'Map', fromName: file.name, toType: 'Table', toName: table, xrefKind: 'maps' });
+            }
+            break;
+          }
           case 'Class': {
             const parsed = parser.parseAxClass(content, file.name, file.package);
             writer.upsertMethods(objectId, parsed.methods);

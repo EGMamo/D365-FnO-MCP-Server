@@ -1,5 +1,5 @@
 import type { Database } from '../indexer/db.js';
-import { getObjectByName, getSecurityGrants, getXrefsFrom, getXrefsTo, type SecurityGrantRow } from '../indexer/db.js';
+import { getObjectHeader, getSecurityGrants, getXrefsFrom, getXrefsTo, type SecurityGrantRow } from '../indexer/db.js';
 
 /**
  * Read-only traversal of the indexed security model:
@@ -9,6 +9,11 @@ import { getObjectByName, getSecurityGrants, getXrefsFrom, getXrefsTo, type Secu
  */
 
 export const MENU_ITEM_TYPES = ['MenuItemDisplay', 'MenuItemAction', 'MenuItemOutput'] as const;
+
+/** Keep unresolved references visible, but use indexed spelling for known objects. */
+function indexedName(db: Database, name: string, type: string): string {
+  return getObjectHeader(db, name, type)?.name ?? name;
+}
 
 /** `SystemUser.MyExtension` -> `SystemUser`: extension files are named after the object they extend. */
 export function extensionBaseName(name: string): string {
@@ -30,6 +35,7 @@ function extensionsOf(db: Database, name: string, baseType: 'SecurityRole' | 'Se
 
 /** Sources that define a role/duty's content: the object itself plus all of its extensions. */
 function definitionSources(db: Database, name: string, baseType: 'SecurityRole' | 'SecurityDuty') {
+  name = indexedName(db, name, baseType);
   return [
     { type: baseType as string, name },
     ...extensionsOf(db, name, baseType).map((ext) => ({ type: `${baseType}Extension`, name: ext })),
@@ -38,7 +44,9 @@ function definitionSources(db: Database, name: string, baseType: 'SecurityRole' 
 
 function targets(db: Database, sources: { type: string; name: string }[], kind: string): string[] {
   const out = new Set<string>();
-  for (const s of sources) for (const x of getXrefsFrom(db, s.name, s.type, kind)) out.add(x.to_name);
+  for (const s of sources) {
+    for (const x of getXrefsFrom(db, s.name, s.type, kind)) out.add(indexedName(db, x.to_name, x.to_type));
+  }
   return [...out].sort();
 }
 
@@ -54,7 +62,7 @@ export interface RoleDefinition {
 export function getRoleDefinition(db: Database, role: string): RoleDefinition {
   const sources = definitionSources(db, role, 'SecurityRole');
   return {
-    name: role,
+    name: sources[0].name,
     extensions: sources.slice(1).map((s) => s.name),
     duties: targets(db, sources, 'role_duty'),
     privileges: targets(db, sources, 'role_privilege'),
@@ -84,6 +92,7 @@ export interface EffectiveRole {
  * role is expanded once. `cache` can be shared across calls for batch analysis.
  */
 export function expandRole(db: Database, role: string, cache: Map<string, EffectiveRole> = new Map()): EffectiveRole {
+  role = indexedName(db, role, 'SecurityRole');
   const cached = cache.get(role);
   if (cached) return cached;
 
@@ -104,7 +113,7 @@ export function expandRole(db: Database, role: string, cache: Map<string, Effect
     const current = queue.shift()!;
     if (visitedRoles.has(current)) continue;
     visitedRoles.add(current);
-    if (current !== role && !getObjectByName(db, current, 'SecurityRole')) missing.add(`SecurityRole:${current}`);
+    if (current !== role && !getObjectHeader(db, current, 'SecurityRole')) missing.add(`SecurityRole:${current}`);
 
     const def = getRoleDefinition(db, current);
     for (const priv of def.privileges) addPrivilege(priv, `role:${current}`);
@@ -114,7 +123,7 @@ export function expandRole(db: Database, role: string, cache: Map<string, Effect
       if (!privs) {
         privs = getDutyPrivileges(db, duty).privileges;
         dutyPrivileges.set(duty, privs);
-        if (!getObjectByName(db, duty, 'SecurityDuty')) missing.add(`SecurityDuty:${duty}`);
+        if (!getObjectHeader(db, duty, 'SecurityDuty')) missing.add(`SecurityDuty:${duty}`);
       }
       for (const priv of privs) addPrivilege(priv, `duty:${duty}`);
     }
@@ -135,7 +144,9 @@ export function expandRole(db: Database, role: string, cache: Map<string, Effect
 
 function sourcesReferencing(db: Database, name: string, type: string, kind: string): string[] {
   const out = new Set<string>();
-  for (const x of getXrefsTo(db, name, type, undefined, kind)) out.add(owningName(x.from_type, x.from_name));
+  for (const x of getXrefsTo(db, name, type, undefined, kind)) {
+    out.add(indexedName(db, owningName(x.from_type, x.from_name), x.from_type.replace(/Extension$/, '')));
+  }
   return [...out].sort();
 }
 
@@ -156,6 +167,7 @@ export function rolesContainingPrivilegeDirectly(db: Database, privilege: string
 
 /** Roles that include `role` as a sub-role, transitively. Cycle-safe. */
 export function parentRoles(db: Database, role: string): string[] {
+  role = indexedName(db, role, 'SecurityRole');
   const out = new Set<string>();
   const queue = [role];
   while (queue.length > 0) {
@@ -187,6 +199,7 @@ export interface EntryPointTarget {
  * items that target them.
  */
 export function resolveEntryPoints(db: Database, objectType: string, objectName: string): EntryPointTarget[] {
+  objectName = indexedName(db, objectName, objectType);
   if ((MENU_ITEM_TYPES as readonly string[]).includes(objectType) || objectType === 'DataEntity') {
     return [{ type: objectType, name: objectName }];
   }
@@ -214,7 +227,7 @@ export function findSecurityPaths(db: Database, entryPoint: EntryPointTarget): S
 
   for (const privilege of [...privileges].sort()) {
     const grantRow = getSecurityGrants(db, privilege).find(
-      (g) => g.target_name === entryPoint.name && g.target_type === entryPoint.type
+      (g) => g.target_name.toLowerCase() === entryPoint.name.toLowerCase() && g.target_type === entryPoint.type
     );
     const base = {
       entryPoint: { type: entryPoint.type, name: entryPoint.name },
@@ -254,10 +267,13 @@ export function analyzeSodConflicts(db: Database, rules: SodRule[], roles: strin
   const cache = new Map<string, EffectiveRole>();
   const conflicts: SodConflict[] = [];
   for (const role of roles) {
-    const duties = new Set(expandRole(db, role, cache).duties);
+    const effective = expandRole(db, role, cache);
+    const duties = new Map(effective.duties.map((duty) => [duty.toLowerCase(), duty]));
     for (const rule of rules) {
-      if (duties.has(rule.dutyA) && duties.has(rule.dutyB)) {
-        conflicts.push({ rule: rule.name, role, dutyA: rule.dutyA, dutyB: rule.dutyB });
+      const dutyA = duties.get(rule.dutyA.toLowerCase());
+      const dutyB = duties.get(rule.dutyB.toLowerCase());
+      if (dutyA && dutyB) {
+        conflicts.push({ rule: rule.name, role: effective.role, dutyA, dutyB });
       }
     }
   }

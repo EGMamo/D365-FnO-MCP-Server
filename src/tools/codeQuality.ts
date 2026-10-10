@@ -25,7 +25,7 @@ interface CodeObject {
 function findCodeObject(db: Database, name: string, type?: string): CodeObject | null {
   const types = type ? [type] : [...CODE_TYPES];
   for (const t of types) {
-    const row = db.prepare('SELECT type, name, raw_xml, file_path FROM ax_objects WHERE name = ? AND type = ?').get(name, t) as unknown as CodeObject | undefined;
+    const row = dbUtils.getObjectHeader(db, name, t);
     if (row) return row;
   }
   return null;
@@ -206,6 +206,50 @@ export async function fieldAccessReport(db: Database, args: FieldAccessArgs): Pr
   }, null, 2));
 }
 
+export interface MethodSourceArgs {
+  objectName: string;
+  objectType?: string;
+  methodName: string;
+  maxChars?: number;
+}
+
+/**
+ * Returns the X++ source of one method (or "classDeclaration") of an indexed class, table, form or
+ * data entity, read from the stored element XML. Name matching ignores case; when the method is not
+ * found the result lists the methods the element does have.
+ */
+export async function getMethodSource(db: Database, args: MethodSourceArgs): Promise<ToolResult> {
+  const obj = findCodeObject(db, args.objectName, args.objectType);
+  if (!obj) {
+    return fail(dbUtils.notFoundMessage(db, args.objectType ?? 'Object', args.objectName, args.objectType ?? 'Class') +
+      ` (types with code: ${CODE_TYPES.join(', ')}).`);
+  }
+  const xml = await loadObjectXml(obj);
+  if (!xml) return fail(`Source of ${obj.type} ${obj.name} is unavailable: raw XML was not stored and ${obj.file_path} is not readable.`);
+
+  const all = extractMethodSources(xml);
+  const wanted = args.methodName.toLowerCase();
+  const matches = all.filter((m) => m.name.toLowerCase() === wanted);
+  if (matches.length === 0) {
+    const names = all.map((m) => m.name);
+    return fail([
+      `Method ${args.methodName} was not found in ${obj.type} ${obj.name}.`,
+      names.length ? `Methods with source: ${names.slice(0, 50).join(', ')}${names.length > 50 ? ', ...' : ''}.` : 'No method source is present in this element.',
+    ]);
+  }
+  const maxChars = args.maxChars ?? 60_000;
+  let used = 0;
+  let truncated = false;
+  const sources = matches.map((m) => {
+    const room = Math.max(0, maxChars - used);
+    const cut = m.source.length > room;
+    if (cut) truncated = true;
+    used += Math.min(m.source.length, room);
+    return { method: m.name, source: cut ? m.source.slice(0, room) : m.source, totalChars: m.source.length, truncated: cut };
+  });
+  return ok(JSON.stringify({ object: { type: obj.type, name: obj.name }, sources, truncated }, null, 2));
+}
+
 export function registerCodeQualityTools(server: McpServer, db: Database): void {
   server.tool(
     'check_xpp_best_practices',
@@ -221,6 +265,19 @@ export function registerCodeQualityTools(server: McpServer, db: Database): void 
       methods: z.array(z.string()).max(50).optional().describe('Only these methods.'),
     },
     async (args) => checkBestPractices(db, args)
+  );
+
+  server.tool(
+    'get_method_source',
+    'Return the X++ source of one method (or "classDeclaration") of an indexed class, table, form or data entity, read from the stored element XML. Names match case-insensitively; an unknown method lists the methods the element has. Output is capped by maxChars (default 60000) and reports truncation.',
+    {
+      objectName: z.string().min(1),
+      methodName: z.string().min(1),
+      objectType: z.enum(CODE_TYPES).optional().describe('Narrow to one element type when names collide.'),
+      maxChars: z.number().int().min(500).max(500_000).optional().describe('Maximum source characters to return.'),
+    },
+    { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    async (args) => getMethodSource(db, args)
   );
 
   server.tool(
