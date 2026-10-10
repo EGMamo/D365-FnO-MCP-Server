@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Tools: `analyze_impact` (bounded transitive dependents over declared references), `get_method_source`
+  (one method's X++ from stored XML), `create_event_handler` (table data events and pre/post method
+  handlers) and `create_form_event_handler` (form, data source and control events), all grounded
+  against the index. `search_symbols` takes `explain` to say why each hit matched.
+- Indexing: table, form, EDT, enum, data entity, query, menu and menu item extensions (linked to the
+  extended object; enum extensions keep added values), views, maps, services and service groups
+  (with class and service links), and by name only SSRS reports, menus, workflow types/approvals/
+  tasks/categories, aggregate measurements/dimensions and KPIs. Rebuild an existing index to get them.
+- `get_table_schema`, `get_form_datasources`, `get_data_entity_details`, `get_enum_values` and
+  `get_query_datasources` take `maxItems` (default 1000) and report clipped lists under `truncated`;
+  `get_element_xml` takes `maxChars` (default 100000).
+- `npm run bench` measures read-path latency and FTS rebuild cost on a synthetic corpus.
+- Not-found responses on the metadata tools suggest close indexed names.
+
 - `scripts/azure-pause.ps1` pauses an idle environment: it deletes the App Service app and plan,
   the worker VM and disks, the NAT gateway, private endpoints and alerts, and keeps storage (the
   artifact bundles), Key Vaults, identities, the registry and the network. `azure-deploy.ps1`
@@ -199,6 +213,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `list_objects` pages in a deterministic `type, name, id` order.
+- Connections use a larger page cache, memory-mapped reads, in-memory temp tables and a busy timeout,
+  and the index has an `ax_objects(package, type, name, id)` index.
+- `create_table_extension` rejects fields that another indexed table extension already adds.
 - `infra/main.bicep` no longer creates the deploy identity's GitHub federated credential and drops
   the `githubRepository` and `githubEnvironment` parameters, so no deployment names a GitHub owner or
   repository. Run `scripts/azure-github-trust.ps1` (or `azure-post-deploy.ps1 -Step GitHub`) to let
@@ -206,7 +224,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   replaces it. A `-ParameterFile` that still sets those parameters must drop them.
 - Bundles declare capability coverage from what the indexer actually reads
   (`src/indexer/capabilityCoverage.ts`): code, data model, forms, labels, extensions and security
-  graphs are partial, and workflows, reporting and reports are absent. A capability whose source
+  graphs are partial, and workflows, services, reporting and reports are partial (name-level for most
+  of them; see docs/production-readiness.md). A capability whose source
   files failed to index is at most partial. The API, the `artifact` commands and the acquisition
   worker used to require all nine to be complete, which no real bundle could honestly claim; by
   default they now require the complete ones, which is none yet. Set

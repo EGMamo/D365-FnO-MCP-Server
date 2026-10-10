@@ -4,11 +4,12 @@ import path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { once } from 'node:events';
+import { createServer } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { openDb, upsertObject, rebuildFts, setMeta, META_KEYS } from '../src/indexer/db.js';
+import { openDb, upsertObject, upsertMethods, rebuildFts, setMeta, META_KEYS } from '../src/indexer/db.js';
 import { descriptorXml, projectXml, treeSnapshot } from './workspaceFixtures.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -28,10 +29,11 @@ beforeEach(() => {
   fs.copyFileSync(path.join(repoRoot, 'tests', 'fixtures', 'AxClassSample.xml'), path.join(classDir, 'SampleClass.xml'));
   const dbPath = path.join(root, 'index.db');
   const db = openDb(dbPath);
-  upsertObject(db, {
+  const classId = upsertObject(db, {
     type: 'Class', name: 'AlreadyIndexed', package: 'Package', model: 'Model',
     file_path: path.join(classDir, 'AlreadyIndexed.xml'), raw_xml: null, file_mtime: 1,
   });
+  upsertMethods(db, classId, [{ name: 'postInvoice', returnType: 'boolean' }]);
   rebuildFts(db);
   // Build metadata describes the prebuilt index served by deployment tests.
   setMeta(db, META_KEYS.builtAt, '2026-09-25T20:00:00.000Z');
@@ -138,6 +140,11 @@ describe('compiled MCP server over http', () => {
     expect((await client.listResources()).resources.length).toBeGreaterThan(0);
     expect((await client.listPrompts()).prompts.length).toBeGreaterThan(0);
     expect(await search(client, 'AlreadyIndexed')).toHaveLength(1);
+    const signature = await client.callTool({
+      name: 'get_method_signature', arguments: { className: 'alreadyindexed', methodName: 'POSTINVOICE' },
+    });
+    expect(signature.isError).not.toBe(true);
+    expect(JSON.parse(textOf(signature))).toMatchObject({ name: 'postInvoice', return_type: 'boolean' });
     expect(await search(client, 'SampleClass')).toHaveLength(0);
     await expect(client.callTool({
       name: 'search_symbols', arguments: { query: '   ' },
@@ -223,6 +230,37 @@ describe('compiled MCP server over http', () => {
 });
 
 describe('compiled MCP server deployment behavior', () => {
+  it.each([false, true])('exits unsuccessfully when the HTTP port is occupied (hosted=%s)', async (hosted) => {
+    const occupied = createServer();
+    occupied.listen(0, '127.0.0.1');
+    await once(occupied, 'listening');
+    try {
+      const address = occupied.address();
+      if (!address || typeof address === 'string') throw new Error('Expected a TCP listener.');
+      const child = spawn(process.execPath, [entry, 'serve'], {
+        cwd: root,
+        env: {
+          ...environment,
+          MCP_HOST: '127.0.0.1',
+          MCP_PORT: String(address.port),
+          ...(hosted ? { D365_ARTIFACT_STORE_PATH: path.join(root, 'empty-artifact-store') } : {}),
+        },
+        stdio: ['ignore', 'ignore', 'pipe'],
+      });
+      children.push(child);
+      let stderr = '';
+      child.stderr!.setEncoding('utf8').on('data', (chunk: string) => { stderr += chunk; });
+      const [code, signal] = await once(child, 'close');
+      expect(signal).toBeNull();
+      expect(stderr).toContain('EADDRINUSE');
+      expect(code).toBe(1);
+      expect(stderr).not.toContain('MCP HTTP transport listening');
+      expect(stderr).not.toContain('MCP server ready');
+    } finally {
+      await new Promise<void>((resolve, reject) => occupied.close((error) => error ? reject(error) : resolve()));
+    }
+  }, 30_000);
+
   it('serves a prebuilt index over http without a packages directory', async () => {
     const env = Object.fromEntries(Object.entries(environment).filter(([name]) => name !== 'D365_PACKAGES_DIR'));
     env.MCP_API_KEYS = `alice=${apiKey}`;

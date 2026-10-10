@@ -181,6 +181,111 @@ export function parseAxTable(xml: string, _name?: string, _pkg?: string) {
   };
 }
 
+
+/** Fields of an `<AxTable>`-style Fields node, in both the generic and the typed-element form. */
+function collectTableFields(fieldsNode: XmlNode): AxField[] {
+  const fields: AxField[] = [];
+  for (const f of nodes(fieldsNode['AxTableField'])) fields.push(mapField(f));
+  for (const key of Object.keys(fieldsNode)) {
+    if (key === 'AxTableField' || !key.startsWith('AxTableField')) continue;
+    for (const f of nodes(fieldsNode[key])) fields.push(mapField(f, key));
+  }
+  return fields;
+}
+
+/** Parses an `AxTableExtension`: the fields and indexes an extension adds to `Table.Suffix`'s base table. */
+export function parseAxTableExtension(xml: string, _name?: string, _pkg?: string) {
+  const parsed = parser.parse(xml) as XmlNode;
+  const root = node(parsed['AxTableExtension']);
+  return {
+    fields: collectTableFields(node(root['Fields'])),
+    indexes: nodes(node(root['Indexes'])['AxTableIndex']).map((i) => text(i['Name'])).filter(Boolean),
+  };
+}
+
+/** Tables referenced by the data sources of a view's embedded query (`ViewMetadata`). */
+function collectViewDataSources(root: XmlNode): AxDataSource[] {
+  const dataSources: AxDataSource[] = [];
+  const walk = (dsNode: XmlNode) => {
+    for (const key of Object.keys(dsNode)) {
+      if (!key.startsWith('AxQuery')) continue;
+      for (const ds of nodes(dsNode[key])) {
+        dataSources.push({ name: text(ds['Name']), table: text(ds['Table']) });
+        walk(node(ds['DataSources']));
+      }
+    }
+  };
+  for (const vm of nodes(root['ViewMetadata'])) walk(node(vm['DataSources']));
+  return dataSources;
+}
+
+/** Parses an `AxView`: its mapped/computed fields and the tables its query reads. */
+export function parseAxView(xml: string, _name?: string, _pkg?: string) {
+  const parsed = parser.parse(xml) as XmlNode;
+  const root = node(parsed['AxView']);
+  const fieldsNode = node(root['Fields']);
+  const fields: AxField[] = [];
+  for (const key of Object.keys(fieldsNode)) {
+    if (!key.startsWith('AxViewField')) continue;
+    for (const f of nodes(fieldsNode[key])) {
+      fields.push({
+        name: text(f['Name']),
+        type: text(typeAttr(f)).replace(/^AxView/, '') || key.replace(/^AxView/, '') || 'Field',
+        edt: '',
+        labelId: text(f['Label']),
+        mandatory: isYes(f['Mandatory']),
+        allowEdit: !isNo(f['AllowEdit']),
+      });
+    }
+  }
+  return { fields, dataSources: collectViewDataSources(root), label: text(root['Label']) };
+}
+
+/** Parses an `AxMap`: its fields (a map holds no data; tables map onto it). */
+export function parseAxMap(xml: string, _name?: string, _pkg?: string) {
+  const parsed = parser.parse(xml) as XmlNode;
+  const root = node(parsed['AxMap']);
+  const fieldsNode = node(root['Fields']);
+  const fields: AxField[] = [];
+  for (const key of Object.keys(fieldsNode)) {
+    if (!key.startsWith('AxMapField')) continue;
+    for (const f of nodes(fieldsNode[key])) {
+      const raw = key === 'AxMapField' ? text(typeAttr(f)) : key;
+      fields.push({
+        name: text(f['Name']),
+        type: canonicalFieldType(raw.replace(/^AxMapField/, 'AxTableField')),
+        edt: text(f['ExtendedDataType']),
+        labelId: text(f['Label']),
+        mandatory: isYes(f['Mandatory']),
+        allowEdit: !isNo(f['AllowEdit']),
+      });
+    }
+  }
+  const mappings = nodes(node(root['Mappings'])['AxTableMapping']).map((m) => text(m['MappingTable'])).filter(Boolean);
+  return { fields, mappings, label: text(root['Label']) };
+}
+
+
+/** Parses an `AxService`: the X++ class it exposes and the operations (methods) it publishes. */
+export function parseAxService(xml: string, _name?: string, _pkg?: string) {
+  const parsed = parser.parse(xml) as XmlNode;
+  const root = node(parsed['AxService']);
+  const operations = nodes(node(root['ServiceOperations'])['AxServiceOperation'])
+    .map((o) => ({ name: text(o['Name']), method: text(o['Method']) }))
+    .filter((o) => o.name || o.method);
+  return { className: text(root['Class']), externalName: text(root['ExternalName']), operations };
+}
+
+/** Parses an `AxServiceGroup`: the services it bundles. */
+export function parseAxServiceGroup(xml: string, _name?: string, _pkg?: string) {
+  const parsed = parser.parse(xml) as XmlNode;
+  const root = node(parsed['AxServiceGroup']);
+  const services = nodes(node(root['Services'])['AxServiceGroupService'])
+    .map((s) => text(s['Service']) || text(s['Name']))
+    .filter(Boolean);
+  return { services };
+}
+
 const ACCESS_MODIFIERS = new Set(['public', 'protected', 'private', 'internal', 'default']);
 const KEYWORD_BLOCKLIST = new Set([
   'if',
@@ -398,7 +503,8 @@ export function parseAxClassSources(xml: string): AxClassSources {
 
 export function parseAxEnum(xml: string, _name?: string, _pkg?: string) {
   const parsed = parser.parse(xml) as XmlNode;
-  const root = node(parsed['AxEnum']);
+  // An AxEnumExtension has the same EnumValues shape as the enum it extends.
+  const root = node(parsed['AxEnum'] ?? parsed['AxEnumExtension']);
 
   let nextImplicit = 0;
   const values: AxEnumValue[] = nodes(node(root['EnumValues'])['AxEnumValue']).map((v) => {

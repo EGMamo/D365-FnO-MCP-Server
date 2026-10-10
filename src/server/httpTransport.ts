@@ -3,7 +3,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import express, { type Express, type NextFunction, type Request, type Response, type Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import { createHash, randomUUID, timingSafeEqual } from 'crypto';
-import type { Server } from 'http';
+import { createServer, type Server } from 'http';
 import { logger } from '../utils/logger.js';
 import { readDeclaredClientVersion } from '../indexer/appVersion.js';
 import type { ApiKeyEntry } from './apiKeys.js';
@@ -415,6 +415,8 @@ export function createHttpApp(createMcpServer: ServerFactory, options: HttpTrans
 
 export interface RunningHttpServer {
   server: Server;
+  /** Resolves only after binding succeeds; rejects when the listener cannot start. */
+  listening: Promise<void>;
   /** Closes every MCP session so their SSE streams end before the listener closes. */
   closeAllSessions: () => void;
 }
@@ -425,8 +427,9 @@ export function startHttpServer(
   options: HttpTransportOptions,
 ): RunningHttpServer {
   const app = createHttpApp(createMcpServer, options);
+  const httpServer = createServer(app);
 
-  const onListening = () => {
+  const logListening = () => {
     const address = httpServer.address();
     if (!address || typeof address === 'string') {
       logger.error('HTTP listener did not report a TCP address');
@@ -443,11 +446,6 @@ export function startHttpServer(
       apiKeys: options.apiKeys.length,
     });
   };
-  const httpServer = options.host
-    ? app.listen(options.port, options.host, onListening)
-    : app.listen(options.port, onListening);
-
-
   httpServer.on('close', () => {
     clearInterval(app.locals.sessionSweep as NodeJS.Timeout);
   });
@@ -456,5 +454,26 @@ export function startHttpServer(
     logger.error('HTTP server error', { message: err.message });
   });
 
-  return { server: httpServer, closeAllSessions: app.locals.closeAllSessions as () => void };
+  const listening = new Promise<void>((resolve, reject) => {
+    const onError = (error: Error) => {
+      httpServer.off('listening', onListening);
+      httpServer.off('error', onError);
+      clearInterval(app.locals.sessionSweep as NodeJS.Timeout);
+      reject(error);
+    };
+    const onListening = () => {
+      httpServer.off('error', onError);
+      logListening();
+      resolve();
+    };
+    httpServer.once('error', onError);
+    httpServer.once('listening', onListening);
+    try {
+      httpServer.listen(options.port, options.host);
+    } catch (error) {
+      onError(error as Error);
+    }
+  });
+
+  return { server: httpServer, listening, closeAllSessions: app.locals.closeAllSessions as () => void };
 }

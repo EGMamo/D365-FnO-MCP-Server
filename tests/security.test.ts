@@ -162,8 +162,9 @@ describe('security model tools', () => {
     ]);
   });
 
-  it('flattens a role through extensions, duties and cyclic sub-roles', () => {
-    const effective = expandRole(db, 'SampleClerkRole');
+  it.each(['SampleClerkRole', 'sampleclerkrole'])('flattens %s through extensions, duties and cyclic sub-roles', (name) => {
+    const effective = expandRole(db, name);
+    expect(effective.role).toBe('SampleClerkRole');
     expect(effective.subRoles).toEqual(['SampleViewerRole']);
     expect(effective.duties).toEqual(['SampleApproveDuty', 'SampleMaintainDuty']);
     expect(Object.fromEntries(effective.privileges)).toEqual({
@@ -174,8 +175,9 @@ describe('security model tools', () => {
     expect(effective.missing).toEqual([]);
   });
 
-  it('get_security_object describes a role, including extensions and parents', async () => {
-    const { body } = await call('get_security_object', { type: 'Role', name: 'SampleClerkRole', flatten: true, maxItems: 100 });
+  it.each(['SampleClerkRole', 'sampleclerkrole'])('get_security_object describes role %s, including extensions and parents', async (name) => {
+    const { body } = await call('get_security_object', { type: 'Role', name, flatten: true, maxItems: 100 });
+    expect(body.name).toBe('SampleClerkRole');
     expect(body.label).toBe('Sample clerk');
     expect(body.extensions).toEqual(['SampleClerkRole.Contoso']);
     expect(body.duties.items).toEqual(['SampleApproveDuty', 'SampleMaintainDuty']);
@@ -183,11 +185,16 @@ describe('security model tools', () => {
     expect(body.effective.privileges.total).toBe(3);
   });
 
-  it('get_security_object describes duties and privileges', async () => {
-    const duty = await call('get_security_object', { type: 'Duty', name: 'SampleMaintainDuty', flatten: false, maxItems: 100 });
+  it.each([
+    ['SampleMaintainDuty', 'SampleFormMaintain'],
+    ['samplemaintainduty', 'sampleformmaintain'],
+  ])('get_security_object describes duty %s and privilege %s', async (dutyName, privilegeName) => {
+    const duty = await call('get_security_object', { type: 'Duty', name: dutyName, flatten: false, maxItems: 100 });
+    expect(duty.body.name).toBe('SampleMaintainDuty');
     expect(duty.body.usedByRoles.items).toEqual(['SampleAuditorRole', 'SampleClerkRole']);
 
-    const priv = await call('get_security_object', { type: 'Privilege', name: 'SampleFormMaintain', flatten: false, maxItems: 100 });
+    const priv = await call('get_security_object', { type: 'Privilege', name: privilegeName, flatten: false, maxItems: 100 });
+    expect(priv.body.name).toBe('SampleFormMaintain');
     expect(priv.body.entryPoints.items[0]).toMatchObject({ objectName: 'SampleForm', grants: ['Read', 'Update', 'Create', 'Delete'] });
     expect(priv.body.dataEntityPermissions.items[0]).toMatchObject({ objectName: 'SampleEntity', grants: ['Read', 'Update'] });
     expect(priv.body.usedByDuties.items).toEqual(['SampleMaintainDuty']);
@@ -198,8 +205,10 @@ describe('security model tools', () => {
     expect(result.isError).toBe(true);
   });
 
-  it('find_security_path resolves a form through its menu item to every role', async () => {
-    const { body } = await call('find_security_path', { objectType: 'Form', objectName: 'SampleForm', maxPaths: 100 });
+  it.each([
+    ['Form', 'SampleForm'], ['Form', 'sampleform'], ['MenuItemDisplay', 'sampleform'],
+  ])('find_security_path resolves %s %s to every role', async (objectType, objectName) => {
+    const { body } = await call('find_security_path', { objectType, objectName, maxPaths: 100 });
     expect(body.entryPoints).toEqual([{ type: 'MenuItemDisplay', name: 'SampleForm' }]);
     expect(body.roles).toEqual(['SampleAuditorRole', 'SampleClerkRole', 'SampleManagerRole', 'SampleViewerRole']);
     expect(body.paths.items).toContainEqual({
@@ -228,10 +237,13 @@ describe('security model tools', () => {
     expect(body.note).toMatch(/No indexed menu item/);
   });
 
-  it('analyze_sod_conflicts flags roles holding both duties of a rule', async () => {
+  it.each([
+    ['SampleMaintainDuty', 'SampleApproveDuty'],
+    ['samplemaintainduty', 'SAMPLEAPPROVEDUTY'],
+  ])('analyze_sod_conflicts detects conflicting duties %s and %s', async (dutyA, dutyB) => {
     const { body } = await call('analyze_sod_conflicts', {
       rules: [
-        { name: 'Maintain vs approve', dutyA: 'SampleMaintainDuty', dutyB: 'SampleApproveDuty' },
+        { name: 'Maintain vs approve', dutyA, dutyB },
         { name: 'Unknown', dutyA: 'SampleMaintainDuty', dutyB: 'GhostDuty' },
       ],
       maxConflicts: 200,
@@ -243,6 +255,24 @@ describe('security model tools', () => {
       'SampleViewerRole',
     ]);
     expect(body.unknownDuties).toEqual(['GhostDuty']);
+  });
+
+  it('treats differently cased security references as the same indexed objects', async () => {
+    db.exec('BEGIN');
+    try {
+      db.exec('UPDATE ax_xref SET to_name = lower(to_name); UPDATE ax_security_grants SET target_name = lower(target_name)');
+      const role = expandRole(db, 'SampleClerkRole');
+      expect(role.subRoles).toEqual(['SampleViewerRole']);
+      expect(role.duties).toEqual(['SampleApproveDuty', 'SampleMaintainDuty']);
+      expect([...role.privileges.keys()]).toEqual(['SampleApprovePriv', 'SampleEntityView', 'SampleFormMaintain']);
+      const { body } = await call('find_security_path', { objectType: 'MenuItemDisplay', objectName: 'sampleform', maxPaths: 100 });
+      expect(body.paths.items).toContainEqual({
+        entryPoint: { type: 'MenuItemDisplay', name: 'SampleForm' }, privilege: 'SampleFormMaintain',
+        grants: 'Read,Update,Create,Delete', duty: 'SampleMaintainDuty', role: 'SampleAuditorRole',
+      });
+    } finally {
+      db.exec('ROLLBACK');
+    }
   });
 
   it('diff_roles compares flattened roles', async () => {

@@ -2,6 +2,8 @@
 
 Source: https://github.com/microsoft/Dynamics-365-FastTrack-Implementation-Assets (MIT, sample code).
 Status: Phases 1–7 shipped. The awesome-msdyn365fo submission is a manual step for the maintainer.
+Phases 8–13 (performance, index coverage, generators, intelligence) are proposed in
+[plan-performance-features-intelligence.md](plan-performance-features-intelligence.md).
 
 ## Baseline before Phase 1 (historical)
 - Indexed 7 AOT types: Table, Class, Enum, Form, Query, DataEntity, EDT (+ label files).

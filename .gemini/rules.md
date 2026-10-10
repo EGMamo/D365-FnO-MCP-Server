@@ -1,5 +1,7 @@
 # D365 FnO MCP Server — Project Rules & Context
 
+Canonical cross-provider context lives in `AGENTS.md` and `llms.txt`.
+
 ## Project Purpose
 A **Model Context Protocol (MCP) server** for Microsoft Dynamics 365 Finance & Operations (D365 FnO),
 targeting developers. Gives AI agents deep insight into **local AOT source code** — tables, classes,
@@ -31,10 +33,10 @@ captures and Microsoft release plans.
 ## MCP Tools (54)
 - **Metadata** (`tools/metadata.ts`): search_symbols, get_table_schema, get_class_hierarchy, get_method_signature, find_references, find_usages, get_enum_values, get_edt_details, get_form_datasources, get_query_datasources, get_data_entity_details, get_element_xml, list_objects, list_packages, list_models, get_index_staleness, get_index_stats, get_usage_snapshot_status
 - **Labels** (`tools/labels.ts`): resolve_label, search_labels, resolve_label_by_language, search_labels_fts
-- **Generators** (`tools/generators.ts`): create_coc_extension, create_table_extension, create_class_extension, generate_xpp_class, create_runbase_batch, create_sys_operation
+- **Generators** (`tools/generators.ts`): create_coc_extension, create_table_extension, create_class_extension, create_event_handler, create_form_event_handler, generate_xpp_class, create_runbase_batch, create_sys_operation
 - **Entities / integration** (`tools/entities.ts`): check_entity_odata_readiness, create_data_entity, create_security_privilege, create_readonly_role_for_entities, create_odata_action
 - **Security** (`tools/security.ts`): get_security_object, find_security_path, analyze_sod_conflicts, diff_roles
-- **Code quality** (`tools/codeQuality.ts`, analysis in `src/xpp/`): check_xpp_best_practices, find_field_access, get_bp_findings (after `index-bp`)
+- **Code quality** (`tools/codeQuality.ts`, analysis in `src/xpp/`): check_xpp_best_practices, find_field_access, get_method_source, get_bp_findings (after `index-bp`)
 - **Security customizations** (`tools/security.ts`, `src/security/converter.ts`): convert_security_customizations
 - **Traces** (`tools/traces.ts`): list_trace_sessions, get_top_methods, find_slow_sql, find_n_plus_one, search_trace
 - **Telemetry / batch** (`tools/telemetry.ts`): generate_kql_query, analyze_batch_class

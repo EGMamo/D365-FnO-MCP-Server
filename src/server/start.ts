@@ -208,22 +208,27 @@ export async function startServer(): Promise<void> {
     readiness: { isReady: () => db !== null },
   });
 
+  try {
+    await http.listening;
+  } catch (error) {
+    if (!hosted) requireDb().close();
+    throw error;
+  }
+
   if (hosted) {
     // Listen first so the platform sees a live but unready replica while the
     // bundle is materialized and validated; fail closed if that does not succeed.
-    http.server.once('listening', () => {
-      void activateArtifactIndex()
-        .then(() => {
-          openIndex();
-          logger.info('MCP server ready', { indexDbPath: config.indexDbPath });
-        })
-        .catch((error: unknown) => {
-          logger.fatal('Artifact startup failed; refusing to serve', {
-            error: error instanceof Error ? error.message : String(error),
-          });
-          process.exit(1);
+    void activateArtifactIndex()
+      .then(() => {
+        openIndex();
+        logger.info('MCP server ready', { indexDbPath: config.indexDbPath });
+      })
+      .catch((error: unknown) => {
+        logger.fatal('Artifact startup failed; refusing to serve', {
+          error: error instanceof Error ? error.message : String(error),
         });
-    });
+        process.exit(1);
+      });
   }
 
   let shuttingDown = false;

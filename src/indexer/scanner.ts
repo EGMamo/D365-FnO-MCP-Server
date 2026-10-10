@@ -13,7 +13,7 @@ export async function* scanPackagesDir(dir: string): AsyncGenerator<ScannedFile>
   const searchDir = dir.replace(/\\/g, '/');
   
   const files = await glob([
-    `${searchDir}/**/Ax{Table,Class,Enum,Form,Query,DataEntityView,Edt,SecurityRole,SecurityRoleExtension,SecurityDuty,SecurityDutyExtension,SecurityPrivilege,MenuItemDisplay,MenuItemAction,MenuItemOutput}/*.xml`,
+    `${searchDir}/**/Ax{Table,TableExtension,View,Map,Service,ServiceGroup,Report,Menu,MenuExtension,MenuItemDisplayExtension,MenuItemActionExtension,MenuItemOutputExtension,WorkflowType,WorkflowApproval,WorkflowTask,WorkflowAutomatedTask,WorkflowCategory,AggregateMeasurement,AggregateDimension,KPI,FormExtension,EdtExtension,EnumExtension,DataEntityViewExtension,QueryExtension,Class,Enum,Form,Query,DataEntityView,Edt,SecurityRole,SecurityRoleExtension,SecurityDuty,SecurityDutyExtension,SecurityPrivilege,MenuItemDisplay,MenuItemAction,MenuItemOutput}/*.xml`,
     `${searchDir}/**/AxLabelFile/LabelResources/*/*.label.txt`
   ], { windowsPathsNoEscape: true, stat: true, withFileTypes: true });
 
@@ -39,6 +39,7 @@ export async function* scanPackagesDir(dir: string): AsyncGenerator<ScannedFile>
       AxEnum: 'Enum',
       AxForm: 'Form',
       AxQuery: 'Query',
+      AxDataEntityViewExtension: 'DataEntityExtension',
       AxDataEntityView: 'DataEntity',  // Note: folder is DataEntityView, type is DataEntity
       AxEdt: 'Edt',
       AxSecurityRole: 'SecurityRole',

@@ -44,7 +44,7 @@ describe('capability coverage', () => {
     expect(Object.keys(CAPABILITY_COVERAGE)).toEqual([...ARTIFACT_CAPABILITY_NAMES]);
     expect(
       ARTIFACT_CAPABILITY_NAMES.filter((name) => CAPABILITY_COVERAGE[name].completeness === 'absent')
-    ).toEqual(['workflowServiceMetadata', 'reportingAnalytics', 'reports']);
+    ).toEqual([]);
   });
 
   it('counts indexed items per capability and keeps the declared completeness', () => {
@@ -70,8 +70,14 @@ describe('capability coverage', () => {
     expect(inventory.labelsResources).toMatchObject({ completeness: 'partial', itemCount: 2 });
     expect(inventory.extensions).toMatchObject({ completeness: 'partial', itemCount: 1 });
     expect(inventory.securityGraphs).toMatchObject({ completeness: 'partial', itemCount: 5 });
-    expect(inventory.reports).toEqual({ completeness: 'absent', note: CAPABILITY_COVERAGE.reports.note });
-    expect(inventory.workflowServiceMetadata).not.toHaveProperty('itemCount');
+    expect(inventory.reports).toMatchObject({ completeness: 'absent', itemCount: 0 });
+    expect(inventory.workflowServiceMetadata).toMatchObject({ completeness: 'absent', itemCount: 0 });
+
+    addObjects('Report', 2);
+    addObjects('Service', 1);
+    const withNameOnly = computeCapabilityInventory(db);
+    expect(withNameOnly.reports).toMatchObject({ completeness: 'partial', itemCount: 2 });
+    expect(withNameOnly.workflowServiceMetadata).toMatchObject({ completeness: 'partial', itemCount: 1 });
   });
 
   it('reports a capability absent when the index holds none of its items', () => {
