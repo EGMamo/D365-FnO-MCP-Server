@@ -321,12 +321,12 @@ describe('buildIndex with fixtures', () => {
     expect(stats.collisions).toBe(0);
   });
 
-  it('skips FTS rebuild when an incremental run has no changed content', async () => {
+  it('skips the FTS rebuild on an incremental run', async () => {
     const info = vi.spyOn(logger, 'info').mockImplementation(() => {});
     try {
       const stats = await buildIndex(db, root, false);
       expect(stats.skipped).toBe(stats.total);
-      expect(info).toHaveBeenCalledWith('Skipping FTS rebuild; no indexed content changed');
+      expect(info).toHaveBeenCalledWith('Skipping FTS rebuild; changed rows were updated in place');
       expect(info).not.toHaveBeenCalledWith('Rebuilding FTS index', expect.anything());
     } finally {
       info.mockRestore();
@@ -817,7 +817,7 @@ describe('upgrade path from a pre-existing populated index', () => {
       expect(stats.updated).toBe(0);
       expect(infoSpy.mock.calls.some(([msg]) => msg === 'Rebuilding FTS index')).toBe(false);
       expect(
-        infoSpy.mock.calls.some(([msg]) => msg === 'Skipping FTS rebuild; no indexed content changed')
+        infoSpy.mock.calls.some(([msg]) => msg === 'Skipping FTS rebuild; changed rows were updated in place')
       ).toBe(true);
       infoSpy.mockRestore();
 
@@ -1053,6 +1053,61 @@ describe('Incremental runs', () => {
     expect(stats.skipped).toBe(1);
     expect(ftsHits()).toEqual({ n: 1 });
     expect(getMeta(incDb, META_KEYS.ftsPending)).toBe('0');
+  });
+
+  it('keeps both search indexes current through adds, edits and deletes without a rebuild', async () => {
+    const classDir = path.join(incRoot, 'TestPackage', 'TestModel', 'AxClass');
+    const labelDir = path.join(incRoot, 'TestPackage', 'TestModel', 'AxLabelFile', 'LabelResources', 'en-US');
+    const labelFile = path.join(labelDir, 'Inc.en-US.label.txt');
+    fs.copyFileSync(path.join(fixturesDir, 'AxClassSample.xml'), path.join(classDir, 'KeptClass.xml'));
+    fs.copyFileSync(path.join(fixturesDir, 'AxClassSample.xml'), path.join(classDir, 'GoneClass.xml'));
+    fs.mkdirSync(labelDir, { recursive: true });
+    fs.writeFileSync(labelFile, 'Greeting=Hello there\n');
+    await buildIndex(incDb, incRoot, true);
+
+    fs.rmSync(path.join(classDir, 'GoneClass.xml'));
+    fs.copyFileSync(path.join(fixturesDir, 'AxClassSample.xml'), path.join(classDir, 'AddedClass.xml'));
+    fs.writeFileSync(labelFile, 'Greeting=Goodbye now\n');
+    const later = new Date(Date.now() + 5000);
+    fs.utimesSync(labelFile, later, later);
+
+    const info = vi.spyOn(logger, 'info').mockImplementation(() => {});
+    try {
+      const stats = await buildIndex(incDb, incRoot, false);
+      expect(stats).toMatchObject({ added: 1, updated: 1, deleted: 1 });
+      expect(info).not.toHaveBeenCalledWith('Rebuilding FTS index', expect.anything());
+    } finally {
+      info.mockRestore();
+    }
+
+    const objectHits = (name: string) =>
+      (incDb.prepare(`SELECT COUNT(*) AS n FROM ax_fts WHERE ax_fts MATCH ?`).get(`"${name}"`) as { n: number }).n;
+    const labelHits = (word: string) =>
+      (incDb.prepare(`SELECT COUNT(*) AS n FROM ax_labels_fts WHERE ax_labels_fts MATCH ?`).get(word) as { n: number }).n;
+    expect(objectHits('AddedClass')).toBe(1);
+    expect(objectHits('KeptClass')).toBe(1);
+    expect(objectHits('GoneClass')).toBe(0);
+    expect(labelHits('Goodbye')).toBe(1);
+    expect(labelHits('Hello')).toBe(0);
+    // Throws when an external-content FTS table disagrees with its content table.
+    incDb.exec(`INSERT INTO ax_fts(ax_fts, rank) VALUES('integrity-check', 1)`);
+    incDb.exec(`INSERT INTO ax_labels_fts(ax_labels_fts, rank) VALUES('integrity-check', 1)`);
+  });
+
+  it('keeps the other files of a batch when one fails to parse', async () => {
+    const classDir = path.join(incRoot, 'TestPackage', 'TestModel', 'AxClass');
+    for (let i = 0; i < 5; i++) {
+      fs.copyFileSync(path.join(fixturesDir, 'AxClassSample.xml'), path.join(classDir, `Good${i}.xml`));
+    }
+    fs.writeFileSync(path.join(classDir, 'Broken.xml'), '<AxClass><Name>Broken</Name');
+
+    const stats = await buildIndex(incDb, incRoot, true);
+
+    expect(stats.errors).toBe(1);
+    expect(stats.added).toBe(6);
+    expect(getObjectByName(incDb, 'Good4', 'Class')).not.toBeNull();
+    expect(getObjectByName(incDb, 'Broken', 'Class')).toBeNull();
+    expect(incDb.isTransaction).toBe(false);
   });
 
   it('re-reads a file restored with an older modification time', async () => {

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Indexing is faster: the scan reads only `<Package>/<Model>/Ax<Type>/` instead of the whole tree
+  (it no longer walks `bin/` or `XppMetadata/`), files are read ahead and written 500 per transaction,
+  the change check reads from a covering index instead of the XML row, and triggers keep the FTS
+  indexes current so an incremental run no longer rebuilds them. On a 29k-object synthetic tree a
+  cold build went from about 25s to 14s.
+
 ### Added
 
 - Tools: `analyze_impact` (bounded transitive dependents over declared references), `get_method_source`

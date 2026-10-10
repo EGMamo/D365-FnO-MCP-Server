@@ -40,6 +40,19 @@ function transaction<Args extends unknown[], Result>(
   fn: (...args: Args) => Result
 ): (...args: Args) => Result {
   return (...args: Args): Result => {
+    // Inside an open transaction (an index run's batch), a savepoint keeps
+    // this unit all-or-nothing without committing the batch around it.
+    if (db.isTransaction) {
+      db.exec('SAVEPOINT unit');
+      try {
+        const result = fn(...args);
+        db.exec('RELEASE unit');
+        return result;
+      } catch (err) {
+        db.exec('ROLLBACK TO unit; RELEASE unit');
+        throw err;
+      }
+    }
     db.exec('BEGIN');
     try {
       const result = fn(...args);
@@ -65,8 +78,8 @@ export function openDb(dbPath: string): Database {
   const db = new NodeDatabaseSync(dbPath);
   try {
   db.exec('PRAGMA journal_mode = WAL');
-  // An index run commits once per file. With WAL, NORMAL skips the disk flush on each of those
-  // commits; a power loss can drop the last commits but cannot corrupt the database.
+  // An index run commits once per batch of files. With WAL, NORMAL skips the disk flush on each
+  // of those commits; a power loss can drop the last commits but cannot corrupt the database.
   db.exec('PRAGMA synchronous = NORMAL');
   // Required for ON DELETE CASCADE on child tables (SQLite defaults to off).
   db.exec('PRAGMA foreign_keys = ON');
@@ -205,6 +218,9 @@ export function openDb(dbPath: string): Database {
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_ax_objects_name_nocase ON ax_objects(name COLLATE NOCASE, type, name);
     CREATE INDEX IF NOT EXISTS idx_ax_objects_package ON ax_objects(package, type, name, id);
+    -- Covers the indexer's change check, its path snapshot and the staleness report. file_mtime
+    -- sits after raw_xml in the row, so reading it from the table walks the XML's overflow pages.
+    CREATE INDEX IF NOT EXISTS idx_ax_objects_change_check ON ax_objects(name, type, file_mtime, file_path);
     CREATE INDEX IF NOT EXISTS idx_ax_fields_object_id ON ax_fields(object_id);
     CREATE INDEX IF NOT EXISTS idx_ax_methods_object_id ON ax_methods(object_id);
     CREATE INDEX IF NOT EXISTS idx_ax_enum_values_object_id ON ax_enum_values(object_id);
@@ -224,6 +240,8 @@ export function openDb(dbPath: string): Database {
       updated_at TEXT NOT NULL
     );
   `);
+  createObjectFtsTriggers(db);
+  createLabelFtsTriggers(db);
   createUsageSchema(db);
   createTraceSchema(db);
   createReleasePlanSchema(db);
@@ -641,8 +659,9 @@ export function deleteXrefsFrom(db: Database, fromType: string, fromName: string
  * native resource churn.
  */
 export function createIndexWriter(db: Database) {
+  // Without ANALYZE statistics SQLite picks the UNIQUE(type, name) index and reads the row.
   const selectExistingObject = db.prepare(
-    `SELECT id, file_mtime, file_path FROM ax_objects WHERE name = ? AND type = ?`
+    `SELECT id, file_mtime, file_path FROM ax_objects INDEXED BY idx_ax_objects_change_check WHERE name = ? AND type = ?`
   );
   const selectLabelSource = db.prepare(
     `SELECT source_file, file_mtime, label_count FROM ax_label_sources WHERE source_file = ?`
@@ -883,6 +902,60 @@ export function createIndexWriter(db: Database) {
       if (xrefs && xrefs.length > 0) insertXrefs(xrefs);
     },
   };
+}
+
+/*
+ * Triggers keep ax_fts and ax_labels_fts in step with their content tables, so
+ * an index run that changes a few files updates only those rows. A run that
+ * rewrites most rows (a first build, --force, or recovery from an interrupted
+ * run) drops them, then rebuilds the FTS table once and recreates them.
+ */
+export function createObjectFtsTriggers(db: Database): void {
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS ax_objects_fts_ai AFTER INSERT ON ax_objects BEGIN
+      INSERT INTO ax_fts(rowid, name, type, package) VALUES (new.id, new.name, new.type, new.package);
+    END;
+    CREATE TRIGGER IF NOT EXISTS ax_objects_fts_ad AFTER DELETE ON ax_objects BEGIN
+      INSERT INTO ax_fts(ax_fts, rowid, name, type, package) VALUES ('delete', old.id, old.name, old.type, old.package);
+    END;
+    CREATE TRIGGER IF NOT EXISTS ax_objects_fts_au AFTER UPDATE OF name, type, package ON ax_objects
+    WHEN old.name IS NOT new.name OR old.type IS NOT new.type OR old.package IS NOT new.package BEGIN
+      INSERT INTO ax_fts(ax_fts, rowid, name, type, package) VALUES ('delete', old.id, old.name, old.type, old.package);
+      INSERT INTO ax_fts(rowid, name, type, package) VALUES (new.id, new.name, new.type, new.package);
+    END;
+  `);
+}
+
+export function dropObjectFtsTriggers(db: Database): void {
+  db.exec(`
+    DROP TRIGGER IF EXISTS ax_objects_fts_ai;
+    DROP TRIGGER IF EXISTS ax_objects_fts_ad;
+    DROP TRIGGER IF EXISTS ax_objects_fts_au;
+  `);
+}
+
+export function createLabelFtsTriggers(db: Database): void {
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS ax_labels_fts_ai AFTER INSERT ON ax_labels BEGIN
+      INSERT INTO ax_labels_fts(rowid, value) VALUES (new.id, new.value);
+    END;
+    CREATE TRIGGER IF NOT EXISTS ax_labels_fts_ad AFTER DELETE ON ax_labels BEGIN
+      INSERT INTO ax_labels_fts(ax_labels_fts, rowid, value) VALUES ('delete', old.id, old.value);
+    END;
+    CREATE TRIGGER IF NOT EXISTS ax_labels_fts_au AFTER UPDATE OF value ON ax_labels
+    WHEN old.value IS NOT new.value BEGIN
+      INSERT INTO ax_labels_fts(ax_labels_fts, rowid, value) VALUES ('delete', old.id, old.value);
+      INSERT INTO ax_labels_fts(rowid, value) VALUES (new.id, new.value);
+    END;
+  `);
+}
+
+export function dropLabelFtsTriggers(db: Database): void {
+  db.exec(`
+    DROP TRIGGER IF EXISTS ax_labels_fts_ai;
+    DROP TRIGGER IF EXISTS ax_labels_fts_ad;
+    DROP TRIGGER IF EXISTS ax_labels_fts_au;
+  `);
 }
 
 export function rebuildFts(db: Database) {

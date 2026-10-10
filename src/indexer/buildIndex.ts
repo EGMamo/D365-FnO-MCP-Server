@@ -1,5 +1,5 @@
 import type { Database } from './db.js';
-import { parseLabelFileName, scanPackagesDir } from './scanner.js';
+import { parseLabelFileName, scanPackagesDir, type ScannedFile } from './scanner.js';
 import * as dbUtils from './db.js';
 import * as parser from './parser.js';
 import { getUsageSnapshotStatus } from './xrefUsage.js';
@@ -16,6 +16,26 @@ const MAX_PRUNE_ERROR_RATIO = 0.5;
 
 /** Minimum share of the already-indexed objects a scan must overlap before pruning is allowed. */
 const MIN_SCANNED_OBJECT_RATIO = 0.5;
+
+/** Files written per transaction. */
+const INDEX_BATCH_FILES = 500;
+
+/** Files read from disk ahead of the one being parsed and written. */
+const READ_AHEAD = 32;
+
+interface PendingFile {
+  file: ScannedFile;
+  existing: dbUtils.ExistingObjectRow | undefined;
+  read: Promise<{ content?: string; error?: unknown }>;
+}
+
+/** Settles with the error instead of rejecting, so a queued read never goes unhandled. */
+function readContent(filePath: string): PendingFile['read'] {
+  return fs.readFile(filePath, 'utf-8').then(
+    (content) => ({ content }),
+    (error: unknown) => ({ error })
+  );
+}
 
 export interface IndexStats {
   total: number;
@@ -113,11 +133,6 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
   // (type|name) -> file path of the object that won the key during this run.
   const seenKeys = new Map<string, string>();
   const storeRawXml = shouldStoreRawXml();
-  // A run that stopped before its FTS rebuild left rows the search tables do not know about.
-  const ftsPending = dbUtils.getMeta(db, dbUtils.META_KEYS.ftsPending) === '1';
-  let objectFtsDirty = force || ftsPending;
-  let labelFtsDirty = force || ftsPending;
-  dbUtils.setMeta(db, dbUtils.META_KEYS.ftsPending, '1');
   let labelsChanged = false;
 
   // Captured before the scan so the prune magnitude guard compares against the
@@ -126,60 +141,314 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
   const preScanObjectPaths = dbUtils.listObjectPaths(db);
   const preScanObjectCount = preScanObjectPaths.length;
 
-  // Older indexes keyed labels differently; drop them so every label file is read again.
+  // Triggers keep the FTS tables current row by row. A run that rewrites most
+  // rows drops them and rebuilds the FTS table once at the end instead; a run
+  // that stopped before that rebuild left rows the search tables do not know about.
   const builtSchema = Number(dbUtils.getMeta(db, dbUtils.META_KEYS.schemaVersion) ?? 0);
-  if (builtSchema < dbUtils.LABEL_IDS_SCHEMA_VERSION) {
-    const hadLabels = db.prepare(`SELECT 1 FROM ax_labels LIMIT 1`).get() !== undefined;
+  const relabel = builtSchema < dbUtils.LABEL_IDS_SCHEMA_VERSION;
+  const ftsPending = dbUtils.getMeta(db, dbUtils.META_KEYS.ftsPending) === '1';
+  const hasLabels = db.prepare(`SELECT 1 FROM ax_labels LIMIT 1`).get() !== undefined;
+  const rebuildObjectFts = force || ftsPending || preScanObjectCount === 0;
+  const rebuildLabelFts = force || ftsPending || relabel || !hasLabels;
+  if (rebuildObjectFts || rebuildLabelFts) dbUtils.setMeta(db, dbUtils.META_KEYS.ftsPending, '1');
+  if (rebuildObjectFts) dbUtils.dropObjectFtsTriggers(db);
+  if (rebuildLabelFts) dbUtils.dropLabelFtsTriggers(db);
+
+  // Older indexes keyed labels differently; drop them so every label file is read again.
+  if (relabel) {
     db.exec('DELETE FROM ax_labels; DELETE FROM ax_label_sources;');
-    if (hadLabels) {
-      labelFtsDirty = true;
+    if (hasLabels) {
       logger.info('Re-reading all label files: the index was built by an older version', { schemaVersion: builtSchema });
     }
   }
 
-  for await (const file of scanPackagesDir(packagesDir)) {
-    stats.total++;
-    
-    if (stats.total % 500 === 0) {
-      logger.info('Indexing progress', { files: stats.total });
-    }
+  const recordFailure = (file: ScannedFile, err: unknown) => {
+    stats.errors++;
+    stats.errorsByType[file.type] = (stats.errorsByType[file.type] ?? 0) + 1;
+    logger.error('Failed to index file', { filePath: file.filePath, message: String(err) });
+  };
 
-    if (file.type === 'Label') {
-      seenLabelFiles.add(file.filePath);
-    } else {
-      seenObjectFiles.add(file.filePath);
+  const writeObject = (file: ScannedFile, existing: dbUtils.ExistingObjectRow | undefined, content: string) => {
+    // Keep the previous mtime until parsing succeeds, so a failed parse does not
+    // permanently poison the incremental index by marking the object as up to date.
+    const xrefs: dbUtils.XrefInput[] = [];
 
-      const key = `${file.type}|${file.name}`;
-      const winner = seenKeys.get(key);
-      if (winner !== undefined) {
-        stats.collisions++;
-        logger.warn(`Collision: ${file.type} ${file.name} defined in both ${winner} and ${file.filePath}`, {
-          type: file.type,
-          name: file.name,
-          keptPath: winner,
-          ignoredPath: file.filePath,
-        });
-        continue;
-      }
-      seenKeys.set(key, file.filePath);
-    }
+    writer.runInTransaction(() => {
+      const objectId = writer.upsertObject({
+        type: file.type,
+        name: file.name,
+        package: file.package,
+        model: file.model,
+        file_path: file.filePath,
+        raw_xml: storeRawXml ? content : null,
+        file_mtime: existing?.file_mtime ?? 0
+      });
 
-    try {
-      const existing = file.type === 'Label'
-        ? undefined
-        : writer.getExistingObject(file.name, file.type);
-
-      if (file.type === 'Label') {
-        // Mirrors the object mtime skip. Cases where another source currently
-        // owns some of this file's labels are repaired by the recovery pass
-        // after the scan instead of by re-reading the file on every run.
-        const existingLabelSource = writer.getLabelSource(file.filePath);
-        if (!force && existingLabelSource && existingLabelSource.file_mtime === file.mtime) {
-          stats.skipped++;
-          continue;
+      switch (file.type) {
+        case 'Table': {
+          const parsed = parser.parseAxTable(content, file.name, file.package);
+          writer.upsertFields(objectId, parsed.fields);
+          writer.upsertMethods(objectId, parsed.methods);
+          writer.upsertProperties(objectId, {
+            label: parsed.label,
+            extends: parsed.extends,
+            saveDataPerCompany: parsed.saveDataPerCompany,
+            indexes: parsed.indexes.join(','),
+          });
+          if (parsed.extends) {
+            xrefs.push({ fromType: 'Table', fromName: file.name, toType: 'Table', toName: parsed.extends, xrefKind: 'extends' });
+          }
+          for (const f of parsed.fields) {
+            if (f.edt) {
+              xrefs.push({ fromType: 'Table', fromName: file.name, toType: 'Edt', toName: f.edt, xrefKind: 'uses' });
+            }
+          }
+          break;
         }
+        case 'TableExtension': {
+          const parsed = parser.parseAxTableExtension(content, file.name, file.package);
+          writer.upsertFields(objectId, parsed.fields);
+          writer.upsertProperties(objectId, { indexes: parsed.indexes.join(',') });
+          const baseTable = file.name.split('.')[0];
+          if (baseTable && baseTable !== file.name) {
+            xrefs.push({ fromType: 'TableExtension', fromName: file.name, toType: 'Table', toName: baseTable, xrefKind: 'extends' });
+          }
+          for (const f of parsed.fields) {
+            if (f.edt) {
+              xrefs.push({ fromType: 'TableExtension', fromName: file.name, toType: 'Edt', toName: f.edt, xrefKind: 'uses' });
+            }
+          }
+          break;
+        }
+        case 'FormExtension':
+        case 'EdtExtension':
+        case 'EnumExtension':
+        case 'DataEntityExtension':
+        case 'QueryExtension':
+        case 'MenuExtension':
+        case 'MenuItemDisplayExtension':
+        case 'MenuItemActionExtension':
+        case 'MenuItemOutputExtension': {
+          if (file.type === 'EnumExtension') {
+            writer.upsertEnumValues(objectId, parser.parseAxEnum(content, file.name, file.package).values);
+          }
+          // Extensions are named Base.Suffix; link them to the object they extend.
+          const baseType = file.type.slice(0, -'Extension'.length);
+          const baseName = file.name.split('.')[0];
+          if (baseName && baseName !== file.name) {
+            xrefs.push({ fromType: file.type, fromName: file.name, toType: baseType, toName: baseName, xrefKind: 'extends' });
+          }
+          break;
+        }
+        case 'Service': {
+          const parsed = parser.parseAxService(content, file.name, file.package);
+          writer.upsertProperties(objectId, {
+            class: parsed.className,
+            externalName: parsed.externalName,
+            operations: parsed.operations.map((o) => o.method || o.name).join(','),
+          });
+          if (parsed.className) {
+            xrefs.push({ fromType: 'Service', fromName: file.name, toType: 'Class', toName: parsed.className, xrefKind: 'service_class' });
+          }
+          break;
+        }
+        case 'ServiceGroup': {
+          const parsed = parser.parseAxServiceGroup(content, file.name, file.package);
+          for (const service of parsed.services) {
+            xrefs.push({ fromType: 'ServiceGroup', fromName: file.name, toType: 'Service', toName: service, xrefKind: 'group_service' });
+          }
+          break;
+        }
+        case 'View': {
+          const parsed = parser.parseAxView(content, file.name, file.package);
+          writer.upsertFields(objectId, parsed.fields);
+          writer.upsertDataSources(objectId, parsed.dataSources);
+          writer.upsertProperties(objectId, { label: parsed.label });
+          for (const ds of parsed.dataSources) {
+            if (ds.table) {
+              xrefs.push({ fromType: 'View', fromName: file.name, toType: 'Table', toName: ds.table, xrefKind: 'datasource' });
+            }
+          }
+          break;
+        }
+        case 'Map': {
+          const parsed = parser.parseAxMap(content, file.name, file.package);
+          writer.upsertFields(objectId, parsed.fields);
+          writer.upsertProperties(objectId, { label: parsed.label });
+          for (const table of parsed.mappings) {
+            xrefs.push({ fromType: 'Map', fromName: file.name, toType: 'Table', toName: table, xrefKind: 'maps' });
+          }
+          break;
+        }
+        case 'Class': {
+          const parsed = parser.parseAxClass(content, file.name, file.package);
+          writer.upsertMethods(objectId, parsed.methods);
+          writer.upsertProperties(objectId, {
+            extends: parsed.extends,
+            implements: parsed.implements.join(','),
+            isAbstract: parsed.isAbstract,
+            isFinal: parsed.isFinal,
+          });
+          if (parsed.extends) {
+            xrefs.push({ fromType: 'Class', fromName: file.name, toType: 'Class', toName: parsed.extends, xrefKind: 'extends' });
+          }
+          for (const iface of parsed.implements) {
+            xrefs.push({ fromType: 'Class', fromName: file.name, toType: 'Class', toName: iface, xrefKind: 'implements' });
+          }
+          break;
+        }
+        case 'Enum': {
+          const parsed = parser.parseAxEnum(content, file.name, file.package);
+          writer.upsertEnumValues(objectId, parsed.values);
+          writer.upsertProperties(objectId, { label: parsed.label, isExtensible: parsed.isExtensible });
+          break;
+        }
+        case 'Form': {
+          const parsed = parser.parseAxForm(content, file.name, file.package);
+          writer.upsertDataSources(objectId, parsed.dataSources);
+          writer.upsertFormControls(objectId, parsed.controls);
+          writer.upsertProperties(objectId, {
+            pattern: parsed.pattern,
+            patternVersion: parsed.patternVersion,
+            caption: parsed.caption,
+          });
+          for (const ds of parsed.dataSources) {
+            if (ds.table) {
+              xrefs.push({ fromType: 'Form', fromName: file.name, toType: 'Table', toName: ds.table, xrefKind: 'datasource' });
+            }
+          }
+          break;
+        }
+        case 'Query': {
+          const parsed = parser.parseAxQuery(content, file.name, file.package);
+          writer.upsertDataSources(objectId, parsed.dataSources);
+          writer.upsertProperties(objectId, { title: parsed.title });
+          for (const ds of parsed.dataSources) {
+            if (ds.table) {
+              xrefs.push({ fromType: 'Query', fromName: file.name, toType: 'Table', toName: ds.table, xrefKind: 'datasource' });
+            }
+          }
+          break;
+        }
+        case 'DataEntity': {
+          const parsed = parser.parseAxDataEntity(content, file.name, file.package);
+          writer.upsertFields(objectId, parsed.fields);
+          writer.upsertDataSources(objectId, parsed.dataSources);
+          writer.upsertProperties(objectId, {
+            publicEntityName: parsed.publicEntityName,
+            publicCollectionName: parsed.publicCollectionName,
+            stagingTable: parsed.stagingTable,
+            primaryKey: parsed.primaryKey,
+            isPublic: parsed.isPublic,
+          });
+          for (const ds of parsed.dataSources) {
+            if (ds.table) {
+              xrefs.push({ fromType: 'DataEntity', fromName: file.name, toType: 'Table', toName: ds.table, xrefKind: 'datasource' });
+            }
+          }
+          break;
+        }
+        case 'Edt': {
+          const parsed = parser.parseAxEdt(content, file.name, file.package);
+          writer.upsertProperties(objectId, {
+            extends: parsed.extends,
+            label: parsed.labelId,
+            helpText: parsed.helpText,
+            stringSize: parsed.stringSize,
+            edtType: parsed.edtType,
+          });
+          if (parsed.extends) {
+            xrefs.push({ fromType: 'Edt', fromName: file.name, toType: 'Edt', toName: parsed.extends, xrefKind: 'extends' });
+          }
+          break;
+        }
+        case 'SecurityRole':
+        case 'SecurityRoleExtension': {
+          const parsed = parser.parseAxSecurityRole(content, file.name, file.package);
+          writer.upsertProperties(objectId, { label: parsed.label, description: parsed.description });
+          const from = { fromType: file.type, fromName: file.name };
+          for (const duty of parsed.duties) {
+            xrefs.push({ ...from, toType: 'SecurityDuty', toName: duty, xrefKind: 'role_duty' });
+          }
+          for (const priv of parsed.privileges) {
+            xrefs.push({ ...from, toType: 'SecurityPrivilege', toName: priv, xrefKind: 'role_privilege' });
+          }
+          for (const role of parsed.subRoles) {
+            xrefs.push({ ...from, toType: 'SecurityRole', toName: role, xrefKind: 'subrole' });
+          }
+          if (file.type === 'SecurityRoleExtension') {
+            xrefs.push({ ...from, toType: 'SecurityRole', toName: extensionBaseName(file.name), xrefKind: 'extends' });
+          }
+          break;
+        }
+        case 'SecurityDuty':
+        case 'SecurityDutyExtension': {
+          const parsed = parser.parseAxSecurityDuty(content, file.name, file.package);
+          writer.upsertProperties(objectId, { label: parsed.label, description: parsed.description });
+          for (const priv of parsed.privileges) {
+            xrefs.push({ fromType: file.type, fromName: file.name, toType: 'SecurityPrivilege', toName: priv, xrefKind: 'duty_privilege' });
+          }
+          if (file.type === 'SecurityDutyExtension') {
+            xrefs.push({ fromType: file.type, fromName: file.name, toType: 'SecurityDuty', toName: extensionBaseName(file.name), xrefKind: 'extends' });
+          }
+          break;
+        }
+        case 'SecurityPrivilege': {
+          const parsed = parser.parseAxSecurityPrivilege(content, file.name, file.package);
+          writer.upsertProperties(objectId, { label: parsed.label, description: parsed.description });
+          writer.upsertSecurityGrants(objectId, parsed.grants);
+          for (const g of parsed.grants) {
+            xrefs.push({
+              fromType: 'SecurityPrivilege',
+              fromName: file.name,
+              toType: g.objectType,
+              toName: g.objectName,
+              xrefKind: g.kind === 'dataentity' ? 'entity_permission' : 'entrypoint',
+            });
+          }
+          break;
+        }
+        case 'MenuItemDisplay':
+        case 'MenuItemAction':
+        case 'MenuItemOutput': {
+          const parsed = parser.parseAxMenuItem(content, file.type, file.name);
+          writer.upsertProperties(objectId, {
+            label: parsed.label,
+            object: parsed.object,
+            objectType: parsed.objectType,
+            configurationKey: parsed.configurationKey,
+            linkedPermissionObject: parsed.linkedPermissionObject,
+          });
+          if (parsed.object) {
+            xrefs.push({ fromType: file.type, fromName: file.name, toType: parsed.objectType, toName: parsed.object, xrefKind: 'menuitem_target' });
+          }
+          break;
+        }
+      }
 
-        const content = await fs.readFile(file.filePath, 'utf-8');
+      writer.deleteXrefsFrom(file.type, file.name);
+      writer.upsertXrefs(xrefs);
+
+      writer.updateObjectMtime(file.mtime, objectId);
+    });
+  };
+
+  // Files are written in batches of INDEX_BATCH_FILES per transaction; each
+  // file is a savepoint inside it, so a failed parse still rolls back alone.
+  let batchFiles = 0;
+  const commitBatch = () => {
+    batchFiles = 0;
+    if (db.isTransaction) db.exec('COMMIT');
+  };
+
+  // Up to READ_AHEAD files are read from disk while earlier ones are parsed and written.
+  const queue: PendingFile[] = [];
+  const finish = async ({ file, existing, read }: PendingFile) => {
+    try {
+      const { content, error } = await read;
+      if (content === undefined) throw error;
+      if (!db.isTransaction) db.exec('BEGIN');
+      if (file.type === 'Label') {
         const labels = readLabelFile(file.filePath, content);
         writer.runInTransaction(() => {
           writer.upsertLabels(labels, file.filePath);
@@ -187,293 +456,78 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
         });
         stats.updated++;
         labelsChanged = true;
-        labelFtsDirty = true;
-        continue;
+      } else {
+        writeObject(file, existing, content);
+        if (!existing) stats.added++;
+        else stats.updated++;
+      }
+    } catch (err) {
+      recordFailure(file, err);
+    }
+    if (++batchFiles >= INDEX_BATCH_FILES) commitBatch();
+  };
+
+  try {
+    for await (const file of scanPackagesDir(packagesDir)) {
+      stats.total++;
+
+      if (stats.total % 500 === 0) {
+        logger.info('Indexing progress', { files: stats.total });
       }
 
-      // A path change (rename/move) must always be re-indexed, even when the
-      // mtime suggests the content is unchanged. Any mtime change counts, not
-      // only a newer one: restoring an older copy keeps that copy's time.
-      const samePath = existing?.file_path === file.filePath;
-      if (!force && existing && samePath && existing.file_mtime === file.mtime) {
-        stats.skipped++;
-        continue;
+      if (file.type === 'Label') {
+        seenLabelFiles.add(file.filePath);
+      } else {
+        seenObjectFiles.add(file.filePath);
+
+        const key = `${file.type}|${file.name}`;
+        const winner = seenKeys.get(key);
+        if (winner !== undefined) {
+          stats.collisions++;
+          logger.warn(`Collision: ${file.type} ${file.name} defined in both ${winner} and ${file.filePath}`, {
+            type: file.type,
+            name: file.name,
+            keptPath: winner,
+            ignoredPath: file.filePath,
+          });
+          continue;
+        }
+        seenKeys.set(key, file.filePath);
       }
 
-      const content = await fs.readFile(file.filePath, 'utf-8');
-
-      // Keep the previous mtime until parsing succeeds, so a failed parse does not
-      // permanently poison the incremental index by marking the object as up to date.
-      const xrefs: dbUtils.XrefInput[] = [];
-
-      writer.runInTransaction(() => {
-        const objectId = writer.upsertObject({
-          type: file.type,
-          name: file.name,
-          package: file.package,
-          model: file.model,
-          file_path: file.filePath,
-          raw_xml: storeRawXml ? content : null,
-          file_mtime: existing?.file_mtime ?? 0
-        });
-
-        switch (file.type) {
-          case 'Table': {
-            const parsed = parser.parseAxTable(content, file.name, file.package);
-            writer.upsertFields(objectId, parsed.fields);
-            writer.upsertMethods(objectId, parsed.methods);
-            writer.upsertProperties(objectId, {
-              label: parsed.label,
-              extends: parsed.extends,
-              saveDataPerCompany: parsed.saveDataPerCompany,
-              indexes: parsed.indexes.join(','),
-            });
-            if (parsed.extends) {
-              xrefs.push({ fromType: 'Table', fromName: file.name, toType: 'Table', toName: parsed.extends, xrefKind: 'extends' });
-            }
-            for (const f of parsed.fields) {
-              if (f.edt) {
-                xrefs.push({ fromType: 'Table', fromName: file.name, toType: 'Edt', toName: f.edt, xrefKind: 'uses' });
-              }
-            }
-            break;
+      try {
+        let existing: dbUtils.ExistingObjectRow | undefined;
+        if (file.type === 'Label') {
+          // Mirrors the object mtime skip. Cases where another source currently
+          // owns some of this file's labels are repaired by the recovery pass
+          // after the scan instead of by re-reading the file on every run.
+          const existingLabelSource = writer.getLabelSource(file.filePath);
+          if (!force && existingLabelSource && existingLabelSource.file_mtime === file.mtime) {
+            stats.skipped++;
+            continue;
           }
-          case 'TableExtension': {
-            const parsed = parser.parseAxTableExtension(content, file.name, file.package);
-            writer.upsertFields(objectId, parsed.fields);
-            writer.upsertProperties(objectId, { indexes: parsed.indexes.join(',') });
-            const baseTable = file.name.split('.')[0];
-            if (baseTable && baseTable !== file.name) {
-              xrefs.push({ fromType: 'TableExtension', fromName: file.name, toType: 'Table', toName: baseTable, xrefKind: 'extends' });
-            }
-            for (const f of parsed.fields) {
-              if (f.edt) {
-                xrefs.push({ fromType: 'TableExtension', fromName: file.name, toType: 'Edt', toName: f.edt, xrefKind: 'uses' });
-              }
-            }
-            break;
-          }
-          case 'FormExtension':
-          case 'EdtExtension':
-          case 'EnumExtension':
-          case 'DataEntityExtension':
-          case 'QueryExtension':
-          case 'MenuExtension':
-          case 'MenuItemDisplayExtension':
-          case 'MenuItemActionExtension':
-          case 'MenuItemOutputExtension': {
-            if (file.type === 'EnumExtension') {
-              writer.upsertEnumValues(objectId, parser.parseAxEnum(content, file.name, file.package).values);
-            }
-            // Extensions are named Base.Suffix; link them to the object they extend.
-            const baseType = file.type.slice(0, -'Extension'.length);
-            const baseName = file.name.split('.')[0];
-            if (baseName && baseName !== file.name) {
-              xrefs.push({ fromType: file.type, fromName: file.name, toType: baseType, toName: baseName, xrefKind: 'extends' });
-            }
-            break;
-          }
-          case 'Service': {
-            const parsed = parser.parseAxService(content, file.name, file.package);
-            writer.upsertProperties(objectId, {
-              class: parsed.className,
-              externalName: parsed.externalName,
-              operations: parsed.operations.map((o) => o.method || o.name).join(','),
-            });
-            if (parsed.className) {
-              xrefs.push({ fromType: 'Service', fromName: file.name, toType: 'Class', toName: parsed.className, xrefKind: 'service_class' });
-            }
-            break;
-          }
-          case 'ServiceGroup': {
-            const parsed = parser.parseAxServiceGroup(content, file.name, file.package);
-            for (const service of parsed.services) {
-              xrefs.push({ fromType: 'ServiceGroup', fromName: file.name, toType: 'Service', toName: service, xrefKind: 'group_service' });
-            }
-            break;
-          }
-          case 'View': {
-            const parsed = parser.parseAxView(content, file.name, file.package);
-            writer.upsertFields(objectId, parsed.fields);
-            writer.upsertDataSources(objectId, parsed.dataSources);
-            writer.upsertProperties(objectId, { label: parsed.label });
-            for (const ds of parsed.dataSources) {
-              if (ds.table) {
-                xrefs.push({ fromType: 'View', fromName: file.name, toType: 'Table', toName: ds.table, xrefKind: 'datasource' });
-              }
-            }
-            break;
-          }
-          case 'Map': {
-            const parsed = parser.parseAxMap(content, file.name, file.package);
-            writer.upsertFields(objectId, parsed.fields);
-            writer.upsertProperties(objectId, { label: parsed.label });
-            for (const table of parsed.mappings) {
-              xrefs.push({ fromType: 'Map', fromName: file.name, toType: 'Table', toName: table, xrefKind: 'maps' });
-            }
-            break;
-          }
-          case 'Class': {
-            const parsed = parser.parseAxClass(content, file.name, file.package);
-            writer.upsertMethods(objectId, parsed.methods);
-            writer.upsertProperties(objectId, {
-              extends: parsed.extends,
-              implements: parsed.implements.join(','),
-              isAbstract: parsed.isAbstract,
-              isFinal: parsed.isFinal,
-            });
-            if (parsed.extends) {
-              xrefs.push({ fromType: 'Class', fromName: file.name, toType: 'Class', toName: parsed.extends, xrefKind: 'extends' });
-            }
-            for (const iface of parsed.implements) {
-              xrefs.push({ fromType: 'Class', fromName: file.name, toType: 'Class', toName: iface, xrefKind: 'implements' });
-            }
-            break;
-          }
-          case 'Enum': {
-            const parsed = parser.parseAxEnum(content, file.name, file.package);
-            writer.upsertEnumValues(objectId, parsed.values);
-            writer.upsertProperties(objectId, { label: parsed.label, isExtensible: parsed.isExtensible });
-            break;
-          }
-          case 'Form': {
-            const parsed = parser.parseAxForm(content, file.name, file.package);
-            writer.upsertDataSources(objectId, parsed.dataSources);
-            writer.upsertFormControls(objectId, parsed.controls);
-            writer.upsertProperties(objectId, {
-              pattern: parsed.pattern,
-              patternVersion: parsed.patternVersion,
-              caption: parsed.caption,
-            });
-            for (const ds of parsed.dataSources) {
-              if (ds.table) {
-                xrefs.push({ fromType: 'Form', fromName: file.name, toType: 'Table', toName: ds.table, xrefKind: 'datasource' });
-              }
-            }
-            break;
-          }
-          case 'Query': {
-            const parsed = parser.parseAxQuery(content, file.name, file.package);
-            writer.upsertDataSources(objectId, parsed.dataSources);
-            writer.upsertProperties(objectId, { title: parsed.title });
-            for (const ds of parsed.dataSources) {
-              if (ds.table) {
-                xrefs.push({ fromType: 'Query', fromName: file.name, toType: 'Table', toName: ds.table, xrefKind: 'datasource' });
-              }
-            }
-            break;
-          }
-          case 'DataEntity': {
-            const parsed = parser.parseAxDataEntity(content, file.name, file.package);
-            writer.upsertFields(objectId, parsed.fields);
-            writer.upsertDataSources(objectId, parsed.dataSources);
-            writer.upsertProperties(objectId, {
-              publicEntityName: parsed.publicEntityName,
-              publicCollectionName: parsed.publicCollectionName,
-              stagingTable: parsed.stagingTable,
-              primaryKey: parsed.primaryKey,
-              isPublic: parsed.isPublic,
-            });
-            for (const ds of parsed.dataSources) {
-              if (ds.table) {
-                xrefs.push({ fromType: 'DataEntity', fromName: file.name, toType: 'Table', toName: ds.table, xrefKind: 'datasource' });
-              }
-            }
-            break;
-          }
-          case 'Edt': {
-            const parsed = parser.parseAxEdt(content, file.name, file.package);
-            writer.upsertProperties(objectId, {
-              extends: parsed.extends,
-              label: parsed.labelId,
-              helpText: parsed.helpText,
-              stringSize: parsed.stringSize,
-              edtType: parsed.edtType,
-            });
-            if (parsed.extends) {
-              xrefs.push({ fromType: 'Edt', fromName: file.name, toType: 'Edt', toName: parsed.extends, xrefKind: 'extends' });
-            }
-            break;
-          }
-          case 'SecurityRole':
-          case 'SecurityRoleExtension': {
-            const parsed = parser.parseAxSecurityRole(content, file.name, file.package);
-            writer.upsertProperties(objectId, { label: parsed.label, description: parsed.description });
-            const from = { fromType: file.type, fromName: file.name };
-            for (const duty of parsed.duties) {
-              xrefs.push({ ...from, toType: 'SecurityDuty', toName: duty, xrefKind: 'role_duty' });
-            }
-            for (const priv of parsed.privileges) {
-              xrefs.push({ ...from, toType: 'SecurityPrivilege', toName: priv, xrefKind: 'role_privilege' });
-            }
-            for (const role of parsed.subRoles) {
-              xrefs.push({ ...from, toType: 'SecurityRole', toName: role, xrefKind: 'subrole' });
-            }
-            if (file.type === 'SecurityRoleExtension') {
-              xrefs.push({ ...from, toType: 'SecurityRole', toName: extensionBaseName(file.name), xrefKind: 'extends' });
-            }
-            break;
-          }
-          case 'SecurityDuty':
-          case 'SecurityDutyExtension': {
-            const parsed = parser.parseAxSecurityDuty(content, file.name, file.package);
-            writer.upsertProperties(objectId, { label: parsed.label, description: parsed.description });
-            for (const priv of parsed.privileges) {
-              xrefs.push({ fromType: file.type, fromName: file.name, toType: 'SecurityPrivilege', toName: priv, xrefKind: 'duty_privilege' });
-            }
-            if (file.type === 'SecurityDutyExtension') {
-              xrefs.push({ fromType: file.type, fromName: file.name, toType: 'SecurityDuty', toName: extensionBaseName(file.name), xrefKind: 'extends' });
-            }
-            break;
-          }
-          case 'SecurityPrivilege': {
-            const parsed = parser.parseAxSecurityPrivilege(content, file.name, file.package);
-            writer.upsertProperties(objectId, { label: parsed.label, description: parsed.description });
-            writer.upsertSecurityGrants(objectId, parsed.grants);
-            for (const g of parsed.grants) {
-              xrefs.push({
-                fromType: 'SecurityPrivilege',
-                fromName: file.name,
-                toType: g.objectType,
-                toName: g.objectName,
-                xrefKind: g.kind === 'dataentity' ? 'entity_permission' : 'entrypoint',
-              });
-            }
-            break;
-          }
-          case 'MenuItemDisplay':
-          case 'MenuItemAction':
-          case 'MenuItemOutput': {
-            const parsed = parser.parseAxMenuItem(content, file.type, file.name);
-            writer.upsertProperties(objectId, {
-              label: parsed.label,
-              object: parsed.object,
-              objectType: parsed.objectType,
-              configurationKey: parsed.configurationKey,
-              linkedPermissionObject: parsed.linkedPermissionObject,
-            });
-            if (parsed.object) {
-              xrefs.push({ fromType: file.type, fromName: file.name, toType: parsed.objectType, toName: parsed.object, xrefKind: 'menuitem_target' });
-            }
-            break;
+        } else {
+          existing = writer.getExistingObject(file.name, file.type);
+          // A path change (rename/move) must always be re-indexed, even when the
+          // mtime suggests the content is unchanged. Any mtime change counts, not
+          // only a newer one: restoring an older copy keeps that copy's time.
+          const samePath = existing?.file_path === file.filePath;
+          if (!force && existing && samePath && existing.file_mtime === file.mtime) {
+            stats.skipped++;
+            continue;
           }
         }
+        queue.push({ file, existing, read: readContent(file.filePath) });
+      } catch (err) {
+        recordFailure(file, err);
+        continue;
+      }
 
-        writer.deleteXrefsFrom(file.type, file.name);
-        writer.upsertXrefs(xrefs);
-
-        writer.updateObjectMtime(file.mtime, objectId);
-      });
-
-      if (!existing) stats.added++;
-      else stats.updated++;
-      objectFtsDirty = true;
-
-    } catch (err) {
-      stats.errors++;
-      stats.errorsByType[file.type] = (stats.errorsByType[file.type] ?? 0) + 1;
-      logger.error('Failed to index file', { filePath: file.filePath, message: String(err) });
+      if (queue.length >= READ_AHEAD) await finish(queue.shift()!);
     }
+    while (queue.length > 0) await finish(queue.shift()!);
+  } finally {
+    commitBatch();
   }
 
   // Pruning deletes every indexed row whose file was not seen during this scan.
@@ -506,8 +560,6 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
   } else {
     const pruned = dbUtils.prune(db, seenObjectFiles, seenLabelFiles);
     stats.deleted = pruned.objects;
-    if (pruned.objects > 0) objectFtsDirty = true;
-    if (pruned.labels > 0) labelFtsDirty = true;
     if (pruned.objects > 0 || pruned.labels > 0 || pruned.xrefs > 0) {
       logger.info('Pruned stale index entries', { ...pruned });
     }
@@ -519,19 +571,24 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
     const recovered = await recoverUnderContributingLabelSources(writer, seenLabelFiles, stats);
     if (recovered > 0) {
       stats.updated += recovered;
-      labelFtsDirty = true;
       logger.info('Re-applied duplicate labels from other label files', { sources: recovered });
     }
   }
 
-  if (objectFtsDirty || labelFtsDirty) {
-    logger.info('Rebuilding FTS index', { objects: objectFtsDirty, labels: labelFtsDirty });
-    if (objectFtsDirty) dbUtils.rebuildFts(db);
-    if (labelFtsDirty) dbUtils.rebuildLabelsFts(db);
+  if (rebuildObjectFts || rebuildLabelFts) {
+    logger.info('Rebuilding FTS index', { objects: rebuildObjectFts, labels: rebuildLabelFts });
+    if (rebuildObjectFts) {
+      dbUtils.createObjectFtsTriggers(db);
+      dbUtils.rebuildFts(db);
+    }
+    if (rebuildLabelFts) {
+      dbUtils.createLabelFtsTriggers(db);
+      dbUtils.rebuildLabelsFts(db);
+    }
+    dbUtils.setMeta(db, dbUtils.META_KEYS.ftsPending, '0');
   } else {
-    logger.info('Skipping FTS rebuild; no indexed content changed');
+    logger.info('Skipping FTS rebuild; changed rows were updated in place');
   }
-  dbUtils.setMeta(db, dbUtils.META_KEYS.ftsPending, '0');
 
   stats.durationMs = Date.now() - startTime;
   recordBuildMeta(db, packagesDir, storeRawXml, stats.durationMs);

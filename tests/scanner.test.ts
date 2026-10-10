@@ -53,4 +53,38 @@ describe('scanPackagesDir', () => {
       }),
     ]));
   });
+
+  it('reads only the package/model/type depth, skipping build output folders', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'd365-scanner-'));
+    roots.push(root);
+    const put = (...parts: string[]) => {
+      const file = path.join(root, ...parts);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, '<AxClass/>');
+      return file;
+    };
+    const real = put('ApplicationSuite', 'Foundation', 'AxClass', 'Real.xml');
+    put('ApplicationSuite', 'XppMetadata', 'Foundation', 'AxClass', 'Real.xml');
+    put('ApplicationSuite', 'bin', 'Nested', 'AxClass', 'Compiled.xml');
+
+    const files = [];
+    for await (const file of scanPackagesDir(root)) files.push(file.filePath);
+
+    expect(files).toEqual([real]);
+  });
+
+  it('searches the whole tree when pointed at a single package folder', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'd365-scanner-'));
+    roots.push(root);
+    const file = path.join(root, 'ApplicationSuite', 'Foundation', 'AxClass', 'Real.xml');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, '<AxClass/>');
+
+    const files = [];
+    for await (const scanned of scanPackagesDir(path.join(root, 'ApplicationSuite'))) files.push(scanned);
+
+    expect(files).toEqual([
+      expect.objectContaining({ type: 'Class', name: 'Real', package: 'ApplicationSuite', model: 'Foundation', filePath: file }),
+    ]);
+  });
 });
