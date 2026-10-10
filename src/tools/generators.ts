@@ -669,7 +669,7 @@ export function registerGeneratorTools(server: McpServer, db: Database) {
         controller: `class ${baseName}Controller extends SysOperationServiceController\n{\n    public static void main(Args _args)\n    {\n        ${baseName}Controller controller = new ${baseName}Controller();\n        controller.startOperation();\n    }\n}`,
         uiBuilder: `class ${baseName}UIBuilder extends SysOperationAutomaticUIBuilder\n{\n    public void build()\n    {\n        super();\n    }\n}`,
       };
-      return ok(JSON.stringify(result, null, 2));
+      return ok(JSON.stringify(result));
     }
   );
 }

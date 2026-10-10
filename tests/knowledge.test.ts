@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, it, expect } from 'vitest';
 import {
   findKnowledgeDir,
@@ -53,5 +56,26 @@ describe('knowledge base', () => {
 
     const withoutTopic = promptCb!({});
     expect(withoutTopic.messages[0].content.text).toContain('d365kb://01-aot-source-layout');
+  });
+
+  it('serves topics from memory after registration instead of re-reading the folder', async () => {
+    const kbDir = fs.mkdtempSync(path.join(os.tmpdir(), 'd365-kb-cache-'));
+    try {
+      fs.writeFileSync(path.join(kbDir, '01-cached.md'), '# Cached topic\n\nBody text.\n');
+      let readCallback: ((uri: URL, variables: { slug: string }) => Promise<{ contents: { text: string }[] }>) | null = null;
+      const fakeServer = {
+        resource: (_name: string, _template: unknown, _meta: unknown, cb: typeof readCallback) => {
+          readCallback = cb;
+        },
+        prompt: () => undefined,
+      } as unknown as McpServer;
+      registerKnowledgeResources(fakeServer, kbDir);
+      fs.rmSync(path.join(kbDir, '01-cached.md'));
+      const read = await readCallback!(new URL('d365kb://01-cached'), { slug: '01-cached' });
+      expect(read.contents[0].text).toContain('Body text.');
+      await expect(readCallback!(new URL('d365kb://missing'), { slug: 'missing' })).rejects.toThrow(/Unknown knowledge base resource/);
+    } finally {
+      fs.rmSync(kbDir, { recursive: true, force: true });
+    }
   });
 });

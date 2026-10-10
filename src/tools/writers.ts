@@ -53,7 +53,7 @@ const MAX_PENDING = 8;
 const MAX_PENDING_BYTES = 16 * 1024 * 1024;
 
 function result(payload: object, isError = false) {
-  return { content: [{ type: 'text' as const, text: JSON.stringify(payload, null, 2) }], ...(isError ? { isError: true } : {}) };
+  return { content: [{ type: 'text' as const, text: JSON.stringify(payload) }], ...(isError ? { isError: true } : {}) };
 }
 
 /** Pending changes live only in this registered server session, never in a process-global cache. */

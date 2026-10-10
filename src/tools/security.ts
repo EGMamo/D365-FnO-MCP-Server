@@ -28,7 +28,7 @@ function capped<T>(items: T[], max: number): { total: number; truncated: boolean
 }
 
 function json(value: unknown) {
-  return { content: [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }] };
+  return { content: [{ type: 'text' as const, text: JSON.stringify(value) }] };
 }
 
 function error(text: string) {

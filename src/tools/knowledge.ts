@@ -70,6 +70,36 @@ export function readKnowledgeEntry(
   return { entry, content: stripFrontMatter(fs.readFileSync(entry.filePath, 'utf8')) };
 }
 
+interface LoadedKnowledgeBase {
+  entries: KnowledgeEntry[];
+  contents: Map<string, string>;
+}
+
+const loadedKnowledgeBases = new Map<string, LoadedKnowledgeBase>();
+
+/**
+ * Every topic with its content, read from disk once per process: resource lists, completions,
+ * reads and prompts are served from memory instead of re-reading the folder per request.
+ */
+function loadedKnowledgeBase(kbDir: string | null): LoadedKnowledgeBase {
+  const key = kbDir ?? '';
+  let loaded = loadedKnowledgeBases.get(key);
+  if (!loaded) {
+    const entries = listKnowledgeEntries(kbDir);
+    const contents = new Map<string, string>();
+    for (const entry of entries) {
+      try {
+        contents.set(entry.slug, stripFrontMatter(fs.readFileSync(entry.filePath, 'utf8')));
+      } catch {
+        // Unreadable file: listed by title, but reads report it as unknown.
+      }
+    }
+    loaded = { entries, contents };
+    loadedKnowledgeBases.set(key, loaded);
+  }
+  return loaded;
+}
+
 const SYSTEM_PROMPT = [
   'You are a Dynamics 365 Finance & Operations (X++/AOT) development assistant.',
   'Ground every answer in the indexed metadata exposed by this MCP server and in the',
@@ -80,12 +110,18 @@ const SYSTEM_PROMPT = [
 ].join(' ');
 
 export function registerKnowledgeResources(server: McpServer, kbDir: string | null = findKnowledgeDir()): void {
+  const { entries, contents } = loadedKnowledgeBase(kbDir);
+  const read = (slug: string) => {
+    const entry = entries.find((e) => e.slug === slug);
+    const content = contents.get(slug);
+    return entry && content !== undefined ? { entry, content } : null;
+  };
 
   server.resource(
     'd365-knowledge-base',
     new ResourceTemplate(`${URI_SCHEME}://{slug}`, {
       list: () => ({
-        resources: listKnowledgeEntries(kbDir).map((entry) => ({
+        resources: entries.map((entry) => ({
           uri: `${URI_SCHEME}://${entry.slug}`,
           name: entry.slug,
           title: entry.title,
@@ -95,7 +131,7 @@ export function registerKnowledgeResources(server: McpServer, kbDir: string | nu
       }),
       complete: {
         slug: (value: string) =>
-          listKnowledgeEntries(kbDir)
+          entries
             .map((e) => e.slug)
             .filter((s) => s.toLowerCase().includes(value.toLowerCase())),
       },
@@ -107,7 +143,7 @@ export function registerKnowledgeResources(server: McpServer, kbDir: string | nu
     async (uri, variables) => {
       const raw = variables.slug;
       const slug = Array.isArray(raw) ? raw[0] : raw;
-      const found = slug ? readKnowledgeEntry(String(slug), kbDir) : null;
+      const found = slug ? read(String(slug)) : null;
       if (!found) {
         throw new Error(`Unknown knowledge base resource: ${String(slug)}`);
       }
@@ -122,11 +158,10 @@ export function registerKnowledgeResources(server: McpServer, kbDir: string | nu
     'System prompt for D365 F&O work, optionally seeded with one knowledge base topic',
     { topic: z.string().optional().describe('Knowledge base slug, e.g. 02-chain-of-command') },
     ({ topic }) => {
-      const entries = listKnowledgeEntries(kbDir);
       let body: string;
 
       if (topic) {
-        const found = readKnowledgeEntry(topic, kbDir);
+        const found = read(topic);
         body = found
           ? `## Knowledge base topic: ${found.entry.title} (${URI_SCHEME}://${found.entry.slug})\n\n${found.content}`
           : `Topic "${topic}" was not found. Available topics:\n` +
@@ -188,7 +223,7 @@ export function registerTaskGuidanceTool(
         };
       }
       const guidance = await filter.guidance(task, session);
-      return { content: [{ type: 'text' as const, text: JSON.stringify(guidance, null, 2) }] };
+      return { content: [{ type: 'text' as const, text: JSON.stringify(guidance) }] };
     }
   );
 }

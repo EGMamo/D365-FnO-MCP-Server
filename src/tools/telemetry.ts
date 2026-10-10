@@ -394,7 +394,7 @@ export function generateKqlQuery(db: Database, opts: KqlOptions): ToolResult {
       );
     }
   }
-  return ok(JSON.stringify(result, null, 2));
+  return ok(JSON.stringify(result));
 }
 
 // ---------------------------------------------------------------------------
@@ -627,7 +627,7 @@ export function registerTelemetryTools(server: McpServer, db: Database) {
     async ({ className }) => {
       const analysis = await analyzeBatchClass(db, className);
       if (!analysis) return fail(`Class ${className} not found in the index.`);
-      return ok(JSON.stringify(analysis, null, 2));
+      return ok(JSON.stringify(analysis));
     }
   );
 }
