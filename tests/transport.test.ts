@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import type { AddressInfo } from 'net';
-import type { Server } from 'http';
+import { connect } from 'net';
+import { request, type Server } from 'http';
+import { Server as ProtocolServer } from '@modelcontextprotocol/sdk/server/index.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { createHttpApp } from '../src/server/httpTransport.js';
+import { createHttpApp, type ConnectableServer } from '../src/server/httpTransport.js';
 
 const API_KEY = 'test-api-key-1234567890-abcdefghijklmnop';
 const SECOND_KEY = 'second-api-key-0987654321-zyxwvutsrqpon';
@@ -12,7 +14,7 @@ let baseUrl: string;
 const extraServers: Server[] = [];
 
 function makeApp(
-  factory: () => McpServer = () => new McpServer({ name: 'test', version: '0.0.0' }),
+  factory: () => ConnectableServer = () => new McpServer({ name: 'test', version: '0.0.0' }),
   overrides: Partial<Parameters<typeof createHttpApp>[1]> = {},
 ) {
   const app = createHttpApp(factory, {
@@ -355,5 +357,158 @@ describe('session lifecycle', () => {
 
     await new Promise((resolve) => setTimeout(resolve, 150));
     expect(sessions.size).toBe(0);
+  });
+});
+
+describe('host allowlist', () => {
+  const GATEWAY_HOST = '127.0.0.1:3101';
+
+  /** `fetch` cannot set Host, so these tests go through node:http. */
+  function send(
+    url: string,
+    host: string | undefined,
+    options: { path?: string; method?: string; headers?: Record<string, string>; body?: string } = {},
+  ): Promise<{ status: number; body: string }> {
+    return new Promise((resolve, reject) => {
+      const req = request(
+        `${url}${options.path ?? '/mcp'}`,
+        { method: options.method ?? 'GET', headers: { ...(host === undefined ? {} : { Host: host }), ...options.headers } },
+        (res) => {
+          let body = '';
+          res.setEncoding('utf8');
+          res.on('data', (chunk: string) => (body += chunk));
+          res.on('end', () => resolve({ status: res.statusCode ?? 0, body }));
+        },
+      );
+      req.on('error', reject);
+      req.end(options.body);
+    });
+  }
+
+  it('lets an allowed Host through to authentication, ignoring case', async () => {
+    const url = await listen(makeApp(undefined, { allowedHosts: [GATEWAY_HOST] }).app);
+
+    const unauthenticated = await send(url, GATEWAY_HOST.toUpperCase());
+    expect(unauthenticated.status).toBe(401);
+
+    const authenticated = await send(url, '127.0.0.1:3101', {
+      method: 'POST',
+      headers: { 'X-API-Key': API_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1 }),
+    });
+    expect(authenticated.status).toBe(400);
+  });
+
+  it('matches allowed hosts written in any case', async () => {
+    const url = await listen(makeApp(undefined, { allowedHosts: ['Gateway.Test:3101'] }).app);
+    expect((await send(url, 'gateway.test:3101')).status).toBe(401);
+  });
+
+  it('answers 403 with a JSON-RPC error for a foreign Host, valid API key or not', async () => {
+    const url = await listen(makeApp(undefined, { allowedHosts: [GATEWAY_HOST] }).app);
+
+    const res = await send(url, 'evil.example:3101', { headers: { 'X-API-Key': API_KEY } });
+    expect(res.status).toBe(403);
+    expect(JSON.parse(res.body)).toEqual({
+      jsonrpc: '2.0',
+      id: null,
+      error: { code: -32000, message: 'Forbidden: Host header not allowed' },
+    });
+  });
+
+  /** An HTTP/1.0 request on a raw socket: node:http would add a Host header of its own, and HTTP/1.0 allows none. */
+  function sendWithoutHost(url: string, path = '/mcp'): Promise<{ status: number; head: string }> {
+    return new Promise((resolve, reject) => {
+      const socket = connect(Number(new URL(url).port), '127.0.0.1');
+      let head = '';
+      socket.setEncoding('utf8');
+      socket.on('data', (chunk: string) => (head += chunk));
+      socket.on('end', () => resolve({ status: Number(/^HTTP\/1\.[01] (\d{3})/.exec(head)?.[1] ?? 0), head }));
+      socket.on('error', reject);
+      socket.write(`GET ${path} HTTP/1.0\r\n\r\n`);
+    });
+  }
+
+  it('compares the port too and refuses a missing Host', async () => {
+    const url = await listen(makeApp(undefined, { allowedHosts: [GATEWAY_HOST] }).app);
+
+    expect((await send(url, '127.0.0.1:3102')).status).toBe(403);
+    expect((await send(url, '127.0.0.1')).status).toBe(403);
+    // HTTP/1.0 allows a request without Host; it is not on the list either, and gets no further than the check.
+    const withoutHost = await sendWithoutHost(url);
+    expect(withoutHost.status).toBe(403);
+    expect(withoutHost.head).toContain('Host header not allowed');
+    expect((await sendWithoutHost(url, '/health')).status).toBe(403);
+  });
+
+  it('also guards the unauthenticated health endpoints', async () => {
+    const url = await listen(makeApp(undefined, { allowedHosts: [GATEWAY_HOST] }).app);
+
+    for (const path of ['/health', '/live']) {
+      expect((await send(url, 'evil.example', { path })).status).toBe(403);
+      expect((await send(url, GATEWAY_HOST, { path })).status).toBe(200);
+    }
+  });
+
+  it('refuses a foreign Host before it can spend rate-limit budget', async () => {
+    const url = await listen(makeApp(undefined, { allowedHosts: [GATEWAY_HOST], rateLimitMaxRequests: 1 }).app);
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      expect((await send(url, 'evil.example')).status).toBe(403);
+    }
+    expect((await send(url, GATEWAY_HOST)).status).toBe(401);
+  });
+
+  it('creates no session for a foreign Host', async () => {
+    let created = 0;
+    const { app, sessions } = makeApp(() => {
+      created += 1;
+      return new McpServer({ name: 'test', version: '0.0.0' });
+    }, { allowedHosts: [GATEWAY_HOST] });
+    const url = await listen(app);
+
+    const res = await send(url, 'evil.example', {
+      method: 'POST',
+      headers: { 'X-API-Key': API_KEY, 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'test-client', version: '0.0.0' } },
+      }),
+    });
+
+    expect(res.status).toBe(403);
+    expect(created).toBe(0);
+    expect(sessions.size).toBe(0);
+  });
+
+  it('applies no Host check when the option is omitted', async () => {
+    const url = await listen(makeApp().app);
+
+    expect((await send(url, 'anything.example:1')).status).toBe(401);
+    expect((await send(url, 'anything.example:1', { path: '/health' })).status).toBe(200);
+  });
+});
+
+describe('server factory', () => {
+  it('serves sessions from the SDK low-level Server as well as McpServer', async () => {
+    const { app, sessions } = makeApp(() => new ProtocolServer({ name: 'low-level', version: '0.0.0' }, { capabilities: {} }));
+    const url = await listen(app);
+
+    const res = await fetch(`${url}/mcp`, {
+      method: 'POST',
+      headers: { 'X-API-Key': API_KEY, 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'test-client', version: '0.0.0' } },
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain('low-level');
+    expect(sessions.size).toBe(1);
   });
 });

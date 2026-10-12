@@ -12,13 +12,16 @@ Streamable HTTP.
 - Operator docs (hosted deployments): `docs/hosted-deployment.md`
 - User/admin workflows: `docs/user-and-admin-guide.md`
 - Local agent definitions (Copilot/Claude): `docs/local-agents.md`
+- Hybrid gateway (hosted standard index + local custom index): `docs/hybrid-gateway.md`
 
 ## Repo map (high level)
 
-- `src/index.ts`: CLI entry (`serve`, `index`, `doctor`, `setup`, `artifact`, ...)
+- `src/index.ts`: CLI entry (`serve`, `gateway`, `index`, `doctor`, `setup`, `artifact`, ...)
 - `src/server/`: MCP server + HTTP transport + API key auth + hosted startup
 - `src/indexer/`: scan/parse AOT XML + build SQLite index + optional importers
 - `src/tools/`: MCP tool handlers (metadata, labels, security, traces, generators, ...)
+- `src/gateway/`: the `gateway` command: loopback MCP endpoint that indexes only the custom models
+  locally, forwards to the hosted server and merges both (`router.ts` routes, `strategies/` merges)
 - `tests/`: vitest
 - `agents/`: prebuilt agent profiles (edit `agents/source/`, then run `npm run build:agents`)
 
@@ -33,6 +36,10 @@ npm test
 npm run start -- doctor
 npm run start -- index
 npm run start -- serve
+
+# Local gateway in front of a hosted server (needs D365_HOSTED_MCP_URL, a hosted API key and
+# D365_CUSTOM_METADATA_DIR; see docs/hybrid-gateway.md)
+npm run gateway
 ```
 
 ## Guardrails
@@ -40,4 +47,8 @@ npm run start -- serve
 - This project is read-only by default; write tools require `D365_ENABLE_WRITE_TOOLS=1` and are
   refused in hosted mode.
 - Do not invent AOT names; resolve against the index and report unresolved items.
+- Gateway code (`src/gateway/`) must never import `src/config.ts` (it validates the server's
+  environment eagerly and exits the process); use `src/gateway/config.ts`.
+- Custom code must not be forwarded upstream: the gateway sends the hosted server only the caller's
+  tool arguments, never anything read from the local index or from custom files.
 

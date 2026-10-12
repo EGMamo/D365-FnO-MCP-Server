@@ -62,6 +62,19 @@ export const HELP_TEXT = `d365-fno-mcp-server <command> [options]
 
 Commands:
   serve                     Start the MCP server (default command)
+  gateway                   Start the local hybrid gateway: your custom models are indexed on this machine and
+                            merged with the hosted server's standard index. Listens on 127.0.0.1 only and prints
+                            an MCP client entry (the bearer token itself is never printed). Environment:
+      D365_HOSTED_MCP_URL        Hosted MCP endpoint, https:// unless loopback (required)
+      D365_HOSTED_API_KEY        Hosted API key; or D365_HOSTED_API_KEY_FILE with the key in a file (one required)
+      D365_CUSTOM_METADATA_DIR   Folder with your custom models (legacy alias D365_PROJECT_DIR; required)
+      D365_LOCAL_INDEX_DB_PATH   Custom index file (default ./.d365/custom_index.db; must differ from D365_INDEX_DB_PATH)
+      D365_GATEWAY_PORT          Loopback port (default 3101)
+      D365_GATEWAY_TOKEN         Bearer token for agents, 32+ characters (default: generated beside the custom index)
+      D365_APP_VERSION           Four-part version of your PackagesLocalDirectory, declared to the hosted server
+      D365_GATEWAY_PRIVATE_PREFIXES  Object-name prefixes that are never sent to the hosted server (comma separated)
+      D365_GATEWAY_UPSTREAM_TIMEOUT_MS  Wait for the hosted server before using local results (default 15000)
+      D365_GATEWAY_REINDEX_TTL_MS       Longest the custom index is served without a re-check (default 30000)
   acquire                   Run one private acquisition/build/validation/publication cycle
       --config <file>       Worker JSON config (default D365_ACQUISITION_CONFIG)
       --run-id <id>         Stable run identifier for restart idempotency (default UTC timestamp)
@@ -97,6 +110,7 @@ Commands:
       --all-products         Keep every product in the feed
       --db-path <path>       SQLite index path (default D365_INDEX_DB_PATH or ./d365_index.db)
   doctor                    Validate environment and report issues (exit 1 on failure)
+                            Also checks the gateway settings and the hosted server when D365_HOSTED_MCP_URL is set
   index-status              Report whether the local index is current for the packages folder
       --packages-dir <dir>  PackagesLocalDirectory to check (default D365_PACKAGES_DIR)
       --db-path <path>      Local SQLite index (default D365_INDEX_DB_PATH or ./d365_index.db)

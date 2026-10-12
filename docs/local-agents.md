@@ -22,7 +22,9 @@ None of the agents can use `write_table_extension` or `apply_table_extension_cha
 
 Follow the [Quick start](../README.md#quick-start) on the machine that has the
 PackagesLocalDirectory (usually the development VM): `setup`, `doctor`, `index`, `serve`. You can
-instead connect to a hosted API that serves an Azure-promoted index. The clients connect to the authenticated
+instead connect to a hosted API that serves an Azure-promoted index, or run the
+[hybrid gateway](hybrid-gateway.md) in front of that hosted API so the agents also see your custom
+models (see "Option: the hybrid gateway" below). The clients connect to the authenticated
 Streamable HTTP endpoint; they do not launch a local server process.
 
 ## 2. Register the two MCP servers
@@ -95,6 +97,40 @@ solution, same shape.
 The agents work the same way against a local or [hosted server](hosted-deployment.md#client-connection),
 but trace data is never on a hosted server.
 
+### Option: the hybrid gateway
+
+A hosted server knows only standard metadata, so an agent connected to it alone cannot see your
+custom tables, extensions, Chain of Command classes or labels. The [hybrid gateway](hybrid-gateway.md)
+runs on your machine, indexes your custom models into a separate local index, forwards every other
+call to the hosted server and merges the two where both matter. Start it with `npm run gateway`
+(see [Setup](hybrid-gateway.md#setup) for the variables) and register **the gateway** as `d365-fno`
+instead of the hosted URL. The agents need no change: the gateway offers the hosted tools under the
+same names, plus `local_index_status`.
+
+```json
+{
+  "mcpServers": {
+    "d365-fno": {
+      "type": "http",
+      "url": "http://127.0.0.1:3101/mcp",
+      "headers": { "Authorization": "Bearer ${D365_GATEWAY_TOKEN}" }
+    },
+    "microsoft-learn": { "type": "http", "url": "https://learn.microsoft.com/api/mcp" }
+  }
+}
+```
+
+This is the Claude Code form. For VS Code, Visual Studio and Copilot CLI, use the shapes above with
+the gateway's URL and `Authorization: Bearer <token>` in place of `X-API-Key`; the gateway prints
+the VS Code and Visual Studio form when it starts, and [the gateway guide](hybrid-gateway.md#4-point-the-agent-at-the-gateway)
+shows all four. The token is in `.d365/gateway-token` beside the local index unless you set
+`D365_GATEWAY_TOKEN`. Keep one `d365-fno` entry in a client at a time.
+
+The gateway indexes no trace data: the trace tools are forwarded to the hosted server, so trace
+analysis is as limited as it is against any hosted server. Custom names that an agent puts into
+tool arguments can reach the hosted server; read the gateway's
+[privacy section](hybrid-gateway.md#privacy) and consider `D365_GATEWAY_PRIVATE_PREFIXES`.
+
 ## 3. Copy the agents
 
 | Client | Shared with the repo | Just for you |
@@ -126,7 +162,8 @@ If your Visual Studio version doesn't support custom agent files yet, paste the 
   and `claude --agent xpp-developer` starts a whole session as that agent.
 
 Check the connection first: ask for `get_index_stats`. It should report your object counts and
-build time.
+build time. Through the gateway that is the hosted index's report; ask for `local_index_status` to
+see the custom index and the hosted connection.
 
 ## Customize
 

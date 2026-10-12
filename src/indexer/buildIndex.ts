@@ -1,5 +1,5 @@
 import type { Database } from './db.js';
-import { parseLabelFileName, scanPackagesDir, type ScannedFile } from './scanner.js';
+import { parseLabelFileName, scanPackagesDir, type ScanOptions, type ScannedFile } from './scanner.js';
 import * as dbUtils from './db.js';
 import * as parser from './parser.js';
 import { getUsageSnapshotStatus } from './xrefUsage.js';
@@ -38,7 +38,10 @@ function readContent(filePath: string): PendingFile['read'] {
 }
 
 export interface IndexStats {
+  /** Files the scan found: AOT objects and label files. */
   total: number;
+  /** The AOT object files among them (not the label files), including the ones that lost a name collision. */
+  objectFiles: number;
   added: number;
   updated: number;
   skipped: number;
@@ -111,10 +114,16 @@ async function recoverUnderContributingLabelSources(
   return recovered;
 }
 
-export async function buildIndex(db: Database, packagesDir: string, force: boolean = false): Promise<IndexStats> {
+export async function buildIndex(
+  db: Database,
+  packagesDir: string,
+  force: boolean = false,
+  scanOptions: ScanOptions = {}
+): Promise<IndexStats> {
   const startTime = Date.now();
   const stats: IndexStats = {
     total: 0,
+    objectFiles: 0,
     added: 0,
     updated: 0,
     skipped: 0,
@@ -468,7 +477,7 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
   };
 
   try {
-    for await (const file of scanPackagesDir(packagesDir)) {
+    for await (const file of scanPackagesDir(packagesDir, scanOptions)) {
       stats.total++;
 
       if (stats.total % 500 === 0) {
@@ -529,6 +538,7 @@ export async function buildIndex(db: Database, packagesDir: string, force: boole
   } finally {
     commitBatch();
   }
+  stats.objectFiles = seenObjectFiles.size;
 
   // Pruning deletes every indexed row whose file was not seen during this scan.
   // That is only safe when the scan itself was trustworthy: an empty, mostly

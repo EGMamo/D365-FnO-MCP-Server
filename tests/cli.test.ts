@@ -246,6 +246,45 @@ describe('CLI', () => {
     expect(again.stderr).toContain('Refusing to overwrite');
   }, 120_000);
 
+  it('gateway prints every configuration problem and exits 1 without echoing the key', async () => {
+    const key = 'hosted-secret-key-0123456789-abcdefghijklmnop';
+    const res = await runCli(
+      ['gateway'],
+      { DOTENV_CONFIG_PATH: baseEnv.DOTENV_CONFIG_PATH, D365_HOSTED_MCP_URL: 'http://hosted.example.com/mcp', D365_HOSTED_API_KEY: key },
+      workDir
+    );
+    expect(res.code).toBe(1);
+    expect(res.stderr).toContain('Gateway configuration validation failed');
+    expect(res.stderr).toContain('D365_HOSTED_MCP_URL: must use https://');
+    expect(res.stderr).toContain('D365_CUSTOM_METADATA_DIR: is required');
+    expect(res.stdout + res.stderr).not.toContain(key);
+    // Nothing was started or written beside the failing configuration.
+    expect(fs.existsSync(path.join(workDir, '.d365'))).toBe(false);
+  }, 120_000);
+
+  it('doctor checks the gateway settings and the hosted server when D365_HOSTED_MCP_URL is set', async () => {
+    const key = 'hosted-secret-key-0123456789-abcdefghijklmnop';
+    const res = await runCli(
+      ['doctor'],
+      {
+        ...baseEnv,
+        // Port 9 (discard) refuses connections, so the hosted server counts as unreachable.
+        D365_HOSTED_MCP_URL: 'http://127.0.0.1:9/mcp',
+        D365_HOSTED_API_KEY: key,
+        D365_CUSTOM_METADATA_DIR: packagesDir,
+        D365_LOCAL_INDEX_DB_PATH: path.join(workDir, 'gateway-state', 'custom_index.db'),
+        D365_GATEWAY_UPSTREAM_TIMEOUT_MS: '2000',
+      },
+      workDir
+    );
+    expect(res.code).toBe(1);
+    expect(res.stdout).toContain('[PASS] gateway-config');
+    expect(res.stdout).toContain('[PASS] gateway-custom-dir');
+    expect(res.stdout).toContain('[PASS] gateway-local-index');
+    expect(res.stdout).toContain('[FAIL] gateway-hosted-health');
+    expect(res.stdout + res.stderr).not.toContain(key);
+  }, 120_000);
+
   it('exits non-zero for an unknown command', async () => {
     const res = await runCli(['bogus'], baseEnv, workDir);
     expect(res.code).toBe(1);
@@ -258,6 +297,13 @@ describe('CLI', () => {
     expect(res.stdout).toContain('Commands:');
     expect(res.stdout).toContain('prepare-bundle');
   }, 120_000);
+
+  it('documents the gateway command and its environment in help', () => {
+    expect(HELP_TEXT).toContain('gateway ');
+    for (const name of ['D365_HOSTED_MCP_URL', 'D365_HOSTED_API_KEY', 'D365_CUSTOM_METADATA_DIR', 'D365_LOCAL_INDEX_DB_PATH', 'D365_GATEWAY_PORT', 'D365_GATEWAY_TOKEN']) {
+      expect(HELP_TEXT).toContain(name);
+    }
+  });
 
   it('omits retired index transfer commands from help', () => {
     expect(HELP_TEXT).toContain('index-status');

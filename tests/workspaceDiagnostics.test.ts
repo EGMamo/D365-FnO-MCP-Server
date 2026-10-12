@@ -1,11 +1,17 @@
 import fs from 'node:fs';
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { checkVisualStudioIntegration, runChecks } from '../src/cli/doctor.js';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { checkGateway, checkVisualStudioIntegration, runChecks, type CheckResult } from '../src/cli/doctor.js';
+import { createHttpApp } from '../src/server/httpTransport.js';
 import { registerWorkspaceTools, type WorkspaceToolOptions } from '../src/tools/workspace.js';
 import { projectXml, treeSnapshot, workspaceFixture } from './workspaceFixtures.js';
 import type { ToolResult } from './helpers/toolHarness.js';
+
+const testDir = path.dirname(fileURLToPath(import.meta.url));
 
 let fixture: ReturnType<typeof workspaceFixture>;
 beforeEach(() => { fixture = workspaceFixture(); });
@@ -160,6 +166,184 @@ describe('workspace doctor checks', () => {
       Object.defineProperty(process.versions, 'node', original);
     }
   });
+});
+
+const HOSTED_KEY = 'hosted-secret-key-0123456789-abcdefghijklmnop';
+
+interface HostedStandIn {
+  url: string;
+  stop(): Promise<void>;
+}
+
+/** The hosted server in miniature: the real transport (health, API key auth, sessions) around one tool. */
+async function startHostedStandIn(version = '0.1.0'): Promise<HostedStandIn> {
+  const app = createHttpApp(
+    () => {
+      const server = new McpServer({ name: 'hosted-standin', version });
+      server.tool('echo', 'Echoes.', async () => ({ content: [{ type: 'text' as const, text: 'echo' }] }));
+      return server;
+    },
+    {
+      port: 0,
+      apiKeys: [{ name: 'doctor-test', key: HOSTED_KEY }],
+      version,
+      rateLimitMaxRequests: 10_000,
+      rateLimitWindowMs: 60_000,
+      requestTimeoutMs: 5_000,
+    }
+  );
+  const server = await new Promise<Server>((resolve) => {
+    const created = createServer(app);
+    created.listen(0, '127.0.0.1', () => resolve(created));
+  });
+  return {
+    url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/mcp`,
+    stop: () =>
+      new Promise<void>((resolve) => {
+        server.closeAllConnections();
+        server.close(() => resolve());
+      }),
+  };
+}
+
+const byName = (checks: CheckResult[], name: string): CheckResult | undefined => checks.find((check) => check.name === name);
+
+describe('gateway doctor checks', () => {
+  let hosted: HostedStandIn;
+  beforeEach(async () => {
+    hosted = await startHostedStandIn();
+    // Custom models in the layout the local index reads.
+    const tableDir = path.join(fixture.modelDir, 'AxTable');
+    fs.mkdirSync(tableDir);
+    fs.copyFileSync(path.join(testDir, 'fixtures', 'AxTableSample.xml'), path.join(tableDir, 'SampleTable.xml'));
+  });
+  afterEach(async () => {
+    await hosted.stop();
+  });
+
+  /** A complete gateway environment confined to the fixture; no packages folder, so only the gateway runs. */
+  function gatewayEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+    return {
+      D365_HOSTED_MCP_URL: hosted.url,
+      D365_HOSTED_API_KEY: HOSTED_KEY,
+      D365_CUSTOM_METADATA_DIR: fixture.metadataDir,
+      D365_LOCAL_INDEX_DB_PATH: path.join(fixture.root, 'state', 'custom_index.db'),
+      D365_INDEX_DB_PATH: path.join(fixture.root, 'main.db'),
+      ...overrides,
+    };
+  }
+
+  it('adds no gateway checks without D365_HOSTED_MCP_URL', async () => {
+    const checks = await runChecks({
+      D365_PACKAGES_DIR: fixture.metadataDir,
+      D365_INDEX_DB_PATH: path.join(fixture.root, 'doctor-no-gateway.db'),
+    });
+    expect(checks.filter((check) => check.name.startsWith('gateway-'))).toEqual([]);
+    expect(byName(checks, 'packages-dir')).toBeDefined();
+  }, DOCTOR_TIMEOUT_MS);
+
+  it('passes against a healthy hosted server and replaces the serve checks on a gateway-only machine', async () => {
+    const before = treeSnapshot(fixture.root);
+    const checks = await runChecks(gatewayEnv());
+
+    expect(checks.filter((check) => check.name.startsWith('gateway-')).map((check) => [check.name, check.status])).toEqual([
+      ['gateway-config', 'pass'],
+      ['gateway-custom-dir', 'pass'],
+      ['gateway-local-index', 'pass'],
+      ['gateway-hosted-health', 'pass'],
+      ['gateway-hosted-key', 'pass'],
+      ['gateway-version', 'pass'],
+    ]);
+    expect(byName(checks, 'gateway-custom-dir')?.message).toContain('SampleTable');
+    expect(byName(checks, 'gateway-hosted-key')?.message).toContain('1 tool(s)');
+    expect(byName(checks, 'serve-checks')).toMatchObject({ status: 'pass' });
+    for (const skipped of ['packages-dir', 'db-dir', 'db-open', 'api-keys']) expect(byName(checks, skipped)).toBeUndefined();
+    // Read-only: no local index folder, no token file and no main index were created.
+    expect(treeSnapshot(fixture.root)).toEqual(before);
+    expect(fs.existsSync(path.join(fixture.root, 'state'))).toBe(false);
+  }, DOCTOR_TIMEOUT_MS);
+
+  it('runs the serve checks as well when D365_PACKAGES_DIR is set', async () => {
+    const checks = await runChecks(gatewayEnv({ D365_PACKAGES_DIR: fixture.metadataDir }));
+    expect(byName(checks, 'packages-dir')).toBeDefined();
+    expect(byName(checks, 'api-keys')).toBeDefined();
+    expect(byName(checks, 'gateway-config')).toMatchObject({ status: 'pass' });
+    expect(byName(checks, 'serve-checks')).toBeUndefined();
+  }, DOCTOR_TIMEOUT_MS);
+
+  it('fails a rejected hosted API key without echoing either key', async () => {
+    const wrongKey = 'wrong-key-0123456789-abcdefghijklmnopqrstuvwx';
+    const checks = await checkGateway(gatewayEnv({ D365_HOSTED_API_KEY: wrongKey }));
+    expect(byName(checks, 'gateway-hosted-health')).toMatchObject({ status: 'pass' });
+    expect(byName(checks, 'gateway-hosted-key')).toMatchObject({ status: 'fail' });
+    expect(byName(checks, 'gateway-hosted-key')?.message).toContain('rejected the API key');
+    const text = JSON.stringify(checks);
+    expect(text).not.toContain(wrongKey);
+    expect(text).not.toContain(HOSTED_KEY);
+  }, DOCTOR_TIMEOUT_MS);
+
+  it('reports an unreachable hosted server and skips the key check', async () => {
+    await hosted.stop();
+    const checks = await checkGateway(gatewayEnv());
+    expect(byName(checks, 'gateway-hosted-health')).toMatchObject({ status: 'fail' });
+    expect(byName(checks, 'gateway-hosted-health')?.message).toContain('unreachable');
+    expect(byName(checks, 'gateway-hosted-key')).toMatchObject({ status: 'warn' });
+    expect(byName(checks, 'gateway-hosted-key')?.message).toContain('Not checked');
+  }, DOCTOR_TIMEOUT_MS);
+
+  it('warns when the hosted server runs another major.minor version', async () => {
+    await hosted.stop();
+    hosted = await startHostedStandIn('9.9.0');
+    const checks = await checkGateway(gatewayEnv());
+    expect(byName(checks, 'gateway-hosted-key')).toMatchObject({ status: 'pass' });
+    expect(byName(checks, 'gateway-version')).toMatchObject({ status: 'warn' });
+    expect(byName(checks, 'gateway-version')?.message).toContain('9.9');
+  }, DOCTOR_TIMEOUT_MS);
+
+  it('reports every configuration problem at once with the secrets redacted', async () => {
+    const checks = await checkGateway(
+      gatewayEnv({
+        D365_HOSTED_MCP_URL: 'http://hosted.example.com/mcp',
+        D365_CUSTOM_METADATA_DIR: path.join(fixture.root, 'missing'),
+        D365_LOCAL_INDEX_DB_PATH: path.join(fixture.root, 'main.db'),
+        D365_GATEWAY_TOKEN: 'token-secret-short',
+      })
+    );
+    expect(checks).toHaveLength(1);
+    const [config] = checks;
+    expect(config).toMatchObject({ name: 'gateway-config', status: 'fail' });
+    for (const problem of ['D365_HOSTED_MCP_URL', 'D365_CUSTOM_METADATA_DIR', 'D365_LOCAL_INDEX_DB_PATH', 'D365_GATEWAY_TOKEN']) {
+      expect(config.message).toContain(problem);
+    }
+    expect(JSON.stringify(checks)).not.toContain('token-secret-short');
+    expect(JSON.stringify(checks)).not.toContain(HOSTED_KEY);
+  }, DOCTOR_TIMEOUT_MS);
+
+  it('flags a custom folder without metadata and an unusable local index location', async () => {
+    const empty = path.join(fixture.root, 'empty-models');
+    fs.mkdirSync(empty);
+    const blocker = path.join(fixture.root, 'blocker');
+    fs.writeFileSync(blocker, 'a file where a folder is needed');
+
+    const checks = await checkGateway(
+      gatewayEnv({ D365_CUSTOM_METADATA_DIR: empty, D365_LOCAL_INDEX_DB_PATH: path.join(blocker, 'custom_index.db') })
+    );
+    expect(byName(checks, 'gateway-custom-dir')).toMatchObject({ status: 'warn' });
+    expect(byName(checks, 'gateway-local-index')).toMatchObject({ status: 'fail' });
+    expect(byName(checks, 'gateway-local-index')?.message).toContain('not a directory');
+
+    const memory = await checkGateway(gatewayEnv({ D365_LOCAL_INDEX_DB_PATH: ':memory:' }));
+    expect(byName(memory, 'gateway-local-index')).toMatchObject({ status: 'warn' });
+  }, DOCTOR_TIMEOUT_MS);
+
+  it('notes a local index folder that will be created', async () => {
+    const checks = await checkGateway(
+      gatewayEnv({ D365_LOCAL_INDEX_DB_PATH: path.join(fixture.root, 'a', 'b', 'custom_index.db') })
+    );
+    expect(byName(checks, 'gateway-local-index')).toMatchObject({ status: 'pass' });
+    expect(byName(checks, 'gateway-local-index')?.message).toContain('will be created');
+    expect(fs.existsSync(path.join(fixture.root, 'a'))).toBe(false);
+  }, DOCTOR_TIMEOUT_MS);
 });
 
 describe('workspace configuration', () => {

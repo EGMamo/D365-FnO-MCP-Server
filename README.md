@@ -18,6 +18,7 @@ A Model Context Protocol (MCP) server that gives AI coding assistants first-clas
 - **Artifact operations** — `artifact publish`, `artifact status`, `artifact promote` and `artifact rollback` provide idempotent Azure Blob publication and optimistic-concurrency deployment control.
 - **Hosted mode** — a read-only Azure API serves the active Azure-built index. Developer machines never build, upload or activate production indexes. See [docs/hosted-deployment.md](docs/hosted-deployment.md).
 - **Visual Studio extension** — exposes one loopback MCP gateway for Copilot, proxies the hosted tools, keeps the Azure key in Windows Credential Manager, reports the installed SDK version and adds local workspace tools. See [docs/visual-studio-extension.md](docs/visual-studio-extension.md).
+- **Hybrid gateway** — `gateway` runs a loopback MCP endpoint that indexes only your custom models on your machine, forwards everything else to the hosted server and merges both into search, label, schema, reference and impact answers. The contents of your custom code are never sent to the hosted server. See [docs/hybrid-gateway.md](docs/hybrid-gateway.md).
 - **User and operator guide** — [docs/user-and-admin-guide.md](docs/user-and-admin-guide.md) separates developer workflows from server configuration, index maintenance, and access controls.
 
 ## Prerequisites
@@ -169,6 +170,19 @@ d365-fno-mcp-server <command> [options]
 
 Commands:
   serve                     Start the MCP server (default command)
+  gateway                   Start the local hybrid gateway: your custom models are indexed on this machine and
+                            merged with the hosted server's standard index. Listens on 127.0.0.1 only and prints
+                            an MCP client entry (the bearer token itself is never printed). Environment:
+      D365_HOSTED_MCP_URL        Hosted MCP endpoint, https:// unless loopback (required)
+      D365_HOSTED_API_KEY        Hosted API key; or D365_HOSTED_API_KEY_FILE with the key in a file (one required)
+      D365_CUSTOM_METADATA_DIR   Folder with your custom models (legacy alias D365_PROJECT_DIR; required)
+      D365_LOCAL_INDEX_DB_PATH   Custom index file (default ./.d365/custom_index.db; must differ from D365_INDEX_DB_PATH)
+      D365_GATEWAY_PORT          Loopback port (default 3101)
+      D365_GATEWAY_TOKEN         Bearer token for agents, 32+ characters (default: generated beside the custom index)
+      D365_APP_VERSION           Four-part version of your PackagesLocalDirectory, declared to the hosted server
+      D365_GATEWAY_PRIVATE_PREFIXES  Object-name prefixes that are never sent to the hosted server (comma separated)
+      D365_GATEWAY_UPSTREAM_TIMEOUT_MS  Wait for the hosted server before using local results (default 15000)
+      D365_GATEWAY_REINDEX_TTL_MS       Longest the custom index is served without a re-check (default 30000)
   acquire                   Run one private acquisition/build/validation/publication cycle
       --config <file>       Worker JSON config (default D365_ACQUISITION_CONFIG)
       --run-id <id>         Stable run identifier for restart idempotency (default UTC timestamp)
@@ -204,6 +218,7 @@ Commands:
       --all-products         Keep every product in the feed
       --db-path <path>       SQLite index path (default D365_INDEX_DB_PATH or ./d365_index.db)
   doctor                    Validate environment and report issues (exit 1 on failure)
+                            Also checks the gateway settings and the hosted server when D365_HOSTED_MCP_URL is set
   index-status              Report whether the local index is current for the packages folder
       --packages-dir <dir>  PackagesLocalDirectory to check (default D365_PACKAGES_DIR)
       --db-path <path>      Local SQLite index (default D365_INDEX_DB_PATH or ./d365_index.db)
@@ -417,6 +432,34 @@ The Azure acquisition worker is intentionally separate from the public API and i
 production component allowed to build or promote an index. See
 [`docs/hosted-deployment.md`](docs/hosted-deployment.md) and the guided
 [`Azure resource plan`](docs/azure-resource-guide.md).
+
+## Hybrid gateway (hosted standard index plus your custom code)
+
+The hosted server knows only standard Microsoft and ISV metadata, and uploads are removed, so an
+agent connected to it alone cannot see your custom tables, extensions, labels or the custom code that
+calls standard objects. `gateway` closes that gap on the developer's machine:
+
+```bash
+export D365_HOSTED_MCP_URL=https://<app>.azurewebsites.net/mcp
+export D365_HOSTED_API_KEY_FILE="$HOME/.d365/hosted-api-key"
+export D365_CUSTOM_METADATA_DIR=/path/to/custom/metadata
+npm run gateway      # or: d365-fno-mcp-server gateway
+```
+
+It indexes only `D365_CUSTOM_METADATA_DIR` into a separate SQLite file (`./.d365/custom_index.db`),
+listens on `127.0.0.1:3101` behind a bearer token (generated on first start unless you set
+`D365_GATEWAY_TOKEN`), and prints a client entry. Register that URL as `d365-fno` in `.mcp.json` or
+`.vscode/mcp.json` in place of the hosted entry. Searches, labels, table schemas, class hierarchies,
+references and impact analysis merge the hosted and the local answers and tag each row
+`source: "local"` or `"hosted"`; tools that name one object go to whichever side owns it; everything
+else is forwarded. Write tools stay off. If the hosted server is down, the gateway still answers
+from the custom index and says so in a warning.
+
+Custom code stays on the machine, but tool arguments, which can contain custom object names, are
+sent to the hosted server for most tools. `D365_GATEWAY_PRIVATE_PREFIXES` blocks names with your prefixes.
+The gateway's variables are not part of the `serve` configuration table above; they are listed in
+[docs/hybrid-gateway.md](docs/hybrid-gateway.md#1-configure) and `.env.example`, with the routing
+table, the exact [privacy](docs/hybrid-gateway.md#privacy) statement, failure modes and known gaps.
 
 ## Transport
 

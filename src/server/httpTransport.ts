@@ -1,5 +1,5 @@
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import express, { type Express, type NextFunction, type Request, type Response, type Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import { createHash, randomUUID, timingSafeEqual } from 'crypto';
@@ -8,7 +8,16 @@ import { logger } from '../utils/logger.js';
 import { readDeclaredClientVersion } from '../indexer/appVersion.js';
 import type { ApiKeyEntry } from './apiKeys.js';
 
-export type ServerFactory = (context?: SessionContext) => McpServer;
+/**
+ * What a session needs from its server. `McpServer` and the SDK's low-level
+ * `Server` both satisfy it, so the gateway reuses this transport unchanged.
+ */
+export interface ConnectableServer {
+  connect(transport: Transport): Promise<void>;
+  close(): Promise<void>;
+}
+
+export type ServerFactory = (context?: SessionContext) => ConnectableServer;
 
 /** Per-session facts the transport knows and the server needs at `initialize`. */
 export interface SessionContext {
@@ -42,6 +51,13 @@ export interface HttpTransportOptions {
    * traffic to this replica. Omitted means always ready.
    */
   readiness?: ReadinessProbe;
+  /**
+   * Host header values (`host:port`, compared case-insensitively) the server
+   * answers to. Any other request gets 403 before rate limiting and auth,
+   * `/health` and `/live` included, which stops DNS rebinding against a
+   * loopback listener. Omitted means no Host check.
+   */
+  allowedHosts?: readonly string[];
 }
 
 export interface ReadinessProbe {
@@ -60,7 +76,7 @@ interface JsonRpcErrorBody {
 
 interface SessionEntry {
   transport: StreamableHTTPServerTransport;
-  server: McpServer;
+  server: ConnectableServer;
   lastActivity: number;
   /** False while the initialize handshake is still in flight (slot reserved). */
   initialized: boolean;
@@ -132,6 +148,19 @@ export function createHttpApp(createMcpServer: ServerFactory, options: HttpTrans
   app.disable('x-powered-by');
   if (trustProxyHops > 0) {
     app.set('trust proxy', trustProxyHops);
+  }
+
+  // ── Host allowlist ────────────────────────────────────────────────────────
+  // First in the chain, so a rebinding page is refused before its body is
+  // parsed, before it spends rate-limit budget and before auth runs.
+  if (options.allowedHosts) {
+    const allowedHosts = new Set(options.allowedHosts.map((host) => host.toLowerCase()));
+    app.use((req: Request, res: Response, next: NextFunction) => {
+      const host = req.headers.host?.toLowerCase();
+      if (host !== undefined && allowedHosts.has(host)) return next();
+      logger.warn('Request refused: Host header not allowed', { ip: clientIp(req), path: req.path, host });
+      res.status(403).json(jsonRpcError(-32000, 'Forbidden: Host header not allowed'));
+    });
   }
 
   app.use(express.json({ limit: '1mb' }));
