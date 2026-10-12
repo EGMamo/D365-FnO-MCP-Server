@@ -1246,6 +1246,32 @@ export function getTableExtensionFieldNames(db: Database, tableName: string): st
   return rows.map((r) => r.name);
 }
 
+/** An indexed table extension (`Table.Suffix`) with the fields it adds. */
+export interface TableExtensionDetails {
+  name: string;
+  package: string;
+  model: string;
+  fields: FieldRow[];
+}
+
+/** Indexed table extensions (`Table.Suffix`) of `tableName`, ordered by name, each with the fields it adds. */
+export function getTableExtensions(db: Database, tableName: string): TableExtensionDetails[] {
+  const escaped = tableName.replace(/[\\%_]/g, (c) => `\\${c}`);
+  const extensions = db
+    .prepare(
+      `SELECT id, name, package, model FROM ax_objects
+       WHERE type = 'TableExtension' AND lower(name) LIKE ? ESCAPE '\\' ORDER BY name`
+    )
+    .all(`${escaped.toLowerCase()}.%`) as unknown as Pick<ObjectRow, 'id' | 'name' | 'package' | 'model'>[];
+  const fieldsOf = db.prepare(`SELECT * FROM ax_fields WHERE object_id = ? ORDER BY id`);
+  return extensions.map(({ id, name, package: pkg, model }) => ({
+    name,
+    package: pkg,
+    model,
+    fields: fieldsOf.all(id) as unknown as FieldRow[],
+  }));
+}
+
 /** Resolves the indexed object row without loading its fields, methods or other children. */
 export function getObjectHeader(db: Database, name: string, type: string): ObjectRow | null {
   // X++ names are case-insensitive: an exact match wins, otherwise any casing.

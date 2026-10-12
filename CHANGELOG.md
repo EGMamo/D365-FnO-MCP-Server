@@ -17,6 +17,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `gateway` command: a hybrid gateway for developers who use a hosted server. It indexes only the
+  custom models in `D365_CUSTOM_METADATA_DIR` into a separate local SQLite file, listens on
+  `127.0.0.1` behind a bearer token, forwards tool calls to the hosted server and merges both sides
+  where custom code matters (search, labels, table schema, references, impact, field access). Custom
+  code is never sent upstream; `D365_GATEWAY_PRIVATE_PREFIXES` also keeps custom names at home. New
+  settings: `D365_HOSTED_MCP_URL`, `D365_HOSTED_API_KEY` / `_FILE`, `D365_LOCAL_INDEX_DB_PATH`,
+  `D365_GATEWAY_PORT`, `D365_GATEWAY_TOKEN`, `D365_GATEWAY_PRIVATE_PREFIXES`,
+  `D365_GATEWAY_UPSTREAM_TIMEOUT_MS` and `D365_GATEWAY_REINDEX_TTL_MS`. `doctor` checks the gateway
+  settings, folders and hosted key, and the HTTP transport takes an `allowedHosts` Host allow-list.
+  See docs/hybrid-gateway.md.
 - Tools: `analyze_impact` (bounded transitive dependents over declared references), `get_method_source`
   (one method's X++ from stored XML), `create_event_handler` (table data events and pre/post method
   handlers) and `create_form_event_handler` (form, data source and control events), all grounded

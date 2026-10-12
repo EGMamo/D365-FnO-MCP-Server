@@ -73,6 +73,37 @@ Visual Studio extension gateway
   `workspace_get_context`, limited to the tools selected in **Select Tools...** (stored as
   `AllowedTools` in `%LOCALAPPDATA%\D365FnoMcp\settings.json`; absent means all tools).
 
+## Using the Node gateway
+
+This repository also contains a Node gateway, `d365-fno-mcp-server gateway`, described in
+[Hybrid gateway](hybrid-gateway.md). Like the extension's gateway it listens on loopback and forwards
+the hosted tools, but it also indexes your custom models on your machine, so Copilot can see custom
+tables, extensions and labels that the hosted index lacks. It is a separate process: it has its own
+port (default 3101) and token, reads the hosted key from `D365_HOSTED_API_KEY` or
+`D365_HOSTED_API_KEY_FILE` instead of Windows Credential Manager, and nothing in it reads the
+extension's settings or credentials.
+
+| | Extension gateway | Node gateway |
+| --- | --- | --- |
+| Hosted key | Windows Credential Manager | `D365_HOSTED_API_KEY` or `D365_HOSTED_API_KEY_FILE` |
+| Port and token | Random port, token per process | `D365_GATEWAY_PORT` (3101), persistent token file or `D365_GATEWAY_TOKEN` |
+| Custom code | Not indexed | Indexed locally, merged into the answers |
+| Workspace tool | `workspace_get_context` | `get_visual_studio_workspace` (settings from the environment, as for `serve`) |
+| Tool selection | **Select Tools...** | None: every hosted tool plus `local_index_status` |
+| Runs on | Windows, inside Visual Studio | Any system with Node.js 24 |
+
+**Instead of the extension's gateway.** Start the Node gateway and register it in `.mcp.json` next to
+the solution under the name `d365-fno`, as [the gateway guide](hybrid-gateway.md#4-point-the-agent-at-the-gateway)
+shows. Use one `d365-fno` entry in the file at a time. You then do without
+`workspace_get_context`, **Select Tools...** and the Credential Manager storage.
+
+**Alongside the extension.** Keep the extension for Visual Studio and run the Node gateway for other
+clients on the same machine, such as Claude Code, Copilot CLI or VS Code. The two are independent
+processes on different ports. The prebuilt [local agents](local-agents.md) expect the server name
+`d365-fno`; under any other name they have no tools.
+
+Pointing the extension's server URL at the Node gateway has not been tested and is not documented here.
+
 ## Workspace context
 
 `workspace_get_context` currently returns:

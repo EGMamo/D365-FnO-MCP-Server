@@ -28,6 +28,7 @@
     "dev": "tsx watch src/index.ts",
     "start": "node dist/src/index.js",
     "serve": "node dist/src/index.js serve",
+    "gateway": "node dist/src/index.js gateway",
     "doctor": "node dist/src/index.js doctor",
     "index": "node dist/src/index.js index",
     "acquire": "node dist/src/index.js acquire",

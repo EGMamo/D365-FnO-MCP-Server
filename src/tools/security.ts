@@ -20,7 +20,7 @@ import {
   convertSecurityExport, SECURITY_CONVERTER_ATTRIBUTION, SECURITY_KIND_TO_AOT,
 } from '../security/converter.js';
 
-const SECURITY_TYPE_TO_AOT = { Role: 'SecurityRole', Duty: 'SecurityDuty', Privilege: 'SecurityPrivilege' } as const;
+export const SECURITY_TYPE_TO_AOT = { Role: 'SecurityRole', Duty: 'SecurityDuty', Privilege: 'SecurityPrivilege' } as const;
 
 /** Keeps responses bounded: returns the first `max` items with the true total. */
 function capped<T>(items: T[], max: number): { total: number; truncated: boolean; items: T[] } {

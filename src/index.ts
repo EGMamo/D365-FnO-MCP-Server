@@ -33,6 +33,12 @@ export async function run(argv: string[]): Promise<CliResult> {
       await startServer();
       return { code: 0, keepAlive: true };
     }
+    case 'gateway': {
+      // Lazy like `serve`: the gateway pulls in the MCP server, its HTTP transport and the hosted client.
+      // The code is 0 once the gateway listens (it then keeps the process alive) and 1 for an invalid configuration.
+      const { startGateway } = await import('./gateway/server.js');
+      return { code: await startGateway(process.env), keepAlive: true };
+    }
     case 'index': {
       const { indexCommand } = await import('./cli/index-command.js');
       return {
@@ -186,7 +192,7 @@ async function main() {
   config({ quiet: true });
 
   const result = await run(process.argv.slice(2));
-  // `serve` keeps the event loop alive on its own; exiting here would kill it.
+  // `serve` and `gateway` keep the event loop alive on their own; exiting here would kill them.
   if (!result.keepAlive || result.code !== 0) {
     process.exit(result.code);
   }
