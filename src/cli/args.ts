@@ -109,6 +109,16 @@ Commands:
       --products <a,b>       Product names to keep (default: Finance, SCM, Commerce, Project Operations, HR, cross-app)
       --all-products         Keep every product in the feed
       --db-path <path>       SQLite index path (default D365_INDEX_DB_PATH or ./d365_index.db)
+  index-docs                 Store a documentation site for search_docs and get_doc_page (network unless --from-dir)
+      --url <url>            Start page to crawl (same site, HTML pages, robots.txt respected)
+      --scope <prefix>       Only crawl URLs starting with this (default: the start page's folder)
+      --sitemap <url>        Also queue the pages listed in this sitemap.xml
+      --max-pages <n>        Stop after this many requests (default 2000)
+      --delay-ms <n>         Pause between requests (default 500)
+      --from-dir <folder>    Import local .md/.html files instead of crawling
+      --base-url <url>       With --from-dir: site URL the folder's files map to
+      --source <label>       Label for this import; re-importing a label replaces it (default: site host or folder name)
+      --db-path <path>       SQLite index path (default D365_INDEX_DB_PATH or ./d365_index.db)
   doctor                    Validate environment and report issues (exit 1 on failure)
                             Also checks the gateway settings and the hosted server when D365_HOSTED_MCP_URL is set
   index-status              Report whether the local index is current for the packages folder
