@@ -9,6 +9,7 @@ A Model Context Protocol (MCP) server that gives AI coding assistants first-clas
 - **Exposing F&O to AI agents**: checks whether a data entity is OData-ready and generates read-only entities, privileges, read-only roles and OData actions, all grounded against the index.
 - **Performance trace analysis**: imports Trace Parser (`AxTrace`) aggregates and reports N+1 queries, slow SQL and top methods, each linked back to the X++ object, and the table indexes and table group involved.
 - **Batch and telemetry helpers**: classifies batch classes (RunBaseBatch / SysOperation), checks batch capability, `BatchRetryable`, pack/unpack versioning and idempotency, and generates ready-to-run KQL for F&O batch telemetry, X++ exceptions, slow SQL and Commerce store health.
+- **Documentation search** (optional): imports a documentation site (crawled, or a local folder of markdown/HTML) into the local index and searches it offline with `search_docs` and `get_doc_page`.
 - **Release plan awareness** (optional): imports Microsoft release plans for Finance, SCM, Commerce, Project Operations and HR, searches them offline, and maps a feature to the indexed objects and your packages' customizations that it may affect.
 - **Label lookup** — resolve label IDs and full-text search label files across packages.
 - **X++ generators with grounding** — Chain of Command extensions, table/class extensions, plain classes, RunBase batch jobs, and SysOperation classes. Generators validate their inputs against the index and fail closed rather than emit code for objects that do not exist.
@@ -216,6 +217,17 @@ Commands:
       --url <url>            Feed URL (default https://releaseplans.microsoft.com/en-US/allreleaseplans/)
       --products <a,b>       Product names to keep (default: Finance, SCM, Commerce, Project Operations, HR, cross-app)
       --all-products         Keep every product in the feed
+      --db-path <path>       SQLite index path (default D365_INDEX_DB_PATH or ./d365_index.db)
+  index-docs                 Store a documentation site for search_docs and get_doc_page (network unless --from-dir)
+      --url <url>            Start page to crawl (same site, HTML pages, robots.txt respected)
+      --scope <prefix>       Only crawl URLs starting with this (default: the start page's folder)
+      --sitemap <url>        Also queue the pages listed in this sitemap.xml
+      --max-pages <n>        Stop after this many requests (default 2000)
+      --delay-ms <n>         Pause between requests (default 500)
+      --from-dir <folder>    Import local .md/.html files instead of crawling
+      --base-url <url>       With --from-dir: site URL the folder's files map to
+      --include <a,b>        Only store these folders (relative to --from-dir or --scope), e.g. dev-tools,sysadmin
+      --source <label>       Label for this import; re-importing a label replaces it (default: site host or folder name)
       --db-path <path>       SQLite index path (default D365_INDEX_DB_PATH or ./d365_index.db)
   doctor                    Validate environment and report issues (exit 1 on failure)
                             Also checks the gateway settings and the hosted server when D365_HOSTED_MCP_URL is set
@@ -557,6 +569,9 @@ Batch and telemetry:
 Release plans (after `index-release-plans`; see below):
 `search_release_plans` (keywords, product, wave and status as of today, or full details by plan ID), `check_feature_impact` (maps a feature or AOT name fragments to indexed objects, and to the objects in your packages that match or reference them)
 
+Documentation (after `index-docs`; see below):
+`search_docs` (full-text search with stemming over imported documentation pages, best sections first), `get_doc_page` (one page as markdown, in parts for long pages)
+
 Code quality (heuristic checks modelled on AppChecker and TRUDUtils; not a replacement for the compiler):
 `get_method_source` (one method's X++ from stored XML, case-insensitive, size-capped), `check_xpp_best_practices` (tts balance, breakpoints, direct SQL, row-by-row DML in loops, nested `while select`, unused `forupdate`, CoC without `next`, empty `catch`, missing docs; on an indexed object or pasted source), `find_field_access` (read vs write uses of a table field across indexed code; needs raw XML), `get_bp_findings` (compiler best-practice results after `index-bp`)
 
@@ -696,7 +711,7 @@ Query shapes and field names are adapted from Microsoft's Dynamics-365-FastTrack
 `index-release-plans` downloads the public feed behind
 [releaseplans.microsoft.com](https://releaseplans.microsoft.com) and stores the Finance, Supply
 Chain Management, Commerce, Project Operations, Human Resources and F&O cross-app features in the
-local index. It is the only command that calls the public internet, and it runs only when you start it.
+local index. It and `index-docs` are the only commands that call the public internet, and they run only when you start them.
 The MCP tools read the local copy.
 
 ```text
@@ -718,6 +733,49 @@ Microsoft announced it would stop publishing release plans after September 2026 
 Microsoft AI at Work roadmap. If the feed is gone, the command fails and the last imported copy stays
 in the index; `--from-json` still works with a saved feed. The paging and product scope follow the FastTrack Release Planner Helper
 (MIT License, Copyright (c) Microsoft Corporation).
+
+## Optional documentation sites
+
+`index-docs` stores a documentation site, such as guides for finance and operations development,
+integration and administration, in the local index. `search_docs` and `get_doc_page` read that copy,
+so the server never calls the site. Imported pages are reference material. They are separate from
+the curated [knowledge base](#knowledge-filter): they never filter or annotate other tools' results,
+and the digester is not involved.
+
+```text
+# Crawl a site: same host, under the start page's folder (or --scope), robots.txt respected
+d365-fno-mcp-server index-docs --url https://docs.example.com/fno/ --source fno-docs --db-path ./d365_index.db
+
+# Or import a local copy (for example a cloned docs repository) of .md/.html files
+d365-fno-mcp-server index-docs --from-dir ./docs-repo/articles --base-url https://docs.example.com/fno --source fno-docs
+```
+
+For the finance and operations docs on Microsoft Learn, import a sparse clone of the public
+`MicrosoftDocs/Dynamics-365-Unified-Operations-Public` repository instead of crawling the site.
+`--include` keeps only the folders you want:
+
+```text
+git clone --depth 1 --filter=blob:none --sparse https://github.com/MicrosoftDocs/Dynamics-365-Unified-Operations-Public
+cd Dynamics-365-Unified-Operations-Public
+git sparse-checkout set articles/fin-ops-core/dev-itpro
+d365-fno-mcp-server index-docs --from-dir articles/fin-ops-core/dev-itpro \
+  --base-url https://learn.microsoft.com/en-us/dynamics365/fin-ops-core/dev-itpro --source fno-learn \
+  --include dev-tools,extensibility,dev-ref,perf-test,user-interface,data-entities,business-events,power-platform,sysadmin,deployment,database,lifecycle-services,migration-upgrade,organization-administration \
+  --db-path ./d365_index.db
+```
+
+Folder imports skip `includes` and `media` folders, map `index.md` to its folder URL, and drop
+Learn-only markup (`[!INCLUDE]`, `:::image`, `[!div]`) while keeping `[!NOTE]`-style alerts as
+labels. An `--include` name that matches no files is reported.
+
+The crawler fetches one page at a time with `--delay-ms` between requests (default 500), follows
+links on HTML pages, skips pages marked `noindex` and non-HTML files, and stops at `--max-pages`
+(default 2000), saying so when links were left. With `--include`, pages outside those folders are
+still read for their links but are not stored. Each page is split into its `##`/`###` sections, and
+long sections are split again, so a search hit points at the part of the page that matched.
+Re-importing a `--source` label replaces that source in one transaction and keeps the others; a run
+that finds no pages leaves the old copy in place. Check the site's terms before importing it,
+and keep private documentation out of a hosted index that other people can query.
 
 ## Local agents (GitHub Copilot and Claude Code)
 

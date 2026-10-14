@@ -17,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `index-docs` command and `search_docs` / `get_doc_page` tools: crawl a documentation site (same
+  host, under a scope, robots.txt respected, optional sitemap) or import a folder of markdown/HTML
+  files into the local index, split into heading sections with an FTS5 index (porter stemming). Each
+  `--source` label is replaced on re-import. Imported docs are kept apart from the curated knowledge
+  base.
 - `gateway` command: a hybrid gateway for developers who use a hosted server. It indexes only the
   custom models in `D365_CUSTOM_METADATA_DIR` into a separate local SQLite file, listens on
   `127.0.0.1` behind a bearer token, forwards tool calls to the hosted server and merges both sides

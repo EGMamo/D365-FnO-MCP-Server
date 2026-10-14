@@ -14,6 +14,7 @@ import { registerSecurityTools } from '../tools/security.js';
 import { registerEntityTools } from '../tools/entities.js';
 import { registerTraceTools } from '../tools/traces.js';
 import { registerReleasePlanTools } from '../tools/releasePlans.js';
+import { registerDocsTools } from '../tools/docs.js';
 import { registerTelemetryTools } from '../tools/telemetry.js';
 import { registerCodeQualityTools } from '../tools/codeQuality.js';
 import { registerGeneratorTools } from '../tools/generators.js';
@@ -117,6 +118,7 @@ export async function startServer(): Promise<void> {
       registerTelemetryTools(server, db);
       registerCodeQualityTools(server, db);
       registerReleasePlanTools(server, db);
+      registerDocsTools(server, db);
       registerGeneratorTools(server, db);
     }, knowledgeSession);
     if (config.knowledgeFilter) registerTaskGuidanceTool(server, knowledgeFilter.current, knowledgeSession);

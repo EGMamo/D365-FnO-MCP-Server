@@ -5,6 +5,7 @@ import type { AxParam } from './parser.js';
 import { createUsageSchema } from './xrefUsage.js';
 import { createTraceSchema } from './traces.js';
 import { createReleasePlanSchema } from './releasePlans.js';
+import { createDocsSchema } from './docs.js';
 import { createBpSchema } from './bpFindings.js';
 
 export type Database = DatabaseSync;
@@ -245,6 +246,7 @@ export function openDb(dbPath: string): Database {
   createUsageSchema(db);
   createTraceSchema(db);
   createReleasePlanSchema(db);
+  createDocsSchema(db);
   createBpSchema(db);
 
   return db;

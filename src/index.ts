@@ -96,6 +96,26 @@ export async function run(argv: string[]): Promise<CliResult> {
         }),
       };
     }
+    case 'index-docs': {
+      const { indexDocsCommand } = await import('./cli/index-docs-command.js');
+      const maxPages = flagString(flags, 'max-pages');
+      const delayMs = flagString(flags, 'delay-ms');
+      const include = flagString(flags, 'include');
+      return {
+        code: await indexDocsCommand({
+          url: flagString(flags, 'url'),
+          scope: flagString(flags, 'scope'),
+          sitemap: flagString(flags, 'sitemap'),
+          fromDir: flagString(flags, 'from-dir'),
+          baseUrl: flagString(flags, 'base-url'),
+          include: include?.split(',').map((p) => p.trim()).filter(Boolean),
+          source: flagString(flags, 'source'),
+          maxPages: maxPages === undefined ? undefined : Number(maxPages),
+          delayMs: delayMs === undefined ? undefined : Number(delayMs),
+          dbPath: flagString(flags, 'db-path'),
+        }),
+      };
+    }
     case 'index-xref': {
       const { indexXrefCommand } = await import('./cli/index-xref-command.js');
       return {
