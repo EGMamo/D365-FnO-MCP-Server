@@ -47,15 +47,15 @@
     "@azure/identity": "^4.13.3",
     "@azure/storage-blob": "^12.34.0",
     "@huggingface/tokenizers": "^0.2.0",
-    "@modelcontextprotocol/sdk": "^1.30.1",
-    "dotenv": "^18.0.4",
-    "express": "^5.2.1",
-    "express-rate-limit": "^8.7.0",
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "dotenv": "^18.0.7",
+    "express": "^5.3.0",
+    "express-rate-limit": "^8.7.1",
     "fast-xml-parser": "^5.11.2",
     "glob": "^13.0.6",
     "onnxruntime-web": "^1.30.0",
     "yaml": "^2.9.1",
-    "zod": "^4.6.5"
+    "zod": "^4.6.6"
   },
   "optionalDependencies": {
     "mssql": "^12.7.2"
@@ -63,10 +63,10 @@
   "devDependencies": {
     "@types/express": "^5.0.6",
     "@types/mssql": "^12.3.0",
-    "@types/node": "^26.6.3",
-    "@typescript-eslint/eslint-plugin": "^8.71.0",
+    "@types/node": "^26.6.5",
+    "@typescript-eslint/eslint-plugin": "^8.71.1",
     "@typescript-eslint/parser": "^8.71.0",
-    "eslint": "^10.11.0",
+    "eslint": "^10.12.0",
     "tsx": "^4.23.15",
     "typescript": "^5.5.0",
     "vitest": "^5.0.3"
