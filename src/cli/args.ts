@@ -117,6 +117,7 @@ Commands:
       --delay-ms <n>         Pause between requests (default 500)
       --from-dir <folder>    Import local .md/.html files instead of crawling
       --base-url <url>       With --from-dir: site URL the folder's files map to
+      --include <a,b>        Only store these folders (relative to --from-dir or --scope), e.g. dev-tools,sysadmin
       --source <label>       Label for this import; re-importing a label replaces it (default: site host or folder name)
       --db-path <path>       SQLite index path (default D365_INDEX_DB_PATH or ./d365_index.db)
   doctor                    Validate environment and report issues (exit 1 on failure)

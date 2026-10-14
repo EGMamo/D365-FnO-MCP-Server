@@ -226,6 +226,7 @@ Commands:
       --delay-ms <n>         Pause between requests (default 500)
       --from-dir <folder>    Import local .md/.html files instead of crawling
       --base-url <url>       With --from-dir: site URL the folder's files map to
+      --include <a,b>        Only store these folders (relative to --from-dir or --scope), e.g. dev-tools,sysadmin
       --source <label>       Label for this import; re-importing a label replaces it (default: site host or folder name)
       --db-path <path>       SQLite index path (default D365_INDEX_DB_PATH or ./d365_index.db)
   doctor                    Validate environment and report issues (exit 1 on failure)
@@ -749,9 +750,28 @@ d365-fno-mcp-server index-docs --url https://docs.example.com/fno/ --source fno-
 d365-fno-mcp-server index-docs --from-dir ./docs-repo/articles --base-url https://docs.example.com/fno --source fno-docs
 ```
 
+For the finance and operations docs on Microsoft Learn, import a sparse clone of the public
+`MicrosoftDocs/Dynamics-365-Unified-Operations-Public` repository instead of crawling the site.
+`--include` keeps only the folders you want:
+
+```text
+git clone --depth 1 --filter=blob:none --sparse https://github.com/MicrosoftDocs/Dynamics-365-Unified-Operations-Public
+cd Dynamics-365-Unified-Operations-Public
+git sparse-checkout set articles/fin-ops-core/dev-itpro
+d365-fno-mcp-server index-docs --from-dir articles/fin-ops-core/dev-itpro \
+  --base-url https://learn.microsoft.com/en-us/dynamics365/fin-ops-core/dev-itpro --source fno-learn \
+  --include dev-tools,extensibility,dev-ref,perf-test,user-interface,data-entities,business-events,power-platform,sysadmin,deployment,database,lifecycle-services,migration-upgrade,organization-administration \
+  --db-path ./d365_index.db
+```
+
+Folder imports skip `includes` and `media` folders, map `index.md` to its folder URL, and drop
+Learn-only markup (`[!INCLUDE]`, `:::image`, `[!div]`) while keeping `[!NOTE]`-style alerts as
+labels. An `--include` name that matches no files is reported.
+
 The crawler fetches one page at a time with `--delay-ms` between requests (default 500), follows
 links on HTML pages, skips pages marked `noindex` and non-HTML files, and stops at `--max-pages`
-(default 2000), saying so when links were left. Each page is split into its `##`/`###` sections, and
+(default 2000), saying so when links were left. With `--include`, pages outside those folders are
+still read for their links but are not stored. Each page is split into its `##`/`###` sections, and
 long sections are split again, so a search hit points at the part of the page that matched.
 Re-importing a `--source` label replaces that source in one transaction and keeps the others; a run
 that finds no pages leaves the old copy in place. Check the site's terms before importing it,

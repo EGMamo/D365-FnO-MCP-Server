@@ -64,7 +64,7 @@ export function searchDocs(db: Database, args: SearchDocsArgs): ToolResult {
     // Title and heading hits count more than body hits; several sections of one page are collapsed below.
     return db
       .prepare(`SELECT s.id, s.page_id, p.url, p.source, s.title, s.heading,
-          snippet(ax_doc_sections_fts, 2, '**', '**', ' … ', 24) AS snippet
+          snippet(ax_doc_sections_fts, 2, '«', '»', ' … ', 24) AS snippet
         FROM ax_doc_sections_fts
         JOIN ax_doc_sections s ON s.id = ax_doc_sections_fts.rowid
         JOIN ax_doc_pages p ON p.id = s.page_id

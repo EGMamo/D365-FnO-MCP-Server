@@ -5,7 +5,7 @@ import path from 'path';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { openDb, type Database } from '../src/indexer/db.js';
 import {
-  crawlSite, extractLinks, htmlToMarkdown, htmlToPage, markdownToPage, parseRobotsTxt, parseSitemap, publishDocs,
+  cleanDocsMarkdown, crawlSite, extractLinks, htmlToMarkdown, htmlToPage, markdownToPage, parseRobotsTxt, parseSitemap, publishDocs,
   readDocsFolder, robotsAllows,
 } from '../src/indexer/docs.js';
 import { indexDocsCommand } from '../src/cli/index-docs-command.js';
@@ -64,6 +64,24 @@ describe('page conversion', () => {
     expect(htmlToPage(html('Hidden', `<p>${PROSE}</p>`, [], '<meta name="robots" content="noindex, nofollow">'), 'u')).toBeNull();
   });
 
+  it('removes Learn markup outside code fences', () => {
+    const md = [
+      '[!INCLUDE [banner](../includes/banner.md)]',
+      '> [!NOTE]',
+      '> Read this first.',
+      ':::image type="content" source="media/a.png" alt-text="A":::',
+      ':::image type="complex" source="media/b.png" alt-text="B":::',
+      'Long description of B.',
+      ':::image-end:::',
+      '> [!div class="nextstepaction"]',
+      'See ![icon](media/i.png) here.',
+      '```text',
+      ':::kept in code:::',
+      '```',
+    ].join('\n');
+    expect(cleanDocsMarkdown(md)).toBe(['> **Note:**', '> Read this first.', 'See  here.', '```text', ':::kept in code:::', '```'].join('\n'));
+  });
+
   it('resolves links and reads robots.txt and sitemaps', () => {
     expect(extractLinks('<a href="b?x=1#y">b</a><a href="#top">t</a><a href="mailto:a@b.c">m</a><a href="/c/">c</a>', 'https://s.test/a/page'))
       .toEqual(['https://s.test/a/b', 'https://s.test/c/']);
@@ -108,6 +126,11 @@ describe('crawlSite', () => {
     expect(result.skipped).toBe(1);
     const requested = (fetchImpl as unknown as { mock: { calls: unknown[][] } }).mock.calls.map((c) => String(c[0]));
     expect(requested.some((u) => u.includes('private') || u.includes('blog') || u.includes('other.test'))).toBe(false);
+  });
+
+  it('stores only included folders but follows links through the rest of the scope', async () => {
+    const result = await crawlSite({ startUrl: 'https://s.test/docs/', delayMs: 0, fetchImpl, include: ['deep'] });
+    expect(result.pages.map((p) => p.url)).toEqual(['https://s.test/docs/deep/page']);
   });
 
   it('stops at maxPages and reports it', async () => {
@@ -178,6 +201,25 @@ describe('docs store and tools', () => {
     expect(docsFtsQuery('OData "entity" -x', 'all')).toBe('"OData" "entity" "x"');
     expect(docsFtsQuery('a b', 'any')).toBe('"a" OR "b"');
     expect(docsFtsQuery('!!', 'all')).toBeNull();
+  });
+
+  it('maps a docs repository folder to site URLs, skipping includes and media and honouring --include', () => {
+    const dir = path.join(tmp, 'repo');
+    for (const sub of ['dev-tools', 'sysadmin', 'analytics', 'dev-tools/includes', 'media']) fs.mkdirSync(path.join(dir, sub), { recursive: true });
+    const article = (title: string) => `---\ntitle: ${title}\nms.date: 01/01/2026\n---\n\n# ${title}\n\n${PROSE}`;
+    fs.writeFileSync(path.join(dir, 'dev-tools', 'index.md'), article('Developer home'));
+    fs.writeFileSync(path.join(dir, 'dev-tools', 'build.md'), article('Build'));
+    fs.writeFileSync(path.join(dir, 'dev-tools', 'includes', 'banner.md'), article('Banner'));
+    fs.writeFileSync(path.join(dir, 'sysadmin', 'batch.md'), article('Batch'));
+    fs.writeFileSync(path.join(dir, 'analytics', 'reports.md'), article('Reports'));
+    fs.writeFileSync(path.join(dir, 'media', 'note.md'), article('Media note'));
+    const { pages, unmatched } = readDocsFolder(dir, 'https://s.test/dev-itpro', ['dev-tools', './sysadmin/', 'missing']);
+    expect(unmatched).toEqual(['missing/']);
+    expect(pages.map((p) => [p.url, p.title])).toEqual([
+      ['https://s.test/dev-itpro/dev-tools/build', 'Build'],
+      ['https://s.test/dev-itpro/dev-tools/', 'Developer home'],
+      ['https://s.test/dev-itpro/sysadmin/batch', 'Batch'],
+    ]);
   });
 
   it('imports a folder through the CLI command', async () => {

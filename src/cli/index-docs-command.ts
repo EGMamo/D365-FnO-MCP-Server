@@ -9,6 +9,7 @@ export interface IndexDocsOptions {
   sitemap?: string;
   fromDir?: string;
   baseUrl?: string;
+  include?: string[];
   source?: string;
   maxPages?: number;
   delayMs?: number;
@@ -35,8 +36,9 @@ export async function indexDocsCommand(options: IndexDocsOptions, env: NodeJS.Pr
     if (options.fromDir) {
       const dir = path.resolve(options.fromDir);
       if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) throw new Error(`Not a folder: ${options.fromDir}`);
-      const folder = readDocsFolder(dir, options.baseUrl);
+      const folder = readDocsFolder(dir, options.baseUrl, options.include);
       console.error(`Read ${folder.read} file(s) from ${dir}; ${folder.pages.length} page(s) have content.`);
+      if (folder.unmatched.length > 0) console.error(`No files under: ${folder.unmatched.join(', ')} (check the --include names).`);
       pages = folder.pages;
       origin = options.baseUrl ?? `folder:${path.basename(dir)}`;
       source = options.source ?? path.basename(dir);
@@ -47,6 +49,7 @@ export async function indexDocsCommand(options: IndexDocsOptions, env: NodeJS.Pr
         startUrl: url,
         scope: options.scope,
         sitemapUrl: options.sitemap,
+        include: options.include,
         maxPages: options.maxPages,
         delayMs: options.delayMs,
         fetchImpl: options.fetchImpl,

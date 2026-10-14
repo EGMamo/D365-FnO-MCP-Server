@@ -109,6 +109,42 @@ function splitLongSection(section: DocSection): DocSection[] {
   return parts;
 }
 
+const ALERT_LABELS: Record<string, string> = { NOTE: 'Note', TIP: 'Tip', IMPORTANT: 'Important', WARNING: 'Warning', CAUTION: 'Caution' };
+
+/**
+ * Removes Microsoft Learn (DocFX) markup that has no meaning outside the rendered site: include
+ * directives, `:::image` and other `:::` blocks, `[!div]` lines and images. `> [!NOTE]` style
+ * alerts become a bold label. Code fences are left alone.
+ */
+export function cleanDocsMarkdown(markdown: string): string {
+  const out: string[] = [];
+  let inFence = false;
+  let inBlock = false;
+  for (const line of markdown.split('\n')) {
+    if (/^\s*(```|~~~)/.test(line)) inFence = !inFence;
+    if (inFence) {
+      out.push(line);
+      continue;
+    }
+    // A complex `:::image` carries a long description up to `:::image-end:::`; other `:::x:::` directives are one line.
+    if (inBlock) {
+      if (/:::image-end:::/.test(line)) inBlock = false;
+      continue;
+    }
+    if (/^\s*:::image\b[^\n]*type="complex"/.test(line)) {
+      inBlock = true;
+      continue;
+    }
+    if (/^\s*(>\s*)*(:::|\[!INCLUDE|\[!div\b)/i.test(line)) continue;
+    out.push(
+      line
+        .replace(/\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]/gi, (_m, kind: string) => `**${ALERT_LABELS[kind.toUpperCase()]}:**`)
+        .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+    );
+  }
+  return out.join('\n');
+}
+
 /**
  * Splits markdown into a title and `##`/`###` sections (headings inside code fences do not count).
  * Text before the first section heading becomes a section headed by the title.
@@ -126,6 +162,7 @@ export function markdownToPage(markdown: string, url: string, fallbackTitle = ''
     }
     text = text.slice(front[0].length);
   }
+  text = cleanDocsMarkdown(text);
 
   const sections: DocSection[] = [];
   let heading = '';
@@ -164,27 +201,52 @@ export function htmlToPage(html: string, url: string): DocPage | null {
 }
 
 const DOC_EXTENSIONS = new Set(['.md', '.markdown', '.html', '.htm']);
+/** Folders that hold fragments or assets rather than pages (DocFX `includes`, `media`). */
+const SKIPPED_FOLDERS = new Set(['includes', 'media', 'node_modules']);
 
-/** Reads every markdown/HTML file under `dir`. `baseUrl` turns relative paths into stored URLs. */
-export function readDocsFolder(dir: string, baseUrl?: string): { pages: DocPage[]; read: number } {
+/** Normalizes `--include` folders to `a/b/` form; empty means everything. */
+export function normalizeIncludes(include: string[] | undefined): string[] {
+  return (include ?? [])
+    .map((entry) => entry.trim().replace(/\\/g, '/').replace(/^\.?\/+/, '').replace(/\/*$/, '/'))
+    .filter((entry) => entry !== '/');
+}
+
+const isIncluded = (relative: string, includes: string[]) =>
+  includes.length === 0 || includes.some((prefix) => relative.startsWith(prefix) || `${relative}/` === prefix);
+
+/**
+ * Reads every markdown/HTML file under `dir`. `baseUrl` turns relative paths into stored URLs
+ * (`a/index.md` becomes `a/`, like the published site), and `include` keeps only files under
+ * those folders.
+ */
+export function readDocsFolder(
+  dir: string,
+  baseUrl?: string,
+  include?: string[]
+): { pages: DocPage[]; read: number; unmatched: string[] } {
+  const includes = normalizeIncludes(include);
   const pages: DocPage[] = [];
   let read = 0;
   const files = (fs.readdirSync(dir, { recursive: true, withFileTypes: true }) as fs.Dirent[])
     .filter((entry) => entry.isFile() && DOC_EXTENSIONS.has(path.extname(entry.name).toLowerCase()))
     .map((entry) => path.join(entry.parentPath, entry.name))
-    .sort();
-  for (const file of files) {
+    .map((file) => ({ file, relative: path.relative(dir, file).split(path.sep).join('/') }))
+    .filter(({ relative }) => !relative.split('/').some((part) => SKIPPED_FOLDERS.has(part.toLowerCase()) || part.startsWith('.')))
+    .filter(({ relative }) => isIncluded(relative, includes))
+    .sort((a, b) => a.relative.localeCompare(b.relative));
+  for (const { file, relative } of files) {
     read++;
-    const relative = path.relative(dir, file).split(path.sep).join('/');
+    const urlPath = relative.replace(/(^|\/)index\.(md|markdown)$/i, '$1').replace(/\.(md|markdown)$/i, '');
     const url = baseUrl
-      ? new URL(relative.replace(/\.(md|markdown)$/i, ''), baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`).toString()
+      ? new URL(urlPath, baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`).toString()
       : `file:${relative}`;
     const content = fs.readFileSync(file, 'utf8');
     const fallback = path.basename(file).replace(/\.[^.]+$/, '');
     const page = /\.html?$/i.test(file) ? htmlToPage(content, url) : markdownToPage(content, url, fallback);
     if (page) pages.push(page);
   }
-  return { pages, read };
+  const unmatched = includes.filter((prefix) => !files.some(({ relative }) => isIncluded(relative, [prefix])));
+  return { pages, read, unmatched };
 }
 
 /** Drops the fragment and query, so `page?tabs=x#y` and `page` are one page. */
@@ -252,6 +314,8 @@ export interface CrawlOptions {
   startUrl: string;
   /** Only URLs starting with this are fetched (default: the start URL's folder). */
   scope?: string;
+  /** Only store pages in these folders under the scope (e.g. `dev-tools`, `sysadmin`); other in-scope pages are only followed. */
+  include?: string[];
   /** Seeds the queue from this sitemap.xml (or sitemap index) as well as the start URL. */
   sitemapUrl?: string;
   maxPages?: number;
@@ -294,7 +358,11 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
   const scope = options.scope ? normalizeDocUrl(options.scope) ?? options.scope : defaultScope(start);
   const maxPages = options.maxPages ?? DEFAULT_MAX_PAGES;
   const delayMs = options.delayMs ?? 500;
+  const includes = normalizeIncludes(options.include);
   const inScope = (url: string) => url.startsWith(scope);
+  // Pages outside the included folders are still read for their links (hub pages lead into the
+  // included folders) but are not stored.
+  const wanted = (url: string) => isIncluded(url.slice(scope.length), includes);
 
   const get = async (url: string) => {
     const signals = [AbortSignal.timeout(options.timeoutMs ?? 30_000)];
@@ -373,7 +441,7 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
     const body = await response.text();
     const isHtml = /html/i.test(type);
     for (const link of isHtml ? extractLinks(body, finalUrl) : []) enqueue(link);
-    const page = isHtml ? htmlToPage(body, finalUrl) : markdownToPage(body, finalUrl);
+    const page = !wanted(finalUrl) ? null : isHtml ? htmlToPage(body, finalUrl) : markdownToPage(body, finalUrl);
     if (page) {
       stored.add(finalUrl);
       result.pages.push(page);
