@@ -1,8 +1,10 @@
 name: CI
 
+# Branches are tested through their pull request; pushing to master tests the
+# merged result. Running on every branch push as well doubled each PR's runs.
 on:
   push:
-    branches: ['**']
+    branches: [master]
   pull_request:
 
 # The jobs only read the repository; keep the token from writing anything.
@@ -61,6 +63,9 @@ jobs:
         with:
           name: vs-extension-vsix
           path: vs-extension/src/D365FnoMcp.Extension/bin/Release/**/*.vsix
+          # Releases come from release-vs-extension.yml; a CI build only needs to
+          # be downloadable long enough to try it, not the default 90 days.
+          retention-days: 7
           if-no-files-found: error
 
   infra:
