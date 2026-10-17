@@ -11,6 +11,14 @@
     "dynamics365",
     "finance-and-operations"
   ],
+  "homepage": "https://github.com/EGMamo/D365-FnO-MCP-Server#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EGMamo/D365-FnO-MCP-Server.git"
+  },
+  "bugs": {
+    "url": "https://github.com/EGMamo/D365-FnO-MCP-Server/issues"
+  },
   "bin": {
     "d365-fno-mcp-server": "dist/src/index.js"
   },

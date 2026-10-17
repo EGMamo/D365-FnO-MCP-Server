@@ -7,7 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- `tedious` (the optional `mssql` driver's dependency) moved to 20.3.7, which drops `sprintf-js`
+  (GHSA-hp3w-g68c-fv3c); `npm audit` now reports no vulnerabilities.
+
 ### Changed
+
+- The build no longer emits `.d.ts` and declaration maps: the package is a CLI with no library API,
+  and the maps pointed at `src/`, which is not published. The packed tarball drops from 416 to 230 files.
+- `package.json` names the repository, homepage and issue tracker.
 
 - Indexing is faster: the scan reads only `<Package>/<Model>/Ax<Type>/` instead of the whole tree
   (it no longer walks `bin/` or `XppMetadata/`), files are read ahead and written 500 per transaction,

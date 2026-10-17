@@ -12,7 +12,7 @@ Linux/Windows CI, Azure deployment, container, or Visual Studio extension were t
 
 | Gate | Current evidence |
 |---|---|
-| Full validation | `npm run check` on macOS, Node 26.8.1, with local port binding enabled: typecheck, lint, build, knowledge headers (26 topics) and tests passed; 680 tests passed, 4 skipped, 46 passing test files and 1 skipped file (2026-10-10, after the changes listed below); a later run with the embedding model installed: 683 passed, 1 skipped (the opt-in DynamicsXrefDB test) |
+| Full validation | `npm run check` on macOS, Node 26.8.1, with local port binding enabled: typecheck, lint, build, knowledge headers (26 topics) and tests passed; 680 tests passed, 4 skipped, 46 passing test files and 1 skipped file (2026-10-10, after the changes listed below); a later run with the embedding model installed: 683 passed, 1 skipped (the opt-in DynamicsXrefDB test). Re-run 2026-10-17 on Linux, Node 24.22.0, without the embedding model: 1,155 passed, 5 skipped, 58 passing test files and 1 skipped file |
 | Compiled protocol | `npm run check` includes the compiled-server tests in `tests/mcpIntegration.test.ts` (real child processes and SDK clients over HTTP, occupied-port startup failure, hosted-mode startup); they passed in this run |
 | Knowledge headers | All 26 topic headers valid; embedding model absent, so runtime guidance uses topic rules |
 | Startup failure | An occupied TCP port returns exit code 1 in both local and hosted modes, without logging successful listening/readiness |
@@ -155,7 +155,7 @@ it does not establish full-SDK, disk-backed, concurrent, or end-to-end tool late
 
 | Requirement | What remains |
 |---|---|
-| Dependency security | `npm audit` ran on 2026-10-10 (approved by the user): 4 moderate, 0 high/critical, one chain: `sprintf-js` <=1.1.3 (GHSA-hp3w-g68c-fv3c, DoS via unbounded precision specifiers) via `tedious`, used by `mssql`/`@types/mssql`. npm reports no fix available, so nothing was changed. Remaining decision: whether the optional DynamicsXrefDB SQL path is acceptable with this advisory, or should pin/replace the driver. |
+| Dependency security | Resolved 2026-10-17: `tedious` 20.3.7 (via `mssql`/`@types/mssql`) no longer depends on `sprintf-js` (GHSA-hp3w-g68c-fv3c); `npm audit` reports 0 vulnerabilities. CI keeps gating runtime dependencies on high/critical, and Dependabot covers new advisories. |
 | Deployment | Run Linux/Windows Node 24 CI, container smoke tests, infrastructure checks, and staged hosted startup/rollback under the actual deployment identity. |
 | Live integrations | Run the opt-in read-only DynamicsXrefDB contract against an authorized development database; validate generated X++ through the Finance Operations compiler. |
 | Semantic guidance | Install the configured embedding model and run the three skipped semantic tests plus a representative relevance evaluation. Header validation alone is insufficient. |

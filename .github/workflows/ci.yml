@@ -36,8 +36,8 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: '26'
-      # Gates on high and critical advisories in what ships (runtime deps). Known
-      # moderate findings sit in the optional mssql driver, which the image omits.
+      # Gates on high and critical advisories in what ships (runtime deps); moderate
+      # ones are left to Dependabot so an upstream advisory does not block every PR.
       - run: npm audit --omit=dev --audit-level=high
 
   vs-extension:
