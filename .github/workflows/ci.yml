@@ -27,8 +27,29 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node }}
-          cache: npm
+      # The npm cache is keyed on the OS and the lockfile only, so the two Ubuntu
+      # legs share one entry. Pull request runs restore it but never save: a cache
+      # saved from a PR is scoped to that PR's ref, no other run can reuse it, and
+      # each Dependabot lockfile bump would otherwise leave dead entries behind
+      # until eviction. Master saves a new entry only when the lockfile changes.
+      - name: Locate the npm cache
+        id: npm-cache
+        run: echo "dir=$(npm config get cache)" >> "$GITHUB_OUTPUT"
+        shell: bash
+      - name: Restore the npm cache
+        id: npm-restore
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ steps.npm-cache.outputs.dir }}
+          key: npm-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: npm-${{ runner.os }}-
       - run: npm ci
+      - name: Save the npm cache
+        if: github.event_name == 'push' && steps.npm-restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ steps.npm-cache.outputs.dir }}
+          key: ${{ steps.npm-restore.outputs.cache-primary-key }}
       - run: npm run check
 
   audit:
