@@ -80,6 +80,10 @@ jobs:
       - run: dotnet build vs-extension/src/D365FnoMcp.Extension -c Release
       - name: Upload the VSIX
         if: runner.os == 'Windows'
+        # The upload is a convenience for trying a build; the job has already
+        # proved the extension builds. A full account artifact quota must not
+        # turn the check red.
+        continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
           name: vs-extension-vsix
