@@ -73,6 +73,7 @@ Commands:
       D365_GATEWAY_TOKEN         Bearer token for agents, 32+ characters (default: generated beside the custom index)
       D365_APP_VERSION           Four-part version of your PackagesLocalDirectory, declared to the hosted server
       D365_GATEWAY_PRIVATE_PREFIXES  Object-name prefixes that are never sent to the hosted server (comma separated)
+      D365_GATEWAY_STANDARD_INDEX_DB_PATH  Optional standard index, read-only; forwarded tools then run locally over both
       D365_GATEWAY_UPSTREAM_TIMEOUT_MS  Wait for the hosted server before using local results (default 15000)
       D365_GATEWAY_REINDEX_TTL_MS       Longest the custom index is served without a re-check (default 30000)
   acquire                   Run one private acquisition/build/validation/publication cycle

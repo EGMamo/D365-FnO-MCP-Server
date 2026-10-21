@@ -60,7 +60,7 @@ internal sealed class SelectToolsCommand : Command
             return;
         }
 
-        (bool changed, List<string>? allowedTools) = await ToolPicker.ChooseAsync(shell, serverUrl, report.Tools, settings.AllowedTools, cancellationToken);
+        (bool changed, List<string>? allowedTools) = await ToolPicker.ChooseAsync(shell, serverUrl, report.Tools, settings.AllowedTools, settings.CustomMetadataDirectory.Length > 0, cancellationToken);
         if (!changed)
         {
             return;

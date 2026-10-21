@@ -278,6 +278,8 @@ interface StackOptions {
   upstreamTimeoutMs?: number;
   /** D365_APP_VERSION: the SDK version the gateway declares to the hosted server when the agent declares none. */
   appVersion?: string;
+  /** Writes the hosted stand-in's index to a file and sets it as D365_GATEWAY_STANDARD_INDEX_DB_PATH. */
+  standardIndex?: boolean;
 }
 
 interface Stack {
@@ -332,6 +334,13 @@ async function startStack(options: StackOptions = {}): Promise<Stack> {
   try {
     hosted = await startHosted();
     if (options.hostedDown) await hosted.stop();
+    const standardIndexDbPath = path.join(root, 'standard', 'd365_index.db');
+    if (options.standardIndex) {
+      fs.mkdirSync(path.dirname(standardIndexDbPath));
+      const standard = seedStandardIndex();
+      standard.prepare('VACUUM INTO ?').run(standardIndexDbPath);
+      standard.close();
+    }
     gateway = await launch({
       D365_HOSTED_MCP_URL: hosted.url,
       D365_HOSTED_API_KEY: options.hostedKey ?? HOSTED_KEY,
@@ -342,6 +351,7 @@ async function startStack(options: StackOptions = {}): Promise<Stack> {
       D365_GATEWAY_UPSTREAM_TIMEOUT_MS: String(options.upstreamTimeoutMs ?? 5000),
       ...(options.privatePrefixes ? { D365_GATEWAY_PRIVATE_PREFIXES: options.privatePrefixes } : {}),
       ...(options.appVersion ? { D365_APP_VERSION: options.appVersion } : {}),
+      ...(options.standardIndex ? { D365_GATEWAY_STANDARD_INDEX_DB_PATH: standardIndexDbPath } : {}),
     });
   } catch (error) {
     await stop();
@@ -764,6 +774,44 @@ describe('gateway with private prefixes', () => {
 
     const everything = hosted.bodies().toLowerCase();
     for (const secret of ['contoso', 'pastedsourcemarker42', 'tierfor']) expect(everything).not.toContain(secret);
+  }, TEST_TIMEOUT_MS);
+});
+
+describe('gateway with a standard index', () => {
+  const stack = useStack({ privatePrefixes: 'Contoso', standardIndex: true });
+
+  it('runs the otherwise forwarded tools over both indexes and sends them nothing upstream', async () => {
+    const { call, hosted } = stack();
+    const mark = hosted.requests.length;
+
+    // A generator over a custom table: the hosted server alone could not see its fields.
+    const entity = await call('create_data_entity', {
+      table: 'ContosoLoyaltyCard',
+      entityName: 'ContosoLoyaltyCardEntity',
+      keyFields: ['CardNum'],
+    });
+    expect(entity.isError).toBeFalsy();
+    expect(textsOf(entity).join('')).toContain('CardNum');
+
+    // A name with a private prefix is no reason to refuse: nothing would leave the machine anyway.
+    const findings = await call('get_bp_findings', { element: 'ContosoLoyaltyCard' });
+    expect(findings.isError).toBeFalsy();
+
+    expect(hosted.toolCalls(mark)).toEqual([]);
+  }, TEST_TIMEOUT_MS);
+
+  it('still forwards the tools about the hosted index, and reports the standard index by file name', async () => {
+    const { call, hosted, root } = stack();
+    const mark = hosted.requests.length;
+    await call('get_index_stats');
+    expect(hosted.toolCalls(mark).map((entry) => entry.name)).toEqual(['get_index_stats']);
+
+    const status = await call('local_index_status');
+    expect(payloadOf<{ standardIndex: Record<string, unknown> }>(status).standardIndex).toMatchObject({
+      fileName: 'd365_index.db',
+      objects: 5,
+    });
+    expect(textsOf(status).join('')).not.toContain(root);
   }, TEST_TIMEOUT_MS);
 });
 

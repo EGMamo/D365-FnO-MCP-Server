@@ -103,6 +103,20 @@ export function routeFor(name: string): RouteKind {
   return 'forward';
 }
 
+/** Tools about the hosted index itself (its size, staleness, usage snapshot); they keep going to the hosted server. */
+const HOSTED_INDEX_TOOLS = new Set(['get_index_stats', 'get_index_staleness', 'get_usage_snapshot_status']);
+
+/**
+ * Tools that would be forwarded but that the gateway can also run itself. With a standard index under the
+ * custom one, these are answered locally (unless their hosted schema differs).
+ */
+export function layerableToolNames(local: LocalTools): string[] {
+  return local
+    .definitions()
+    .map((definition) => definition.name)
+    .filter((name) => routeFor(name) === 'forward' && !HOSTED_INDEX_TOOLS.has(name));
+}
+
 /** What a property's schema lets through besides its name: the enum members (as a set) and the numeric bounds. */
 function constraintsOf(property: unknown): string {
   const schema = typeof property === 'object' && property !== null ? (property as Record<string, unknown>) : {};
@@ -317,6 +331,19 @@ async function runMerge(name: string, args: Record<string, unknown>, ctx: RouteC
   }
 }
 
+/** A forwarded tool answered over the standard index with the custom one on top; nothing is sent upstream. */
+async function runLayered(name: string, args: Record<string, unknown>, layered: LocalTools, ctx: RouteContext): Promise<CallToolResult> {
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = layered.parseArgs(name, args);
+  } catch (error) {
+    if (error instanceof ZodError) return errorResult(describeIssues(name, error));
+    throw error;
+  }
+  await ctx.localIndex.ensureFresh();
+  return layered.call(name, parsed);
+}
+
 /** A merge tool whose hosted schema differs from the local one: hosted answer only, with a warning. */
 async function runSkewed(name: string, args: Record<string, unknown>, ctx: RouteContext): Promise<CallToolResult> {
   const result = await forwardOnly(name, args, ctx);
@@ -330,7 +357,8 @@ async function runSkewed(name: string, args: Record<string, unknown>, ctx: Route
  * Runs one tools/call and always resolves: a failure becomes a short isError result without secrets or
  * absolute paths. Local-only tools never reach the hosted server; owner-routed tools go there only when
  * the named object is not in the local index; merge tools ask both sides and degrade to the local side;
- * everything else is forwarded as received. A call whose arguments contain a private name is never sent upstream.
+ * everything else runs over the layered standard index when there is one, and is otherwise forwarded as
+ * received. A call whose arguments contain a private name is never sent upstream.
  */
 export async function executeToolCall(
   name: string,
@@ -347,6 +375,9 @@ export async function executeToolCall(
       case 'merge':
         return ctx.skewedTools.has(name) ? await runSkewed(name, args, ctx) : await runMerge(name, args, ctx);
       case 'forward':
+        if (ctx.layered?.has(name) && !HOSTED_INDEX_TOOLS.has(name) && !ctx.skewedTools.has(name)) {
+          return await runLayered(name, args, ctx.layered, ctx);
+        }
         return await forwardOnly(name, args, ctx);
     }
   } catch (error) {

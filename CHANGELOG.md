@@ -26,6 +26,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Visual Studio extension: **Set Custom Models Folder...** runs the Node hybrid gateway as a child
+  process and forwards to it, so Copilot in Visual Studio sees custom code merged with the hosted
+  index. The hosted key and the gateway token reach the child through its environment only, the
+  custom index stays in memory, and if the Node gateway cannot start the extension forwards to Azure
+  as before. Tool selection and `workspace_get_context` are unchanged.
+- Hybrid gateway: `D365_GATEWAY_STANDARD_INDEX_DB_PATH` lays the custom index over a read-only
+  standard index through union views, so the tools that were forwarded unchanged (security paths,
+  SoD, `diff_roles`, entity readiness, BP findings and the generators) run locally over standard and
+  custom objects together and send nothing upstream. Custom ids are offset so rows never collide, and
+  an overlayered custom object hides the standard one. The Visual Studio extension asks for the file
+  in **Set Custom Models Folder...**.
 - `index-docs` command and `search_docs` / `get_doc_page` tools: crawl a documentation site (same
   host, under a scope, robots.txt respected, optional sitemap) or import a folder of markdown/HTML
   files into the local index, split into heading sections with an FTS5 index (porter stemming). Each

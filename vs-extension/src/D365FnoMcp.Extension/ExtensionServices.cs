@@ -16,6 +16,9 @@ internal sealed class ExtensionServices : IWorkspaceContextProvider, IAsyncDispo
     private OutputChannel? output;
     private McpGateway? gateway;
 
+    /// <summary>The Node hybrid gateway the extension's gateway forwards to, when a custom models folder is set.</summary>
+    private NodeGatewayProcess? nodeGateway;
+
     public ExtensionServices(VisualStudioExtensibility extensibility)
     {
         this.extensibility = extensibility;
@@ -32,17 +35,26 @@ internal sealed class ExtensionServices : IWorkspaceContextProvider, IAsyncDispo
 
     private HttpClient GatewayHttp { get; } = new() { Timeout = Timeout.InfiniteTimeSpan };
 
+    /// <summary>True while the Node gateway for the custom models folder runs and the extension's gateway forwards to it.</summary>
+    public bool CustomModelsActive => this.nodeGateway is { HasExited: false };
+
     public async Task<McpGateway> EnsureGatewayAsync(string serverUrl, string apiKey, CancellationToken cancellationToken)
     {
         await this.gatewayLock.WaitAsync(cancellationToken);
         try
         {
-            if (this.gateway is not null)
+            if (this.gateway is not null && this.nodeGateway?.HasExited != true)
             {
                 return this.gateway;
             }
 
-            this.gateway = await this.StartGatewayAsync(serverUrl, apiKey, cancellationToken);
+            if (this.gateway is not null)
+            {
+                this.Log("The Node gateway for custom models has stopped; starting the gateways again.");
+                await this.StopGatewaysAsync();
+            }
+
+            (this.gateway, this.nodeGateway) = await this.StartGatewayAsync(serverUrl, apiKey, cancellationToken);
             return this.gateway;
         }
         finally
@@ -57,12 +69,19 @@ internal sealed class ExtensionServices : IWorkspaceContextProvider, IAsyncDispo
         await this.gatewayLock.WaitAsync(cancellationToken);
         try
         {
-            McpGateway created = await this.StartGatewayAsync(serverUrl, apiKey, cancellationToken);
             McpGateway? previous = this.gateway;
+            NodeGatewayProcess? previousNode = this.nodeGateway;
+            (McpGateway created, NodeGatewayProcess? createdNode) = await this.StartGatewayAsync(serverUrl, apiKey, cancellationToken);
             this.gateway = created;
+            this.nodeGateway = createdNode;
             if (previous is not null)
             {
                 await previous.DisposeAsync();
+            }
+
+            if (previousNode is not null)
+            {
+                await previousNode.DisposeAsync();
             }
 
             return created;
@@ -136,10 +155,7 @@ internal sealed class ExtensionServices : IWorkspaceContextProvider, IAsyncDispo
         await this.gatewayLock.WaitAsync();
         try
         {
-            if (this.gateway is not null)
-            {
-                await this.gateway.DisposeAsync();
-            }
+            await this.StopGatewaysAsync();
         }
         finally
         {
@@ -167,25 +183,89 @@ internal sealed class ExtensionServices : IWorkspaceContextProvider, IAsyncDispo
         }
     }
 
-    private async Task<McpGateway> StartGatewayAsync(string serverUrl, string apiKey, CancellationToken cancellationToken)
+    /// <summary>Stops the running gateways; the caller holds <see cref="gatewayLock"/>.</summary>
+    private async Task StopGatewaysAsync()
+    {
+        if (this.gateway is not null)
+        {
+            await this.gateway.DisposeAsync();
+            this.gateway = null;
+        }
+
+        if (this.nodeGateway is not null)
+        {
+            await this.nodeGateway.DisposeAsync();
+            this.nodeGateway = null;
+        }
+    }
+
+    /// <summary>
+    /// Starts the extension's gateway. With a custom models folder it first starts the Node hybrid
+    /// gateway and forwards to it, so Copilot sees custom code merged with the hosted index; if that
+    /// fails, it forwards to the hosted server and says so in the Output pane.
+    /// </summary>
+    private async Task<(McpGateway Gateway, NodeGatewayProcess? Node)> StartGatewayAsync(string serverUrl, string apiKey, CancellationToken cancellationToken)
     {
         string? sdkVersion = PackagesDirectoryLocator.SdkVersion(PackagesDirectoryLocator.Detect());
+        ExtensionSettings settings = this.Settings.Load();
+        NodeGatewayProcess? node = await this.StartNodeGatewayAsync(settings, serverUrl, apiKey, cancellationToken);
         var created = new McpGateway(this.GatewayHttp, this)
         {
-            AllowedTools = ToolSelection.ToSet(this.Settings.Load().AllowedTools),
+            AllowedTools = ToolSelection.ToSet(settings.AllowedTools),
         };
         try
         {
-            await created.StartAsync(serverUrl, apiKey, sdkVersion, cancellationToken);
+            await created.StartAsync(
+                node is null ? serverUrl : node.BaseUrl!.ToString(),
+                node is null ? apiKey : node.Token,
+                sdkVersion,
+                cancellationToken);
         }
         catch
         {
             await created.DisposeAsync();
+            if (node is not null)
+            {
+                await node.DisposeAsync();
+            }
+
             throw;
         }
 
         this.Log($"Workspace gateway listening at {created.Endpoint}.");
-        return created;
+        return (created, node);
+    }
+
+    private async Task<NodeGatewayProcess?> StartNodeGatewayAsync(ExtensionSettings settings, string serverUrl, string apiKey, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(settings.CustomMetadataDirectory))
+        {
+            return null;
+        }
+
+        var node = new NodeGatewayProcess(this.Http, this.Log);
+        try
+        {
+            this.Log($"Starting the Node gateway for the custom models in {settings.CustomMetadataDirectory}; the first index can take a few minutes.");
+            await node.StartAsync(
+                new NodeGatewayOptions(
+                    string.IsNullOrWhiteSpace(settings.NodeGatewayCommand) ? ExtensionSettings.DefaultNodeGatewayCommand : settings.NodeGatewayCommand,
+                    serverUrl,
+                    apiKey,
+                    settings.CustomMetadataDirectory,
+                    settings.PrivatePrefixes,
+                    Path.Combine(Path.GetDirectoryName(this.Settings.Path)!, "node-gateway"),
+                    settings.StandardIndexPath),
+                cancellationToken);
+            this.Log($"Node gateway for custom models listening at {node.BaseUrl}.");
+            return node;
+        }
+        catch (Exception ex) when (ex is IOException or InvalidOperationException or TimeoutException or ArgumentException or FormatException or System.ComponentModel.Win32Exception)
+        {
+            await node.DisposeAsync();
+            this.Log($"Could not start the Node gateway for custom models: {ex.Message} Copilot gets the hosted index only until it starts (Extensions > D365 F&O MCP > Set Custom Models Folder...).");
+            return null;
+        }
     }
 
     private async Task StartConfiguredGatewayAsync()
