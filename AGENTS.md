@@ -56,6 +56,7 @@ If you are an agent setting this up *for a user*, start with `llms-install.md`.
   - `src/gateway/` — the hybrid gateway (`gateway` command)
     - `config.ts` — zod-validated gateway settings, token file; `types.ts` — shared contracts
     - `localIndex.ts` — custom-model SQLite index with file watcher + TTL refresh
+    - `layeredIndex.ts` — read-only union views of an optional standard index with the custom one on top
     - `localTools.ts` — captures the read-only tool handlers against the local database
     - `upstream.ts` — MCP client session to the hosted server
     - `router.ts` — route name lists (local-only, owner-routed, merged) and `executeToolCall`

@@ -25,6 +25,7 @@ function localIndexOf(db: Database): LocalIndex {
   return {
     db,
     customDir: workspace.customMetadataDir,
+    attachUri: 'file:test?mode=memory',
     ensureFresh: async () => {},
     markDirty: () => {},
     status: () => ({

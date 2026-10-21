@@ -36,8 +36,27 @@ public class NodeGatewayProcessTests : IDisposable
         Assert.Equal("52011", info.Environment["D365_GATEWAY_PORT"]);
         Assert.Equal("token-value", info.Environment["D365_GATEWAY_TOKEN"]);
         Assert.Equal("Contoso, Fabrikam", info.Environment["D365_GATEWAY_PRIVATE_PREFIXES"]);
+        Assert.Equal(string.Empty, info.Environment["D365_GATEWAY_STANDARD_INDEX_DB_PATH"]);
         Assert.Equal(options.WorkingDirectory, info.WorkingDirectory);
         Assert.False(info.UseShellExecute);
+    }
+
+    [Fact]
+    public void PassesTheStandardIndex()
+    {
+        string file = Path.Combine(this.root, "d365_index.db");
+        ProcessStartInfo info = NodeGatewayProcess.BuildStartInfo(this.Options("d365-fno-mcp-server") with { StandardIndexPath = $" {file} " }, 52011, "token-value", windows: false);
+
+        Assert.Equal(file, info.Environment["D365_GATEWAY_STANDARD_INDEX_DB_PATH"]);
+    }
+
+    [Fact]
+    public async Task RejectsAMissingStandardIndex()
+    {
+        await using var gateway = new NodeGatewayProcess(new HttpClient(), _ => { });
+        NodeGatewayOptions options = this.Options("d365-fno-mcp-server") with { StandardIndexPath = Path.Combine(this.root, "missing.db") };
+
+        await Assert.ThrowsAsync<FileNotFoundException>(() => gateway.StartAsync(options, CancellationToken.None));
     }
 
     [Fact]

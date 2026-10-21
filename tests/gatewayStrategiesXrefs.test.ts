@@ -86,6 +86,7 @@ function setup({ objects = [], xrefs = [], usages = [], hosted = json([]) }: Sce
   const localIndex: LocalIndex = {
     db,
     customDir: workspace.customMetadataDir,
+    attachUri: 'file:test?mode=memory',
     ensureFresh: async () => {},
     markDirty: () => {},
     status: () => ({

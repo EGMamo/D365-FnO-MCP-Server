@@ -115,6 +115,11 @@ Azure MCP API
 - The hosted key and the Node gateway's token reach the child through its environment only, never
   its command line or a file. The child's working directory is
   `%LOCALAPPDATA%\D365FnoMcp\node-gateway`, so no `.env` file elsewhere is read.
+- The command also asks for an optional standard index: a `d365_index.db` built with the server's
+  `index` command over your `PackagesLocalDirectory`. With one, the tools the hosted server would
+  answer alone (security paths, SoD checks, `diff_roles`, entity readiness, BP findings and the
+  generators) run in the Node gateway over the standard and custom models together, and are not
+  sent to Azure. The file is only read. See [Standard index](hybrid-gateway.md#standard-index).
 - **Select Tools...** also lists `local_index_status`, the Node gateway's report on the custom index.
 - If the Node gateway does not start (no Node.js, command not found, an invalid folder), the
   extension forwards to Azure as before and writes the reason to the **D365 F&O MCP** Output pane.

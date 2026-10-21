@@ -12,13 +12,15 @@ namespace D365FnoMcp.Core;
 /// <param name="CustomMetadataDirectory">The folder that holds the custom models the Node gateway indexes.</param>
 /// <param name="PrivatePrefixes">Comma-separated name prefixes that must never be sent to the hosted server, or null.</param>
 /// <param name="WorkingDirectory">The child's working directory, so no stray .env file is read.</param>
+/// <param name="StandardIndexPath">An index of the standard application to lay the custom models over, or null; it is only read.</param>
 public sealed record NodeGatewayOptions(
     string Command,
     string HostedServerUrl,
     string ApiKey,
     string CustomMetadataDirectory,
     string? PrivatePrefixes,
-    string WorkingDirectory);
+    string WorkingDirectory,
+    string? StandardIndexPath = null);
 
 /// <summary>
 /// Runs the Node hybrid gateway (<c>d365-fno-mcp-server gateway</c>) as a child process on a
@@ -65,6 +67,11 @@ public sealed class NodeGatewayProcess : IAsyncDisposable
         if (!Directory.Exists(options.CustomMetadataDirectory))
         {
             throw new DirectoryNotFoundException($"The custom models folder '{options.CustomMetadataDirectory}' does not exist.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(options.StandardIndexPath) && !File.Exists(options.StandardIndexPath.Trim()))
+        {
+            throw new FileNotFoundException($"The standard index '{options.StandardIndexPath.Trim()}' does not exist.");
         }
 
         Directory.CreateDirectory(options.WorkingDirectory);
@@ -168,6 +175,7 @@ public sealed class NodeGatewayProcess : IAsyncDisposable
         env["D365_GATEWAY_PORT"] = port.ToString(System.Globalization.CultureInfo.InvariantCulture);
         env["D365_GATEWAY_TOKEN"] = token;
         env["D365_GATEWAY_PRIVATE_PREFIXES"] = options.PrivatePrefixes?.Trim() ?? string.Empty;
+        env["D365_GATEWAY_STANDARD_INDEX_DB_PATH"] = options.StandardIndexPath?.Trim() ?? string.Empty;
         return startInfo;
     }
 

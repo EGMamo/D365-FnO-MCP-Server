@@ -30,6 +30,13 @@ public sealed class ExtensionSettings
     /// <summary>Comma-separated prefixes of custom object names that must never be sent to the hosted server.</summary>
     public string PrivatePrefixes { get; set; } = string.Empty;
 
+    /// <summary>
+    /// Optional index of the standard application (a d365_index.db built with the server's index command). With
+    /// one, the Node gateway lays the custom models over it and answers on this machine the tools it would otherwise
+    /// forward, such as security paths and generators; empty forwards those to the hosted server.
+    /// </summary>
+    public string StandardIndexPath { get; set; } = string.Empty;
+
     public const string DefaultNodeGatewayCommand = "d365-fno-mcp-server";
 }
 

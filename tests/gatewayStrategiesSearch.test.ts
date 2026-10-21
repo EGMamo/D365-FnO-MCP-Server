@@ -49,6 +49,7 @@ function setup(
   const localIndex: LocalIndex = {
     db,
     customDir: workspace.customMetadataDir,
+    attachUri: 'file:test?mode=memory',
     ensureFresh: async () => {},
     markDirty: () => {},
     status: () => ({

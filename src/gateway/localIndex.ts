@@ -1,11 +1,13 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { buildIndex, type IndexStats } from '../indexer/buildIndex.js';
 import { openDb, prune, type Database } from '../indexer/db.js';
 import { setSourceFileReads } from '../indexer/sourceFiles.js';
 import { logger } from '../utils/logger.js';
+import { readOnlyFileUri } from './layeredIndex.js';
 import type { LocalIndex, LocalIndexStatus } from './types.js';
 
 /** Quiet period a burst of file changes must leave before a refresh runs (one save fires several events). */
@@ -66,7 +68,10 @@ export async function openLocalIndex(opts: LocalIndexOptions): Promise<LocalInde
   const { ttlMs, debounceMs } = options;
 
   if (!inMemory) fs.mkdirSync(path.dirname(dbPath), { recursive: true });
-  const db: Database = openDb(dbPath);
+  // An in-memory index is named in SQLite's shared cache, so the layered connection over the standard index can
+  // read it too; the name is random so two gateways in one process never share one.
+  const attachUri = inMemory ? `file:d365-custom-${randomBytes(8).toString('hex')}?mode=memory&cache=shared` : readOnlyFileUri(dbPath);
+  const db: Database = openDb(inMemory ? attachUri : dbPath);
   // get_element_xml / get_method_source fall back to the files when no raw XML is stored.
   setSourceFileReads(true, customDir);
 
@@ -286,7 +291,7 @@ export async function openLocalIndex(opts: LocalIndexOptions): Promise<LocalInde
     else release();
   }
 
-  const index: LocalIndex = { db, customDir, ensureFresh, markDirty, status, startWatcher, close };
+  const index: LocalIndex = { db, customDir, attachUri, ensureFresh, markDirty, status, startWatcher, close };
   await index.ensureFresh();
   return index;
 }

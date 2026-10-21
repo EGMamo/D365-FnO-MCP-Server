@@ -254,7 +254,8 @@ internal sealed class ExtensionServices : IWorkspaceContextProvider, IAsyncDispo
                     apiKey,
                     settings.CustomMetadataDirectory,
                     settings.PrivatePrefixes,
-                    Path.Combine(Path.GetDirectoryName(this.Settings.Path)!, "node-gateway")),
+                    Path.Combine(Path.GetDirectoryName(this.Settings.Path)!, "node-gateway"),
+                    settings.StandardIndexPath),
                 cancellationToken);
             this.Log($"Node gateway for custom models listening at {node.BaseUrl}.");
             return node;
