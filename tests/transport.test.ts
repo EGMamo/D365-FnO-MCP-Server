@@ -5,6 +5,7 @@ import { request, type Server } from 'http';
 import { Server as ProtocolServer } from '@modelcontextprotocol/sdk/server/index.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { createHttpApp, type ConnectableServer } from '../src/server/httpTransport.js';
+import { logger } from '../src/utils/logger.js';
 
 const API_KEY = 'test-api-key-1234567890-abcdefghijklmnop';
 const SECOND_KEY = 'second-api-key-0987654321-zyxwvutsrqpon';
@@ -214,6 +215,34 @@ describe('body size limit', () => {
       body: JSON.stringify(huge),
     });
     expect(res.status).toBe(413);
+  });
+});
+
+describe('client body errors', () => {
+  const post = (headers: Record<string, string>) =>
+    fetch(`${baseUrl}/mcp`, {
+      method: 'POST',
+      headers: { 'X-API-Key': API_KEY, ...headers },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+    });
+
+  it('returns 415 for an unsupported charset instead of an internal error', async () => {
+    const errors = vi.spyOn(logger, 'error');
+    const res = await post({ 'Content-Type': 'application/json; charset=x-unknown' });
+    const body = (await res.json()) as { jsonrpc: string; error: { code: number; message: string } };
+    expect(res.status).toBe(415);
+    expect(body.jsonrpc).toBe('2.0');
+    expect(body.error.code).toBe(-32600);
+    expect(body.error.message).not.toMatch(/internal/i);
+    expect(errors).not.toHaveBeenCalled();
+    errors.mockRestore();
+  });
+
+  it('returns 415 for an unsupported content encoding instead of an internal error', async () => {
+    const res = await post({ 'Content-Type': 'application/json', 'Content-Encoding': 'x-unknown' });
+    const body = (await res.json()) as { error: { code: number } };
+    expect(res.status).toBe(415);
+    expect(body.error.code).toBe(-32600);
   });
 });
 

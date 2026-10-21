@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The HTTP transport answers a request body it cannot decode (unsupported charset or
+  `Content-Encoding`, aborted upload) with the parser's own 4xx status and a JSON-RPC error, instead
+  of a 500 "Internal error" logged at error level.
+
 ### Security
 
 - `tedious` (the optional `mssql` driver's dependency) moved to 20.3.7, which drops `sprintf-js`
