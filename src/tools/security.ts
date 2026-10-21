@@ -16,6 +16,7 @@ import {
   rolesContainingDuty,
   rolesContainingPrivilegeDirectly,
 } from '../security/model.js';
+import { withGeneratedFiles } from './generatedFiles.js';
 import {
   convertSecurityExport, SECURITY_CONVERTER_ATTRIBUTION, SECURITY_KIND_TO_AOT,
 } from '../security/converter.js';
@@ -256,7 +257,7 @@ export function registerSecurityTools(server: McpServer, db: Database) {
         .filter((f) => f.name !== f.originalName && getObjectByName(db, f.name, SECURITY_KIND_TO_AOT[f.kind]))
         .map((f) => `${f.kind} ${f.name}`);
       const files = capped(result.files, maxFiles);
-      return json({
+      return withGeneratedFiles(json({
         summary: {
           roles: result.files.filter((f) => f.kind === 'Role').length,
           duties: result.files.filter((f) => f.kind === 'Duty').length,
@@ -267,13 +268,14 @@ export function registerSecurityTools(server: McpServer, db: Database) {
         nameClashesWithIndex: clashes,
         duplicatesInExport: result.duplicates,
         skipped: result.skipped,
-        files: { total: files.total, truncated: files.truncated, items: files.items.map(({ path, content }) => ({ path, content })) },
+        // File contents travel once, in the generated files item that follows.
+        files: { total: files.total, truncated: files.truncated, items: files.items.map(({ path }) => ({ path })) },
         nextSteps: [
-          'Copy the files into Metadata/<Model>/AxSecurityRole|AxSecurityDuty|AxSecurityPrivilege of your model and add them to the Visual Studio project, then build.',
+          'Save the generated files into AxSecurityRole|AxSecurityDuty|AxSecurityPrivilege of your model and add them to the Visual Studio project, then build.',
           'Unrenamed elements keep their names; clashes with existing AOT elements must be renamed before import.',
         ],
         attribution: SECURITY_CONVERTER_ATTRIBUTION,
-      });
+      }), files.items.map((f) => ({ aotType: `AxSecurity${f.kind}`, name: f.name, content: f.content })));
     }
   );
 }

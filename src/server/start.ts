@@ -28,6 +28,7 @@ import {
 import { KnowledgeSession, startKnowledgeFilter } from '../knowledge/filter.js';
 import { registerWithKnowledgeFilter } from '../knowledge/toolWrapper.js';
 import { registerWorkspaceTools } from '../tools/workspace.js';
+import { registerWithFileTargets } from '../workspace/fileTargets.js';
 
 /** How long a graceful shutdown may take before the process exits regardless. */
 const SHUTDOWN_TIMEOUT_MS = 10_000;
@@ -112,14 +113,26 @@ export async function startServer(): Promise<void> {
     registerWithKnowledgeFilter(server, knowledgeFilter.current, () => {
       registerMetadataTools(server, db, { sourceFilesAvailable });
       registerLabelsTools(server, db);
-      registerSecurityTools(server, db);
-      registerEntityTools(server, db);
       registerTraceTools(server, db);
       registerTelemetryTools(server, db);
       registerCodeQualityTools(server, db);
       registerReleasePlanTools(server, db);
       registerDocsTools(server, db);
-      registerGeneratorTools(server, db);
+      // Generated files learn where they belong when a custom metadata folder is configured;
+      // a hosted server (artifact mode) never adds paths of its own machine.
+      registerWithFileTargets(server, {
+        customMetadataDir: config.artifactStorePath ? '' : config.customMetadataDir || config.projectDir,
+        targetModel: config.targetModel,
+        targetPackage: config.targetPackage,
+        writableModels: config.writableModels,
+        workspaceDir: config.visualStudioWorkspaceDir,
+        targetSolution: config.targetSolution,
+        targetProject: config.targetProject,
+      }, () => {
+        registerSecurityTools(server, db);
+        registerEntityTools(server, db);
+        registerGeneratorTools(server, db);
+      });
     }, knowledgeSession);
     if (config.knowledgeFilter) registerTaskGuidanceTool(server, knowledgeFilter.current, knowledgeSession);
     registerWriterTools(server, db, {

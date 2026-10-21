@@ -356,6 +356,7 @@ describe('loadGatewayConfig optional settings', () => {
         D365_TARGET_PACKAGE: 'MyPackage',
         D365_TARGET_MODEL: 'My Model',
         D365_TARGET_SOLUTION: 'My.sln',
+        D365_WRITABLE_MODELS: 'MyPackage/My Model, Other/Other Model',
       })
     );
     expect(config.privatePrefixes).toEqual(['Contoso', 'Fabrikam']);
@@ -366,7 +367,13 @@ describe('loadGatewayConfig optional settings', () => {
       targetPackage: 'MyPackage',
       targetModel: 'My Model',
       targetSolution: 'My.sln',
+      writableModels: ['MyPackage/My Model', 'Other/Other Model'],
     });
+  });
+
+  it('rejects writable models that are not Package/Model pairs', () => {
+    expect(() => loadGatewayConfig(validEnv({ D365_GATEWAY_TOKEN: TOKEN, D365_WRITABLE_MODELS: 'JustAModel' })))
+      .toThrow(/D365_WRITABLE_MODELS/);
   });
 });
 

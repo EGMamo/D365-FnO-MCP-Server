@@ -67,6 +67,7 @@ const workspace: GatewayWorkspaceConfig = {
   targetPackage: '',
   targetModel: '',
   targetSolution: '',
+  writableModels: [],
 };
 
 /** AOT XML with one method, so source lookups on a local object succeed. */

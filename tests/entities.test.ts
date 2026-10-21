@@ -281,6 +281,13 @@ describe('entity and security generator tools', () => {
       expect(parseAxSecurityDuty(files['AxSecurityDuty/AgentReaderInquire.xml']).privileges).toEqual(['AgentReaderView']);
       const role = parseAxSecurityRole(files['AxSecurityRole/AgentReader.xml']);
       expect(role).toMatchObject({ label: 'Agent reader', duties: ['AgentReaderInquire'], privileges: [], subRoles: [] });
+
+      // The same three files, ready to save, in the generated files item.
+      const generated = JSON.parse(result.content.at(-1)!.text).generatedFiles;
+      expect(generated.map((f: { aotType: string; name: string }) => `${f.aotType}/${f.name}`)).toEqual([
+        'AxSecurityPrivilege/AgentReaderView', 'AxSecurityDuty/AgentReaderInquire', 'AxSecurityRole/AgentReader',
+      ]);
+      expect(generated[2].content.trim()).toBe(files['AxSecurityRole/AgentReader.xml'].trim());
     });
 
     it('rejects unknown entities and clashing names', async () => {

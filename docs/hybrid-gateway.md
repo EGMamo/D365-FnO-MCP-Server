@@ -433,6 +433,17 @@ there is no protection, so keep the list in line with your customer and ISV pref
 - **Limits.** 1000 requests per minute per client IP, 25 concurrent sessions, and sessions idle for
   30 minutes are closed together with their hosted session.
 
+## Generated files
+
+Generator results end with a `{"generatedFiles":[...]}` item: each AOT file's `aotType`, `name` and
+full `content`, whether the generator ran locally or on the hosted server. The gateway adds a `target`
+to every file on its way back to the agent: the absolute path under `D365_CUSTOM_METADATA_DIR`, the
+package and model, the `.rnrproj` item to add, and whether the file exists already or the model is
+writable (`D365_WRITABLE_MODELS`). The model is `D365_TARGET_MODEL`, or the model of the project
+selected through `D365_VISUAL_STUDIO_WORKSPACE_DIR` and `D365_TARGET_PROJECT`. The gateway writes
+nothing; the agent saves the file with its own tools. Targets are worked out on this machine after the
+hosted answer arrives, so no local path or model name is sent upstream.
+
 ## Known gaps
 
 - **Generators check one index.** A generator whose target is a custom object runs locally and

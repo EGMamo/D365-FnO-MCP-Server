@@ -6,7 +6,8 @@ import * as dbUtils from '../indexer/db.js';
 import { parseAxDataEntityDetails, parseAxTableKeys, type AxTableIndexDetail, type AxTableKeys } from '../indexer/parser.js';
 import { findSecurityPaths } from '../security/model.js';
 import { resolveLabel, validateNaming } from '../validation/grounding.js';
-import { fail, ok, xmlCommentSafe, xmlEscape, type ToolResult } from './generators.js';
+import { fail, ok, okClass, xmlCommentSafe, xmlEscape, type ToolResult } from './generators.js';
+import { withGeneratedFiles, type GeneratedFile } from './generatedFiles.js';
 
 const XMLNS = 'xmlns:i="http://www.w3.org/2001/XMLSchema-instance"';
 const GRANT_ORDER = ['Read', 'Update', 'Create', 'Correct', 'Delete', 'Invoke'] as const;
@@ -90,6 +91,22 @@ function json(value: unknown): ToolResult {
 
 function fileBlock(path: string, xml: string): string {
   return `=== ${path} ===\n${xml}`;
+}
+
+/** The files a result's `=== AxType/Name.xml ===` blocks hold, as generated files. */
+function filesFromBlocks(text: string): GeneratedFile[] {
+  const header = /^=== (Ax[A-Za-z]+)\/([^/\s]+)\.xml ===$/gm;
+  const marks = [...text.matchAll(header)];
+  return marks.map((mark, i) => {
+    const start = mark.index! + mark[0].length + 1;
+    const end = i + 1 < marks.length ? marks[i + 1].index! : text.length;
+    return { aotType: mark[1], name: mark[2], content: text.slice(start, end).replace(/\s+$/, '') + '\n' };
+  });
+}
+
+/** Attaches the files of a block-formatted result (privileges, duties, roles). */
+function withFileBlocks(result: ToolResult): ToolResult {
+  return result.isError ? result : withGeneratedFiles(result, filesFromBlocks(result.content[0].text));
 }
 
 // ---------------------------------------------------------------------------
@@ -412,7 +429,7 @@ export async function generateDataEntityXml(db: Database, spec: DataEntitySpec):
     `</AxDataEntityView>`,
   ].filter((line) => line !== '').join('\n');
 
-  return ok(entityXml);
+  return withGeneratedFiles(ok(entityXml), [{ aotType: 'AxDataEntityView', name: spec.entityName, content: `${entityXml}\n` }]);
 }
 
 // ---------------------------------------------------------------------------
@@ -530,7 +547,7 @@ export function generateSecurityPrivilegeXml(
     'Add this privilege to a duty, and the duty to a role, or BPErrorDutyNotCoveredByRole / unreachable access follows.',
     ...targets.filter((t) => t.isPublic === false).map((t) => `WARNING: DataEntity ${t.name} is not public; OData callers cannot reach it.`),
   ];
-  return ok(fileBlock(`AxSecurityPrivilege/${spec.name}.xml`, privilegeXml(spec.name, spec.label, targets, comments)));
+  return withFileBlocks(ok(fileBlock(`AxSecurityPrivilege/${spec.name}.xml`, privilegeXml(spec.name, spec.label, targets, comments))));
 }
 
 export function generateReadOnlyRoleXml(
@@ -591,11 +608,11 @@ export function generateReadOnlyRoleXml(
     `</AxSecurityRole>`,
   ].filter((l) => l !== '').join('\n');
 
-  return ok([
+  return withFileBlocks(ok([
     fileBlock(`AxSecurityPrivilege/${privilegeName}.xml`, privilegeXml(privilegeName, spec.label, targets, ['Read-only access; grants Read on each entity.', ...warnings])),
     fileBlock(`AxSecurityDuty/${dutyName}.xml`, duty),
     fileBlock(`AxSecurityRole/${spec.roleName}.xml`, role),
-  ].join('\n\n'));
+  ].join('\n\n')));
 }
 
 // ---------------------------------------------------------------------------
@@ -667,22 +684,23 @@ export function generateODataActionXpp(db: Database, spec: ODataActionSpec): Too
     '// Callers need a privilege that grants the entity (see create_security_privilege).',
     ...(isPublic ? [] : ['// WARNING: the entity is not public; OData cannot reach the action until IsPublic = Yes.']),
   ];
-  const lines = [
-    ...header,
-    `[ExtensionOf(tableStr(${entity.name}))]`,
-    `final class ${extensionName}`,
-    '{',
-    '    /// <summary>',
-    `    /// ${spec.description ?? `OData action ${spec.actionName}.`}`,
-    '    /// </summary>',
-    `    [SysODataActionAttribute('${spec.actionName}', ${spec.instance ? 'true' : 'false'})]`,
-    `    public ${spec.instance ? '' : 'static '}${returnType} ${spec.actionName}(${signature})`,
-    '    {',
-    ...(returnType === 'void' ? ['        // TODO: implement'] : [`        ${returnType} result;`, '', '        // TODO: implement', '', '        return result;']),
-    '    }',
-    '}',
-  ];
-  return ok(lines.join('\n'));
+  return okClass({
+    name: extensionName,
+    declaration: [...header, `[ExtensionOf(tableStr(${entity.name}))]`, `final class ${extensionName}`],
+    methods: [{
+      name: spec.actionName,
+      lines: [
+        '    /// <summary>',
+        `    /// ${spec.description ?? `OData action ${spec.actionName}.`}`,
+        '    /// </summary>',
+        `    [SysODataActionAttribute('${spec.actionName}', ${spec.instance ? 'true' : 'false'})]`,
+        `    public ${spec.instance ? '' : 'static '}${returnType} ${spec.actionName}(${signature})`,
+        '    {',
+        ...(returnType === 'void' ? ['        // TODO: implement'] : [`        ${returnType} result;`, '', '        // TODO: implement', '', '        return result;']),
+        '    }',
+      ],
+    }],
+  });
 }
 
 export function registerEntityTools(server: McpServer, db: Database) {

@@ -22,6 +22,7 @@ import { registerMetadataTools } from '../src/tools/metadata.js';
 import { registerSecurityTools } from '../src/tools/security.js';
 import { VERSION } from '../src/version.js';
 import { seedDb, type SeedObject } from './helpers/toolHarness.js';
+import { descriptorXml } from './workspaceFixtures.js';
 
 // The gateway in front of a stand-in hosted server, both in this process and on ephemeral loopback
 // ports. The stand-in serves STANDARD objects only, behind an API key, and records every request body
@@ -278,6 +279,8 @@ interface StackOptions {
   upstreamTimeoutMs?: number;
   /** D365_APP_VERSION: the SDK version the gateway declares to the hosted server when the agent declares none. */
   appVersion?: string;
+  /** Writes a ContosoPkg model descriptor and sets D365_TARGET_MODEL and D365_WRITABLE_MODELS for it. */
+  targetModel?: boolean;
 }
 
 interface Stack {
@@ -319,6 +322,10 @@ async function startStack(options: StackOptions = {}): Promise<Stack> {
   const customDir = path.join(root, 'custom');
   fs.mkdirSync(customDir);
   for (const [relative, content] of Object.entries(CUSTOM_FILES)) writeCustomFile(customDir, relative, content);
+  if (options.targetModel) {
+    fs.mkdirSync(path.join(customDir, 'ContosoPkg', 'Descriptor'), { recursive: true });
+    fs.writeFileSync(path.join(customDir, 'ContosoPkg', 'Descriptor', 'ContosoModel.xml'), descriptorXml('ContosoModel', 'ContosoPkg'));
+  }
 
   const clients: Client[] = [];
   let hosted: HostedStandIn | undefined;
@@ -342,6 +349,7 @@ async function startStack(options: StackOptions = {}): Promise<Stack> {
       D365_GATEWAY_UPSTREAM_TIMEOUT_MS: String(options.upstreamTimeoutMs ?? 5000),
       ...(options.privatePrefixes ? { D365_GATEWAY_PRIVATE_PREFIXES: options.privatePrefixes } : {}),
       ...(options.appVersion ? { D365_APP_VERSION: options.appVersion } : {}),
+      ...(options.targetModel ? { D365_TARGET_MODEL: 'ContosoModel', D365_WRITABLE_MODELS: 'ContosoPkg/ContosoModel' } : {}),
     });
   } catch (error) {
     await stop();
@@ -670,6 +678,42 @@ describe('gateway with the hosted server up', () => {
       expect(health.status, `GET /health with Host ${host}`).toBe(200);
     }
     expect(hosted.requests.length).toBe(mark);
+  }, TEST_TIMEOUT_MS);
+});
+
+describe('gateway generated files', () => {
+  const stack = useStack({ targetModel: true });
+
+  interface Payload { generatedFiles: { aotType: string; name: string; target?: { path: string; writable: boolean; projectItem: string } }[] }
+  const filesOf = (result: Result): Payload['generatedFiles'] => (JSON.parse(textsOf(result).find((text) => text.startsWith('{"generatedFiles":'))!) as Payload).generatedFiles;
+
+  it('gives a hosted generator result its path in the custom model, and sends no local path upstream', async () => {
+    const { hosted, call, customDir } = stack();
+    const mark = hosted.requests.length;
+    const draft = await call('create_table_extension', {
+      targetTable: 'CustTable',
+      extensionName: 'ContosoNew',
+      fields: [{ name: 'ContosoNewField', edt: 'CustAccount' }],
+    });
+    expect(hosted.toolCalls(mark).map((c) => c.name)).toEqual(['create_table_extension']);
+    const [file] = filesOf(draft);
+    expect(file.target).toMatchObject({
+      path: path.join(fs.realpathSync(modelDir(customDir)), 'AxTableExtension', 'CustTable.ContosoNew.xml'),
+      projectItem: 'AxTableExtension\\CustTable.ContosoNew',
+      writable: true,
+    });
+    expect(hosted.bodies(mark)).not.toContain(path.basename(stack().root));
+  }, TEST_TIMEOUT_MS);
+
+  it('gives a locally answered generator result its path as well', async () => {
+    const result = await stack().call('create_coc_extension', {
+      targetClass: 'ContosoLoyaltyService',
+      extensionName: 'ContosoLoyaltyService_Extension',
+      methods: [{ name: 'tierFor' }],
+    });
+    const [file] = filesOf(result);
+    expect(file).toMatchObject({ aotType: 'AxClass', name: 'ContosoLoyaltyService_Extension' });
+    expect(file.target?.path).toBe(path.join(fs.realpathSync(modelDir(stack().customDir)), 'AxClass', 'ContosoLoyaltyService_Extension.xml'));
   }, TEST_TIMEOUT_MS);
 });
 

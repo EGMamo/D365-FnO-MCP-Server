@@ -581,6 +581,18 @@ Security customizations:
 X++ generators (grounded against the index):
 `create_coc_extension`, `create_table_extension`, `create_class_extension`, `create_event_handler`, `create_form_event_handler`, `generate_xpp_class`, `create_runbase_batch`, `create_sys_operation`
 
+Generated files: every generator above, the data entity and security generators and
+`convert_security_customizations` end their result with a `{"generatedFiles":[...]}` item. It lists
+each AOT file with its `aotType` (the folder, e.g. `AxClass`), `name` and complete `content`; class
+generators give the `AxClass` XML (declaration and one entry per method), not only the X++ listing.
+Nothing is written: the agent saves the files with its own editing tools, so you review a normal diff.
+Where `D365_CUSTOM_METADATA_DIR` is set (local `serve` and the hybrid gateway; never the hosted server),
+each file also gets a `target`: the absolute `path`, `package`, `model`, the `projectItem` to add to
+the `.rnrproj` (`AxClass\\MyClass`), the selected `project`, and whether the file `exists`, is
+`inProject`, and is `writable` (the model is listed in `D365_WRITABLE_MODELS` and no file of that name
+exists). The model comes from `D365_TARGET_MODEL`, or the project selected with
+`D365_VISUAL_STUDIO_WORKSPACE_DIR`/`D365_TARGET_PROJECT`; without one, `targets` says why there are none.
+
 Write tools (only with `D365_ENABLE_WRITE_TOOLS=1`):
 `write_table_extension`, `apply_table_extension_change`
 
