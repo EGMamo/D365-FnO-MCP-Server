@@ -1,7 +1,9 @@
 # Visual Studio extension
 
 The extension gives Copilot one `d365-fno` MCP connection. That connection is a loopback gateway
-owned by the extension, not a direct connection to Azure.
+owned by the extension, not a direct connection to Azure. With a custom models folder set, the
+extension also runs the Node hybrid gateway on this machine, so Copilot sees your custom code
+merged with the hosted index (see [Custom models](#custom-models)).
 
 ## Installing
 
@@ -72,37 +74,62 @@ Visual Studio extension gateway
 - The gateway forwards hosted tools, resources and prompts and adds
   `workspace_get_context`, limited to the tools selected in **Select Tools...** (stored as
   `AllowedTools` in `%LOCALAPPDATA%\D365FnoMcp\settings.json`; absent means all tools).
+- With a custom models folder set, the paired session goes to the Node hybrid gateway that the
+  extension runs, and that gateway holds the session to Azure ([Custom models](#custom-models)).
 
-## Using the Node gateway
+## Custom models
 
-This repository also contains a Node gateway, `d365-fno-mcp-server gateway`, described in
-[Hybrid gateway](hybrid-gateway.md). Like the extension's gateway it listens on loopback and forwards
-the hosted tools, but it also indexes your custom models on your machine, so Copilot can see custom
-tables, extensions and labels that the hosted index lacks. It is a separate process: it has its own
-port (default 3101) and token, reads the hosted key from `D365_HOSTED_API_KEY` or
-`D365_HOSTED_API_KEY_FILE` instead of Windows Credential Manager, and nothing in it reads the
-extension's settings or credentials.
+The hosted index holds only standard and ISV metadata. To let Copilot see your own tables,
+extensions, classes, labels and security objects, set **Extensions > D365 F&O MCP > Set Custom
+Models Folder...** to the folder that holds your custom models (`<Package>/<Model>/Ax<Type>/` below
+it, as in `PackagesLocalDirectory`). It also asks for your private name prefixes, for example
+`Contoso,Fabrikam`. Leave the folder empty to turn this off again.
 
-| | Extension gateway | Node gateway |
-| --- | --- | --- |
-| Hosted key | Windows Credential Manager | `D365_HOSTED_API_KEY` or `D365_HOSTED_API_KEY_FILE` |
-| Port and token | Random port, token per process | `D365_GATEWAY_PORT` (3101), persistent token file or `D365_GATEWAY_TOKEN` |
-| Custom code | Not indexed | Indexed locally, merged into the answers |
-| Workspace tool | `workspace_get_context` | `get_visual_studio_workspace` (settings from the environment, as for `serve`) |
-| Tool selection | **Select Tools...** | None: every hosted tool plus `local_index_status` |
-| Runs on | Windows, inside Visual Studio | Any system with Node.js 24 |
+With a folder set, the extension starts the Node hybrid gateway described in
+[Hybrid gateway](hybrid-gateway.md) as a child process and forwards to it instead of to Azure:
 
-**Instead of the extension's gateway.** Start the Node gateway and register it in `.mcp.json` next to
-the solution under the name `d365-fno`, as [the gateway guide](hybrid-gateway.md#4-point-the-agent-at-the-gateway)
-shows. Use one `d365-fno` entry in the file at a time. You then do without
-`workspace_get_context`, **Select Tools...** and the Credential Manager storage.
+```text
+Copilot in Visual Studio
+        |
+        | http://127.0.0.1:<random>/mcp, per-process bearer token
+        v
+Visual Studio extension gateway      tool selection, workspace_get_context
+        |
+        | http://127.0.0.1:<random>, second per-process token
+        v
+Node hybrid gateway (child process)  custom index in memory, merges, private prefixes
+        |
+        | HTTPS, X-API-Key from Windows Credential Manager
+        v
+Azure MCP API
+```
 
-**Alongside the extension.** Keep the extension for Visual Studio and run the Node gateway for other
-clients on the same machine, such as Claude Code, Copilot CLI or VS Code. The two are independent
-processes on different ports. The prebuilt [local agents](local-agents.md) expect the server name
-`d365-fno`; under any other name they have no tools.
+- The Node gateway indexes the folder on this machine and keeps the index current as files change.
+  The index lives in memory, so nothing is written to disk and each Visual Studio instance has its
+  own. The first index happens before the gateway listens; a large folder can take a few minutes,
+  and the Output pane says when it is ready.
+- Its routing and privacy rules are those of [Hybrid gateway](hybrid-gateway.md#which-tools-go-where):
+  custom objects are answered locally, search, labels, schemas, references and impact are merged,
+  and the remaining tools are forwarded. Nothing read from your custom models is sent to Azure;
+  a call whose arguments contain a private prefix is not sent at all.
+- The hosted key and the Node gateway's token reach the child through its environment only, never
+  its command line or a file. The child's working directory is
+  `%LOCALAPPDATA%\D365FnoMcp\node-gateway`, so no `.env` file elsewhere is read.
+- **Select Tools...** also lists `local_index_status`, the Node gateway's report on the custom index.
+- If the Node gateway does not start (no Node.js, command not found, an invalid folder), the
+  extension forwards to Azure as before and writes the reason to the **D365 F&O MCP** Output pane.
+  If the Node gateway stops later, the next connection starts both gateways again.
 
-Pointing the extension's server URL at the Node gateway has not been tested and is not documented here.
+The extension needs Node.js 24 or later and the server's CLI on the `PATH` (`npm link` in a clone of
+this repository; the package is not on npm yet). To run it another way, set `NodeGatewayCommand` in
+`%LOCALAPPDATA%\D365FnoMcp\settings.json`, for example
+`"\"C:\\Program Files\\nodejs\\node.exe\" C:\\tools\\d365\\dist\\src\\index.js"`; the
+extension appends `gateway`.
+
+You can still run the Node gateway by hand for other clients on the same machine, such as Claude
+Code, Copilot CLI or VS Code: it is a separate process with its own port and token (see
+[Hybrid gateway](hybrid-gateway.md#4-point-the-agent-at-the-gateway)). The prebuilt
+[local agents](local-agents.md) expect the server name `d365-fno`.
 
 ## Workspace context
 

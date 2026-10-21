@@ -74,7 +74,7 @@ internal sealed class ConfigureConnectionCommand : Command
         List<string>? allowedTools = settings.AllowedTools;
         if (report.Succeeded)
         {
-            (_, allowedTools) = await ToolPicker.ChooseAsync(shell, serverUrl, report.Tools, allowedTools, cancellationToken);
+            (_, allowedTools) = await ToolPicker.ChooseAsync(shell, serverUrl, report.Tools, allowedTools, settings.CustomMetadataDirectory.Length > 0, cancellationToken);
         }
 
         string? solutionDirectory = await this.GetSolutionDirectoryAsync(cancellationToken);

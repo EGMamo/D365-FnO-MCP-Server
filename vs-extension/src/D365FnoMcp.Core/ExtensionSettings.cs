@@ -17,6 +17,20 @@ public sealed class ExtensionSettings
 
     /// <summary>Tools the gateway offers to Visual Studio; null offers every tool, including ones the server adds later.</summary>
     public List<string>? AllowedTools { get; set; }
+
+    /// <summary>
+    /// Folder of the custom models to index on this machine. When set, the extension runs the Node
+    /// hybrid gateway and forwards to it, so Copilot sees custom code; empty forwards to the hosted server only.
+    /// </summary>
+    public string CustomMetadataDirectory { get; set; } = string.Empty;
+
+    /// <summary>How to run the server's CLI for the Node gateway; "gateway" is appended.</summary>
+    public string NodeGatewayCommand { get; set; } = DefaultNodeGatewayCommand;
+
+    /// <summary>Comma-separated prefixes of custom object names that must never be sent to the hosted server.</summary>
+    public string PrivatePrefixes { get; set; } = string.Empty;
+
+    public const string DefaultNodeGatewayCommand = "d365-fno-mcp-server";
 }
 
 /// <summary>Reads and writes <see cref="ExtensionSettings"/> as JSON.</summary>

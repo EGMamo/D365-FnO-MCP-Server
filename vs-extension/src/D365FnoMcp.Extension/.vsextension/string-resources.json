@@ -3,5 +3,6 @@
   "D365FnoMcp.ConfigureConnection.DisplayName": "Configure Connection...",
   "D365FnoMcp.SetApiKey.DisplayName": "Set API Key...",
   "D365FnoMcp.SelectTools.DisplayName": "Select Tools...",
+  "D365FnoMcp.SetCustomModels.DisplayName": "Set Custom Models Folder...",
   "D365FnoMcp.TestConnection.DisplayName": "Test Connection"
 }

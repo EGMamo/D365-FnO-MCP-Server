@@ -11,13 +11,23 @@ public static class ToolSelection
 {
     public static bool IsAllowed(IReadOnlySet<string>? allowed, string name) => allowed is null || allowed.Contains(name);
 
+    /// <summary>The Node gateway's own tool, offered when the extension runs it for a custom models folder.</summary>
+    public static readonly ToolInfo LocalIndexStatusTool = new(
+        "local_index_status",
+        "Reports the custom models index on this machine: object counts, refresh state and hosted server reachability.");
+
     /// <summary>Hosted tools plus the gateway's own local tools, sorted by name.</summary>
-    public static IReadOnlyList<ToolInfo> Available(IEnumerable<ToolInfo> hostedTools)
+    public static IReadOnlyList<ToolInfo> Available(IEnumerable<ToolInfo> hostedTools, bool customModelsIndexed = false)
     {
         var byName = new Dictionary<string, ToolInfo>(StringComparer.Ordinal);
         foreach (ToolInfo tool in hostedTools)
         {
             byName[tool.Name] = tool;
+        }
+
+        if (customModelsIndexed)
+        {
+            byName[LocalIndexStatusTool.Name] = LocalIndexStatusTool;
         }
 
         byName[McpGateway.ContextToolName] = new(McpGateway.ContextToolName, McpGateway.ContextToolDescription);

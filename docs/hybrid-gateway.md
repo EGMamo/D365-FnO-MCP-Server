@@ -55,6 +55,11 @@ You need Node.js 24 or higher, a build of this repo (`npm install`, `npm run bui
 server's URL and your personal API key from the operator, and the folder that holds your custom
 models.
 
+In Visual Studio you do not need the steps below: the extension's **Set Custom Models Folder...**
+starts this gateway for you and keeps the hosted key in Windows Credential Manager (see
+[Visual Studio extension](visual-studio-extension.md#custom-models)). Use the steps for other
+clients such as Claude Code, Copilot CLI or VS Code.
+
 ### 1. Configure
 
 Set these in the environment or in a `.env` file in the folder you start the gateway from (the same
