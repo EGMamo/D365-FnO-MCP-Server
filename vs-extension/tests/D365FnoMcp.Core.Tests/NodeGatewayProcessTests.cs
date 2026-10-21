@@ -3,6 +3,7 @@ using D365FnoMcp.Core;
 
 namespace D365FnoMcp.Core.Tests;
 
+[Collection(NodeGatewayCollection.Name)]
 public class NodeGatewayProcessTests : IDisposable
 {
     private readonly string root = Directory.CreateTempSubdirectory("d365-node-gateway-").FullName;

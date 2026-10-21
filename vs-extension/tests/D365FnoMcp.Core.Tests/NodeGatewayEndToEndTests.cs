@@ -11,6 +11,7 @@ namespace D365FnoMcp.Core.Tests;
 /// <c>node /repo/dist/src/index.js</c>. The hosted server is unreachable on purpose: custom
 /// objects must still be answered from the local index.
 /// </summary>
+[Collection(NodeGatewayCollection.Name)]
 public class NodeGatewayEndToEndTests : IDisposable
 {
     private readonly string root = Directory.CreateTempSubdirectory("d365-node-gateway-e2e-").FullName;
