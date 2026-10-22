@@ -484,7 +484,9 @@ selected through `D365_VISUAL_STUDIO_WORKSPACE_DIR` and `D365_TARGET_PROJECT`. T
 nothing; the agent saves the file with its own tools. Targets are worked out on this machine after the
 hosted answer arrives, so no local path or model name is sent upstream. In Visual Studio, the
 extension's `workspace_add_to_project` then adds the saved files to the project without a reload
-([Adding generated files to the project](visual-studio-extension.md#adding-generated-files-to-the-project)).
+([Adding generated files to the project](visual-studio-extension.md#adding-generated-files-to-the-project)),
+and `workspace_build_project` builds the project and returns the compiler's errors
+([Building from the agent](visual-studio-extension.md#building-from-the-agent)).
 
 ## Known gaps
 

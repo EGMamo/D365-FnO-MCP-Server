@@ -57,6 +57,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and Operations project through Visual Studio's project system and saves it, so the project needs
   no reload. It checks each file's layout, model and folder first, never edits the `.rnrproj`
   itself, and reports per file what the saved project lists afterwards.
+- Visual Studio extension: `workspace_build_project` runs Visual Studio's build of the open Finance
+  and Operations project and returns the X++ compiler and best-practice errors and warnings read
+  from the logs that build wrote, errors first, with the elements of the project marked. The
+  `xpp-developer` agent saves, adds, builds and fixes generated code with it.
 - Visual Studio extension: **Set Custom Models Folder...** runs the Node hybrid gateway as a child
   process and forwards to it, so Copilot in Visual Studio sees custom code merged with the hosted
   index. The hosted key and the gateway token reach the child through its environment only, the

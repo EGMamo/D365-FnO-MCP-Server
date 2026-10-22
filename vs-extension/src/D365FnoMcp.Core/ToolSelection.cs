@@ -32,6 +32,7 @@ public static class ToolSelection
 
         byName[McpGateway.ContextToolName] = new(McpGateway.ContextToolName, McpGateway.ContextToolDescription);
         byName[McpGateway.AddToProjectToolName] = new(McpGateway.AddToProjectToolName, McpGateway.AddToProjectToolDescription);
+        byName[McpGateway.BuildProjectToolName] = new(McpGateway.BuildProjectToolName, McpGateway.BuildProjectToolDescription);
         return byName.Values.OrderBy(tool => tool.Name, StringComparer.Ordinal).ToList();
     }
 

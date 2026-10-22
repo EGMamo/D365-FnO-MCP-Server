@@ -7,7 +7,7 @@ using Microsoft.VisualStudio.ProjectSystem.Query;
 namespace D365FnoMcp.Extension;
 
 /// <summary>Shared state: settings file, secret store, HTTP client and the Output pane.</summary>
-internal sealed class ExtensionServices : IWorkspaceContextProvider, IProjectFileAdder, IAsyncDisposable
+internal sealed class ExtensionServices : IWorkspaceContextProvider, IVisualStudioProjects, IAsyncDisposable
 {
     private readonly VisualStudioExtensibility extensibility;
     private readonly SemaphoreSlim outputLock = new(1, 1);
@@ -183,6 +183,18 @@ internal sealed class ExtensionServices : IWorkspaceContextProvider, IProjectFil
         }
 
         this.Log($"Asked Visual Studio to add {paths.Count} file(s) to {Path.GetFileName(projectPath)}.");
+    }
+
+    public async Task BuildAsync(string projectPath, CancellationToken cancellationToken)
+    {
+        IQueryResults<IProjectSnapshot> projects = await this.extensibility.Workspaces().QueryProjectsAsync(
+            query => query.Where(project => project.Path == projectPath),
+            cancellationToken);
+        this.Log($"Building {Path.GetFileName(projectPath)} for {McpGateway.BuildProjectToolName}.");
+        foreach (IProjectSnapshot project in projects)
+        {
+            await project.BuildAsync(cancellationToken);
+        }
     }
 
     public async ValueTask DisposeAsync()

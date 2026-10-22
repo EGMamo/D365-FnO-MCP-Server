@@ -21,7 +21,7 @@ To enter or replace only the key later, use **Extensions > D365 F&O MCP > Set AP
 tests the key, stores it in Windows Credential Manager and restarts the local gateway with it.
 
 Once the connection test passes, Configure Connection shows the server's tools with a checkbox
-each, plus the local `workspace_get_context` and `workspace_add_to_project`. Only checked tools are offered to Copilot; the
+each, plus the local `workspace_get_context`, `workspace_add_to_project` and `workspace_build_project`. Only checked tools are offered to Copilot; the
 gateway also refuses calls to unchecked ones. To change the choice later, use **Extensions > D365
 F&O MCP > Select Tools...**, which re-validates the connection, shows the same list and applies the
 change to the running gateway without a restart. Copilot may keep its earlier tool list until you
@@ -72,7 +72,7 @@ Visual Studio extension gateway
 - Other MCP server entries and inputs in the file are preserved.
 - **Test Connection** checks `/health`, performs MCP `initialize`, and lists hosted tools.
 - The gateway forwards hosted tools, resources and prompts and adds
-  `workspace_get_context` and `workspace_add_to_project`, limited to the tools selected in **Select Tools...** (stored as
+  `workspace_get_context`, `workspace_add_to_project` and `workspace_build_project`, limited to the tools selected in **Select Tools...** (stored as
   `AllowedTools` in `%LOCALAPPDATA%\D365FnoMcp\settings.json`; absent means all tools).
 - With a custom models folder set, the paired session goes to the Node hybrid gateway that the
   extension runs, and that gateway holds the session to Azure ([Custom models](#custom-models)).
@@ -93,7 +93,7 @@ Copilot in Visual Studio
         |
         | http://127.0.0.1:<random>/mcp, per-process bearer token
         v
-Visual Studio extension gateway      tool selection, workspace_get_context, workspace_add_to_project
+Visual Studio extension gateway      tool selection, workspace_* tools (context, add to project, build)
         |
         | http://127.0.0.1:<random>, second per-process token
         v
@@ -191,6 +191,39 @@ UDE installation yet; the read-back makes the result honest either way.
 The tool changes only the project's item list, never metadata files. Turn it off in **Select
 Tools...** like any other tool; Copilot also asks before it runs a tool unless you allowed it.
 
+## Building from the agent
+
+`workspace_build_project` (`{ "project": "ContosoProject" }`, `project` optional as above) closes
+the loop on generated code: the agent saves the files, adds them to the project, builds, and fixes
+what the compiler reports before you review the change. The extension runs Visual Studio's own
+**Build** on the project, so the build is the one you would start by hand, with the same output in
+the Output pane and Error List. Visual Studio's build API reports only that the build finished, so
+the extension then reads the X++ build logs written during that build: XML files named
+`BuildModelResult.xml` or containing `.xppc.`, `.xppbp.` or `.labelc.`, under the project folder
+and the model's package folder in the custom models folder (metadata folders such as `Ax*` and
+`XppMetadata` are skipped). It returns:
+
+```json
+{
+  "project": "ContosoProject",
+  "succeeded": false,
+  "errors": 1,
+  "warnings": 3,
+  "logs": ["Dynamics.AX.ContosoPkg.xppc.err.xml"],
+  "diagnostics": [
+    { "severity": "Error", "moniker": "", "elementType": "Class", "elementName": "ContosoInvoiceHelper",
+      "method": "run", "line": 12, "column": 5, "message": "...", "inProject": true }
+  ]
+}
+```
+
+Errors come first, repeats across logs are dropped, and at most 100 diagnostics are returned.
+`inProject` marks the elements of the built project. When no log from that build is found,
+`succeeded` is `null` and a note says to read the Error List; which log files a given
+Visual Studio and UDE version writes has not been confirmed on a real installation yet. One build
+runs at a time; a second call while one runs is refused. The tool never deploys, synchronizes the
+database or runs code.
+
 ## Write safety contract
 
 When local writes are enabled in a future bridge build, each mutation must:
@@ -202,8 +235,9 @@ When local writes are enabled in a future bridge build, each mutation must:
 5. validate the resulting metadata and project registration;
 6. roll back or report incomplete rollback explicitly.
 
-The gateway will not expose arbitrary filesystem writes, shell execution, build, deploy, database
-synchronization or runtime security publication.
+The gateway will not expose arbitrary filesystem writes, shell execution, deploy, database
+synchronization or runtime security publication. The one build it offers is Visual Studio's own
+project build ([Building from the agent](#building-from-the-agent)).
 
 ## Building
 
