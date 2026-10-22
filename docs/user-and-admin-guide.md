@@ -135,7 +135,7 @@ are in [hosted deployment](hosted-deployment.md#operations).
 | Write tool missing or target rejected | `D365_ENABLE_WRITE_TOOLS`, model descriptor and `D365_WRITABLE_MODELS`; run `doctor`. |
 | Hosted server will not start | Verify the active database exists and passes candidate validation; inspect worker and API health logs. |
 | Hosted index stale or unavailable | Check the active pointer and bundle integrity with `artifact status --verify`, then server startup logs. |
-| Too many sessions or requests | `MAX_CONCURRENT_SESSIONS`, `RATE_LIMIT_MAX_REQUESTS`, `RATE_LIMIT_WINDOW_MS`, and proxy settings. |
+| Too many sessions or requests | `MAX_CONCURRENT_SESSIONS`, `MAX_SESSIONS_PER_API_KEY`, `RATE_LIMIT_MAX_REQUESTS`, `RATE_LIMIT_WINDOW_MS`, and proxy settings. |
 
 See the [Visual Studio connection model](visual-studio-extension.md#connection-model)
 and the [README troubleshooting section](../README.md#troubleshooting) for

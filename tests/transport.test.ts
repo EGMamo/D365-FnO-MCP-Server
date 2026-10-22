@@ -323,6 +323,53 @@ describe('session lifecycle', () => {
     expect(sessions.size).toBeLessThanOrEqual(2);
   });
 
+  it('caps sessions per API key without locking out other keys', async () => {
+    const { app, sessions } = makeApp(undefined, { maxSessionsPerApiKey: 2 });
+    const url = await listen(app);
+    const init = (apiKey: string) =>
+      fetch(`${url}/mcp`, {
+        method: 'POST',
+        headers: { ...initHeaders, 'X-API-Key': apiKey },
+        body: JSON.stringify(initBody),
+      }).then(async (r) => ({ status: r.status, body: await r.text() }));
+
+    const first = await Promise.all(Array.from({ length: 4 }, () => init(API_KEY)));
+    expect(first.filter((r) => r.status === 200)).toHaveLength(2);
+    const refused = first.filter((r) => r.status === 429);
+    expect(refused).toHaveLength(2);
+    expect(JSON.parse(refused[0].body)).toMatchObject({ jsonrpc: '2.0', id: 1, error: { code: -32000 } });
+
+    // The other key still gets its own sessions.
+    expect((await init(SECOND_KEY)).status).toBe(200);
+    expect(sessions.size).toBe(3);
+  });
+
+  it('frees a per-key slot when that key closes a session', async () => {
+    const { app, sessions } = makeApp(undefined, { maxSessionsPerApiKey: 1 });
+    const url = await listen(app);
+    const init = () =>
+      fetch(`${url}/mcp`, { method: 'POST', headers: initHeaders, body: JSON.stringify(initBody) });
+
+    const opened = await init();
+    await opened.text();
+    const sid = opened.headers.get('mcp-session-id');
+    expect(sid).toBeTruthy();
+    const blocked = await init();
+    await blocked.text();
+    expect(blocked.status).toBe(429);
+
+    const closed = await fetch(`${url}/mcp`, {
+      method: 'DELETE',
+      headers: { 'X-API-Key': API_KEY, 'mcp-session-id': sid as string },
+    });
+    await closed.text();
+    expect(sessions.size).toBe(0);
+
+    const reopened = await init();
+    await reopened.text();
+    expect(reopened.status).toBe(200);
+  });
+
   it('releases the slot when initialize does not complete', async () => {
     const { app, sessions } = makeApp(
       () =>

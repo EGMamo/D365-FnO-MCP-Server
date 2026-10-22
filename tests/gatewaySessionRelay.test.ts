@@ -17,6 +17,7 @@ const workspace = {
   targetPackage: '',
   targetModel: '',
   targetSolution: '',
+  writableModels: [],
 };
 
 const HOSTED_KEY = 'hosted-secret-key-0123456789-abcdefghijklmnop';

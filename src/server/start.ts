@@ -219,6 +219,7 @@ export async function startServer(): Promise<void> {
     requestTimeoutMs: config.requestTimeoutMs,
     trustProxyHops: config.trustProxyHops,
     maxConcurrentSessions: config.maxConcurrentSessions,
+    maxSessionsPerApiKey: config.maxSessionsPerApiKey,
     sessionIdleTimeoutMs: config.sessionIdleTimeoutMs,
     readiness: { isReady: () => db !== null },
   });

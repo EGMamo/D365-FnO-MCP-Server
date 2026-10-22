@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `MAX_SESSIONS_PER_API_KEY` caps how many simultaneous sessions one API key may hold. A key at its
+  cap gets HTTP 429 on `initialize`, while other keys can still open sessions. `0` (the default)
+  keeps the old behaviour of a single global `MAX_CONCURRENT_SESSIONS` cap.
+
 ### Fixed
 
 - The HTTP transport answers a request body it cannot decode (unsupported charset or

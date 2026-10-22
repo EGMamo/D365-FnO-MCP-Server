@@ -102,6 +102,7 @@ Configuration comes from environment variables (a `.env` file in the working dir
 | `MCP_REQUEST_TIMEOUT_MS` | `120000` | Per-request timeout in milliseconds. |
 | `TRUST_PROXY_HOPS` | `0` | Number of trusted reverse-proxy hops. `0` ignores `X-Forwarded-For`; set this to the real hop count **only** when behind a trusted proxy. |
 | `MAX_CONCURRENT_SESSIONS` | `100` | Max simultaneous MCP sessions; further sessions receive HTTP `503`. |
+| `MAX_SESSIONS_PER_API_KEY` | `0` | Max simultaneous sessions one API key may hold; further sessions for that key receive HTTP `429`. `0` applies only `MAX_CONCURRENT_SESSIONS`. Set it when several named keys share a server, so one client cannot lock the others out. |
 | `SESSION_IDLE_TIMEOUT_MS` | `1800000` | Idle sessions are closed after this period (swept every 60s). |
 | `MCP_LOG_LEVEL` | `INFO` | Lowest level written to the structured stderr log: `DEBUG`, `INFO`, `WARN`, `ERROR`, `FATAL` or `SILENT`. |
 
@@ -846,7 +847,7 @@ database. Set `D365_RUN_SQL_INTEGRATION=1` and `D365_XREF_CONNECTION_STRING`, th
 - **API keys** — every key must be at least 32 characters; generate one per person with `openssl rand -hex 32` and list them in `MCP_API_KEYS`. Each request is checked against every key in constant time, only the key's name is logged, and a session is bound to the key that opened it. The `/health` and `/live` endpoints are the only unauthenticated routes.
 - **Rate limiting** — requests are limited per client IP (`RATE_LIMIT_MAX_REQUESTS` per `RATE_LIMIT_WINDOW_MS`). Limiting is deliberately keyed on IP only, so rotating credentials cannot bypass the limit.
 - **Trust proxy** — `TRUST_PROXY_HOPS` defaults to `0`, meaning `X-Forwarded-For` is ignored and the socket address is used. Only raise it when the server genuinely sits behind that many trusted proxies; otherwise clients can spoof their IP and evade rate limiting.
-- **Session limits** — `MAX_CONCURRENT_SESSIONS` and `SESSION_IDLE_TIMEOUT_MS` bound memory use and clean up abandoned sessions.
+- **Session limits** — `MAX_CONCURRENT_SESSIONS`, `MAX_SESSIONS_PER_API_KEY` and `SESSION_IDLE_TIMEOUT_MS` bound memory use and clean up abandoned sessions.
 - **Exposure** — the server grants read access to your source metadata and should not be exposed to untrusted networks. It binds every interface unless `MCP_HOST` says otherwise; set `MCP_HOST=127.0.0.1` for a local server, and front a shared one with TLS (App Service terminates HTTPS in hosted mode).
 - **Write tools over HTTP** — with `D365_ENABLE_WRITE_TOOLS=1` every API key can use the write tools. Enable them only on a local or single-user server. No tool adds or changes knowledge base topics.
 - **Data and AI use** — see the [Responsible AI and security FAQ](docs/responsible-ai-faq.md) for what the server reads, stores and sends, and how to review AI output that uses it.
