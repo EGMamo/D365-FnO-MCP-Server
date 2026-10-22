@@ -32,6 +32,14 @@ describe('loadConfig', () => {
     expect(config.apiKeys.map((entry) => entry.name)).toEqual(['alice', 'bob', 'default']);
   });
 
+  it('defaults MAX_SESSIONS_PER_API_KEY to 0 and rejects negative values', () => {
+    expect(loadConfig({ MCP_API_KEY: key('a') }).maxSessionsPerApiKey).toBe(0);
+    expect(loadConfig({ MCP_API_KEY: key('a'), MAX_SESSIONS_PER_API_KEY: '5' }).maxSessionsPerApiKey).toBe(5);
+    expect(issuesOf({ MCP_API_KEY: key('a'), MAX_SESSIONS_PER_API_KEY: '-1' })).toEqual([
+      expect.stringMatching(/^MAX_SESSIONS_PER_API_KEY:/),
+    ]);
+  });
+
   it('reports malformed keys in either transport', () => {
     expect(issuesOf({ MCP_TRANSPORT: 'http', MCP_API_KEY: 'short' })).toEqual([
       expect.stringMatching(/MCP_API_KEYS: MCP_API_KEY: key for 'default' is 5 characters/),

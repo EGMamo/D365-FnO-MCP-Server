@@ -41,6 +41,11 @@ export interface HttpTransportOptions {
   /** Number of trusted reverse-proxy hops. 0 = do not trust X-Forwarded-For. */
   trustProxyHops?: number;
   maxConcurrentSessions?: number;
+  /**
+   * Most sessions one API key may hold at once, so a single client cannot take
+   * every slot from the others. Omitted or 0 means only the global cap applies.
+   */
+  maxSessionsPerApiKey?: number;
   sessionIdleTimeoutMs?: number;
   sessionSweepIntervalMs?: number;
   /** Routes mounted at `/admin` after authentication. */
@@ -134,6 +139,7 @@ export function createHttpApp(createMcpServer: ServerFactory, options: HttpTrans
   const sessions = new Map<string, SessionEntry>();
   const trustProxyHops = options.trustProxyHops ?? 0;
   const maxConcurrentSessions = options.maxConcurrentSessions ?? 100;
+  const maxSessionsPerApiKey = options.maxSessionsPerApiKey ?? 0;
   const sessionIdleTimeoutMs = options.sessionIdleTimeoutMs ?? 30 * 60 * 1000;
   const sessionSweepIntervalMs = options.sessionSweepIntervalMs ?? SESSION_SWEEP_INTERVAL_MS;
 
@@ -360,8 +366,20 @@ export function createHttpApp(createMcpServer: ServerFactory, options: HttpTrans
         return;
       }
 
-      const newSessionId = randomUUID();
       const apiKeyName = res.locals.apiKeyName as string;
+      // Counts reserved slots too, and runs synchronously up to the reservation
+      // below, so concurrent initializations cannot overshoot the per-key cap.
+      if (maxSessionsPerApiKey > 0) {
+        let held = 0;
+        for (const s of sessions.values()) if (s.apiKeyName === apiKeyName) held++;
+        if (held >= maxSessionsPerApiKey) {
+          logger.warn('Per-key session limit reached', { apiKey: apiKeyName, active: held, max: maxSessionsPerApiKey });
+          res.status(429).json(jsonRpcError(-32000, 'Too many sessions: this API key holds its maximum concurrent sessions', firstId(req.body)));
+          return;
+        }
+      }
+
+      const newSessionId = randomUUID();
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => newSessionId,
         onsessioninitialized: (sid: string) => {

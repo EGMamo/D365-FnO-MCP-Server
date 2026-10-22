@@ -58,6 +58,7 @@ const configSchema = z.object({
   MCP_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(120_000),
   TRUST_PROXY_HOPS: z.coerce.number().int().min(0).default(0),
   MAX_CONCURRENT_SESSIONS: z.coerce.number().int().positive().default(100),
+  MAX_SESSIONS_PER_API_KEY: z.coerce.number().int().min(0).default(0),
   SESSION_IDLE_TIMEOUT_MS: z.coerce.number().int().positive().default(30 * 60 * 1000),
 });
 
@@ -186,6 +187,7 @@ function buildConfig(env: ParsedEnv) {
     requestTimeoutMs: env.MCP_REQUEST_TIMEOUT_MS,
     trustProxyHops: env.TRUST_PROXY_HOPS,
     maxConcurrentSessions: env.MAX_CONCURRENT_SESSIONS,
+    maxSessionsPerApiKey: env.MAX_SESSIONS_PER_API_KEY,
     sessionIdleTimeoutMs: env.SESSION_IDLE_TIMEOUT_MS,
     version: VERSION,
   };
