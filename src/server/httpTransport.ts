@@ -163,9 +163,9 @@ export function createHttpApp(createMcpServer: ServerFactory, options: HttpTrans
     });
   }
 
-  app.use(express.json({ limit: '1mb' }));
-
   // ── Rate limiting ─────────────────────────────────────────────────────────
+  // Before the body parser, so a malformed or oversized body (which the parser
+  // turns into an error that skips every later middleware) still spends budget.
   app.use(
     rateLimit({
       windowMs: options.rateLimitWindowMs,
@@ -184,6 +184,7 @@ export function createHttpApp(createMcpServer: ServerFactory, options: HttpTrans
     }),
   );
 
+  app.use(express.json({ limit: '1mb' }));
 
   const isReady = () => options.readiness?.isReady() ?? true;
 

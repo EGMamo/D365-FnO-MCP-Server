@@ -4,7 +4,8 @@ import { connect } from 'net';
 import { request, type Server } from 'http';
 import { Server as ProtocolServer } from '@modelcontextprotocol/sdk/server/index.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { createHttpApp, type ConnectableServer } from '../src/server/httpTransport.js';
+import express, { type Request, type Response, type Router } from 'express';
+import { createHttpApp, startHttpServer, type ConnectableServer } from '../src/server/httpTransport.js';
 import { logger } from '../src/utils/logger.js';
 
 const API_KEY = 'test-api-key-1234567890-abcdefghijklmnop';
@@ -539,5 +540,255 @@ describe('server factory', () => {
     expect(res.status).toBe(200);
     expect(await res.text()).toContain('low-level');
     expect(sessions.size).toBe(1);
+  });
+});
+
+describe('rate limiting', () => {
+  const post = (url: string, body: string, headers: Record<string, string> = {}) =>
+    fetch(`${url}/mcp`, {
+      method: 'POST',
+      headers: { 'X-API-Key': API_KEY, 'Content-Type': 'application/json', ...headers },
+      body,
+    });
+
+  it('answers 429 with a JSON-RPC error once the budget is spent, and never throttles the health probes', async () => {
+    const { app } = makeApp(undefined, { rateLimitMaxRequests: 2 });
+    const url = await listen(app);
+    const body = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' });
+
+    expect((await post(url, body)).status).toBe(400);
+    expect((await post(url, body)).status).toBe(400);
+    const limited = await post(url, body);
+    expect(limited.status).toBe(429);
+    expect(await limited.json()).toEqual({ jsonrpc: '2.0', id: null, error: { code: -32029, message: 'Too many requests' } });
+
+    expect((await fetch(`${url}/health`)).status).toBe(200);
+    expect((await fetch(`${url}/live`)).status).toBe(200);
+  });
+
+  it('counts malformed and oversized bodies against the budget before parsing them', async () => {
+    const { app } = makeApp(undefined, { rateLimitMaxRequests: 2 });
+    const url = await listen(app);
+
+    expect((await post(url, '{not json')).status).toBe(400);
+    expect((await post(url, JSON.stringify({ pad: 'x'.repeat(2 * 1024 * 1024) }))).status).toBe(413);
+    expect((await post(url, '{not json')).status).toBe(429);
+  });
+
+  it('counts unauthenticated requests too, so a key cannot be guessed at full speed', async () => {
+    const { app } = makeApp(undefined, { rateLimitMaxRequests: 2 });
+    const url = await listen(app);
+    const body = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' });
+
+    expect((await post(url, body, { 'X-API-Key': 'guess-1' })).status).toBe(401);
+    expect((await post(url, body, { 'X-API-Key': 'guess-2' })).status).toBe(401);
+    expect((await post(url, body, { 'X-API-Key': API_KEY })).status).toBe(429);
+  });
+
+  it('ignores X-Forwarded-For unless proxy hops are trusted', async () => {
+    const body = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' });
+
+    const untrusted = await listen(makeApp(undefined, { rateLimitMaxRequests: 1 }).app);
+    expect((await post(untrusted, body, { 'X-Forwarded-For': '203.0.113.1' })).status).toBe(400);
+    // A forged header does not buy a fresh bucket.
+    expect((await post(untrusted, body, { 'X-Forwarded-For': '203.0.113.2' })).status).toBe(429);
+
+    const behindProxy = await listen(makeApp(undefined, { rateLimitMaxRequests: 1, trustProxyHops: 1 }).app);
+    expect((await post(behindProxy, body, { 'X-Forwarded-For': '203.0.113.1' })).status).toBe(400);
+    // The proxy's view of the client decides the bucket.
+    expect((await post(behindProxy, body, { 'X-Forwarded-For': '203.0.113.2' })).status).toBe(400);
+    expect((await post(behindProxy, body, { 'X-Forwarded-For': '203.0.113.1' })).status).toBe(429);
+  });
+});
+
+describe('admin routes and fallbacks', () => {
+  function adminRouter(handlers: Record<string, (req: Request, res: Response) => void>): Router {
+    const router = express.Router();
+    for (const [route, handler] of Object.entries(handlers)) router.get(route, handler);
+    return router;
+  }
+
+  it('mounts admin routes behind authentication and the readiness gate', async () => {
+    let ready = false;
+    const { app } = makeApp(undefined, {
+      admin: { router: adminRouter({ '/whoami': (_req, res) => res.json({ key: res.locals.apiKeyName }) }) },
+      readiness: { isReady: () => ready },
+    });
+    const url = await listen(app);
+
+    expect((await fetch(`${url}/admin/whoami`)).status).toBe(401);
+    expect((await fetch(`${url}/admin/whoami`, { headers: { 'X-API-Key': API_KEY } })).status).toBe(503);
+
+    ready = true;
+    const res = await fetch(`${url}/admin/whoami`, { headers: { Authorization: `Bearer ${SECOND_KEY}` } });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ key: 'second' });
+  });
+
+  it('answers 504 when nothing is sent in time, and drops the late failure without a second response', async () => {
+    const close = vi.fn().mockResolvedValue(undefined);
+    const { app, sessions } = makeApp(
+      () =>
+        ({
+          // A server stuck past the response timer, which then fails.
+          connect: () => new Promise((_resolve, reject) => setTimeout(() => reject(new Error('late failure')), 150)),
+          close,
+        }) as unknown as McpServer,
+      { requestTimeoutMs: 50 },
+    );
+    const url = await listen(app);
+
+    const res = await fetch(`${url}/mcp`, {
+      method: 'POST',
+      headers: { 'X-API-Key': API_KEY, 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'c', version: '0' } },
+      }),
+    });
+    expect(res.status).toBe(504);
+    expect(await res.json()).toEqual({ jsonrpc: '2.0', id: null, error: { code: -32000, message: 'Request timed out' } });
+
+    // The reserved slot is released once the stuck initialize finally fails.
+    await vi.waitFor(() => expect(close).toHaveBeenCalledTimes(1));
+    expect(sessions.size).toBe(0);
+  });
+
+  it('answers 500 with a generic JSON-RPC error when a handler throws, without echoing the message', async () => {
+    const { app } = makeApp(undefined, {
+      admin: {
+        router: adminRouter({
+          '/boom': () => {
+            throw new Error('secret detail /srv/app');
+          },
+        }),
+      },
+    });
+    const url = await listen(app);
+
+    const res = await fetch(`${url}/admin/boom`, { headers: { 'X-API-Key': API_KEY } });
+    expect(res.status).toBe(500);
+    const text = await res.text();
+    expect(JSON.parse(text)).toEqual({ jsonrpc: '2.0', id: null, error: { code: -32603, message: 'Internal error' } });
+    expect(text).not.toContain('secret detail');
+  });
+
+  it('answers 404 for an unknown path only after authentication', async () => {
+    expect((await fetch(`${baseUrl}/nope`)).status).toBe(401);
+    const res = await fetch(`${baseUrl}/nope`, { headers: { 'X-API-Key': API_KEY } });
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: 'Not Found. MCP endpoint is at /mcp' });
+  });
+
+  it('rejects a malformed JSON body with a JSON-RPC parse error', async () => {
+    const res = await fetch(`${baseUrl}/mcp`, {
+      method: 'POST',
+      headers: { 'X-API-Key': API_KEY, 'Content-Type': 'application/json' },
+      body: '{"jsonrpc":',
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } });
+  });
+});
+
+describe('json-rpc envelope edge cases', () => {
+  const post = (body: unknown, headers: Record<string, string> = {}) =>
+    fetch(`${baseUrl}/mcp`, {
+      method: 'POST',
+      headers: { 'X-API-Key': API_KEY, 'Content-Type': 'application/json', ...headers },
+      body: JSON.stringify(body),
+    });
+
+  it('rejects an empty batch and a batch holding a non-object', async () => {
+    for (const body of [[], [{ jsonrpc: '2.0', id: 1, method: 'tools/list' }, 7]]) {
+      const res = await post(body);
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ id: null, error: { code: -32600 } });
+    }
+  });
+
+  it('echoes the id of an invalid single request', async () => {
+    const res = await post({ jsonrpc: '1.0', id: 'abc', method: 'tools/list' });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ id: 'abc', error: { code: -32600 } });
+  });
+
+  it('echoes the first id of a batch sent without a session, and none for a notification', async () => {
+    const batch = await post([
+      { jsonrpc: '2.0', id: 42, method: 'tools/list' },
+      { jsonrpc: '2.0', id: 43, method: 'prompts/list' },
+    ]);
+    expect(batch.status).toBe(400);
+    expect(await batch.json()).toMatchObject({ id: 42, error: { code: -32600 } });
+
+    const notification = await post({ jsonrpc: '2.0', method: 'notifications/initialized' });
+    expect(notification.status).toBe(400);
+    expect(await notification.json()).toMatchObject({ id: null, error: { code: -32600 } });
+  });
+
+  it('refuses a GET without a session and an unknown session id', async () => {
+    const get = await fetch(`${baseUrl}/mcp`, { headers: { 'X-API-Key': API_KEY, Accept: 'text/event-stream' } });
+    expect(get.status).toBe(400);
+
+    const unknown = await post({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, { 'mcp-session-id': 'no-such-session' });
+    expect(unknown.status).toBe(404);
+    expect(await unknown.json()).toEqual({ error: 'Session not found. Please reconnect.' });
+  });
+});
+
+describe('startHttpServer', () => {
+  const options = {
+    port: 0,
+    host: '127.0.0.1',
+    apiKeys: [{ name: 'test', key: API_KEY }],
+    version: '0.1.0',
+    rateLimitMaxRequests: 100,
+    rateLimitWindowMs: 60_000,
+    requestTimeoutMs: 5_000,
+  };
+  const close = (s: Server) => new Promise<void>((resolve) => s.close(() => resolve()));
+
+  it('resolves once listening and closes every session on demand', async () => {
+    const closed = vi.fn().mockResolvedValue(undefined);
+    const running = startHttpServer(() => {
+      const mcp = new McpServer({ name: 'test', version: '0.0.0' });
+      const original = mcp.close.bind(mcp);
+      mcp.close = async () => {
+        closed();
+        await original();
+      };
+      return mcp;
+    }, options);
+    await running.listening;
+    const { port } = running.server.address() as AddressInfo;
+
+    const init = await fetch(`http://127.0.0.1:${port}/mcp`, {
+      method: 'POST',
+      headers: { 'X-API-Key': API_KEY, 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'c', version: '0' } },
+      }),
+    });
+    expect(init.status).toBe(200);
+    await init.text();
+
+    running.closeAllSessions();
+    await vi.waitFor(() => expect(closed).toHaveBeenCalledTimes(1));
+    await close(running.server);
+  });
+
+  it('rejects when the port is taken', async () => {
+    const first = startHttpServer(() => new McpServer({ name: 'test', version: '0.0.0' }), options);
+    await first.listening;
+    const { port } = first.server.address() as AddressInfo;
+
+    const second = startHttpServer(() => new McpServer({ name: 'test', version: '0.0.0' }), { ...options, port });
+    await expect(second.listening).rejects.toMatchObject({ code: 'EADDRINUSE' });
+    await close(first.server);
   });
 });
