@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `tedious` (the optional `mssql` driver's dependency) moved to 20.3.7, which drops `sprintf-js`
   (GHSA-hp3w-g68c-fv3c); `npm audit` now reports no vulnerabilities.
+- The HTTP transport (server and gateway) now rate-limits before it parses the body. A malformed
+  or oversized JSON body used to fail in the parser and skip the limiter, so such requests were
+  never counted.
 
 ### Changed
 
