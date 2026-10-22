@@ -27,24 +27,33 @@ public sealed class McpGateway : IAsyncDisposable
         "Adds metadata files you have already saved (the target.path of a generated file) to the open Finance and Operations project " +
         "through Visual Studio, so the project needs no reload. Each file must be <Package>\\<Model>\\Ax<Type>\\<Name>.xml in the project's model.";
 
+    public const string BuildProjectToolName = "workspace_build_project";
+
+    public const string BuildProjectToolDescription =
+        "Builds the open Finance and Operations project in Visual Studio, as its Build command does, and returns the X++ compiler " +
+        "and best-practice errors and warnings from the logs that build wrote. Use it after saving generated files and adding them to the project.";
+
     private const int MaxFilesPerCall = 100;
+
+    private const int MaxDiagnostics = 100;
 
     /// <summary>Marks the gateway's own 401, so another Visual Studio instance can tell a live gateway from a reused port.</summary>
     private const string GatewayHeader = "X-D365FnoMcp-Gateway";
     private readonly HttpClient upstreamClient;
     private readonly IWorkspaceContextProvider contextProvider;
-    private readonly IProjectFileAdder? projectFiles;
+    private readonly IVisualStudioProjects? projects;
+    private readonly SemaphoreSlim buildLock = new(1, 1);
     private WebApplication? application;
     private string upstreamEndpoint = string.Empty;
     private string apiKey = string.Empty;
     private string? sdkVersion;
     private volatile IReadOnlySet<string>? allowedTools;
 
-    public McpGateway(HttpClient upstreamClient, IWorkspaceContextProvider contextProvider, IProjectFileAdder? projectFiles = null)
+    public McpGateway(HttpClient upstreamClient, IWorkspaceContextProvider contextProvider, IVisualStudioProjects? projects = null)
     {
         this.upstreamClient = upstreamClient;
         this.contextProvider = contextProvider;
-        this.projectFiles = projectFiles;
+        this.projects = projects;
     }
 
     public Uri? Endpoint { get; private set; }
@@ -167,9 +176,16 @@ public sealed class McpGateway : IAsyncDisposable
             return;
         }
 
-        if (calledTool == AddToProjectToolName && this.projectFiles is not null)
+        if (calledTool == AddToProjectToolName && this.projects is not null)
         {
             JsonObject result = await this.AddToProjectAsync(request?["params"]?["arguments"], context.RequestAborted);
+            await WriteResultAsync(context, request?["id"], result);
+            return;
+        }
+
+        if (calledTool == BuildProjectToolName && this.projects is not null)
+        {
+            JsonObject result = await this.BuildProjectAsync(request?["params"]?["arguments"], context.RequestAborted);
             await WriteResultAsync(context, request?["id"], result);
             return;
         }
@@ -230,7 +246,7 @@ public sealed class McpGateway : IAsyncDisposable
             for (int i = tools.Count - 1; i >= 0; i--)
             {
                 string? name = (string?)tools[i]?["name"];
-                if (name == ContextToolName || name == AddToProjectToolName || name is null || !ToolSelection.IsAllowed(allowed, name))
+                if (name is ContextToolName or AddToProjectToolName or BuildProjectToolName or null || !ToolSelection.IsAllowed(allowed, name))
                 {
                     tools.RemoveAt(i);
                 }
@@ -241,9 +257,14 @@ public sealed class McpGateway : IAsyncDisposable
                 tools.Add(ContextTool());
             }
 
-            if (this.projectFiles is not null && ToolSelection.IsAllowed(allowed, AddToProjectToolName))
+            if (this.projects is not null && ToolSelection.IsAllowed(allowed, AddToProjectToolName))
             {
                 tools.Add(AddToProjectTool());
+            }
+
+            if (this.projects is not null && ToolSelection.IsAllowed(allowed, BuildProjectToolName))
+            {
+                tools.Add(BuildProjectTool());
             }
         }
 
@@ -285,7 +306,7 @@ public sealed class McpGateway : IAsyncDisposable
         IReadOnlyList<ProjectFileCheck> checks;
         try
         {
-            projectPath = await this.projectFiles!.FindProjectAsync((string?)projectArgument, cancellationToken);
+            projectPath = await this.projects!.FindProjectAsync((string?)projectArgument, cancellationToken);
             checks = ProjectFiles.Check(projectPath, paths, this.CustomMetadataDirectory);
         }
         catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException or System.Xml.XmlException)
@@ -299,7 +320,7 @@ public sealed class McpGateway : IAsyncDisposable
         {
             try
             {
-                await this.projectFiles.AddFilesAsync(projectPath, toAdd, cancellationToken);
+                await this.projects.AddFilesAsync(projectPath, toAdd, cancellationToken);
             }
             catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException)
             {
@@ -362,6 +383,124 @@ public sealed class McpGateway : IAsyncDisposable
             ["content"] = new JsonArray(new JsonObject { ["type"] = "text", ["text"] = data.ToJsonString() }),
             ["isError"] = inProject == 0,
         };
+    }
+
+    /// <summary>
+    /// Builds the project through Visual Studio, then reads the X++ logs written during that build under the
+    /// project folder and the model's package folder. One build at a time; a second call is refused, not queued.
+    /// </summary>
+    private async Task<JsonObject> BuildProjectAsync(JsonNode? arguments, CancellationToken cancellationToken)
+    {
+        JsonNode? projectArgument = arguments?["project"];
+        if (projectArgument is not null && projectArgument.GetValueKind() != System.Text.Json.JsonValueKind.String)
+        {
+            return ToolError("'project' must be a project name.");
+        }
+
+        if (!await this.buildLock.WaitAsync(0, cancellationToken))
+        {
+            return ToolError("A build started through this tool is still running; wait for its result.");
+        }
+
+        try
+        {
+            string projectPath;
+            string? model;
+            IReadOnlySet<string> items;
+            try
+            {
+                projectPath = await this.projects!.FindProjectAsync((string?)projectArgument, cancellationToken);
+                (model, items) = ProjectFiles.ReadProject(projectPath);
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException or System.Xml.XmlException)
+            {
+                return ToolError(ex.Message);
+            }
+
+            var roots = new List<string> { Path.GetDirectoryName(projectPath)! };
+            roots.AddRange(BuildLogs.PackageFolders(this.CustomMetadataDirectory, model));
+
+            // File times can be coarser than the clock; a log written in the same second still counts.
+            DateTime started = DateTime.UtcNow.AddSeconds(-2);
+            try
+            {
+                await this.projects.BuildAsync(projectPath, cancellationToken);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException)
+            {
+                return ToolError($"Visual Studio could not build the project: {ex.Message}");
+            }
+
+            IReadOnlyList<string> logs = BuildLogs.Find(roots, started);
+            List<BuildDiagnostic> diagnostics = logs
+                .SelectMany(log => BuildLogs.Parse(ReadLog(log), log))
+                .DistinctBy(diagnostic => (diagnostic.Severity.ToLowerInvariant(), diagnostic.Path, diagnostic.Line, diagnostic.Column, diagnostic.Message))
+                .OrderBy(diagnostic => diagnostic.IsError ? 0 : 1)
+                .ThenBy(diagnostic => diagnostic.ElementName, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(diagnostic => diagnostic.Line)
+                .ToList();
+            int errors = diagnostics.Count(diagnostic => diagnostic.IsError);
+
+            var list = new JsonArray();
+            foreach (BuildDiagnostic diagnostic in diagnostics.Take(MaxDiagnostics))
+            {
+                list.Add(new JsonObject
+                {
+                    ["severity"] = diagnostic.Severity,
+                    ["moniker"] = diagnostic.Moniker,
+                    ["elementType"] = diagnostic.ElementType,
+                    ["elementName"] = diagnostic.ElementName,
+                    ["method"] = diagnostic.Method,
+                    ["line"] = diagnostic.Line,
+                    ["column"] = diagnostic.Column,
+                    ["message"] = diagnostic.Message,
+                    ["inProject"] = items.Contains($"Ax{diagnostic.ElementType}\\{diagnostic.ElementName}"),
+                });
+            }
+
+            var data = new JsonObject
+            {
+                ["project"] = Path.GetFileNameWithoutExtension(projectPath),
+                ["succeeded"] = logs.Count == 0 ? null : errors == 0,
+                ["errors"] = errors,
+                ["warnings"] = diagnostics.Count - errors,
+                ["logs"] = new JsonArray(logs.Select(log => (JsonNode)Path.GetFileName(log)).ToArray()),
+                ["diagnostics"] = list,
+            };
+            if (diagnostics.Count > MaxDiagnostics)
+            {
+                data["truncated"] = $"Showing {MaxDiagnostics} of {diagnostics.Count} diagnostics, errors first.";
+            }
+
+            if (logs.Count == 0)
+            {
+                data["note"] = "Visual Studio finished the build, but no X++ build log written by it was found in the project folder or the model's package folder" +
+                    (this.CustomMetadataDirectory is null ? " (no custom models folder is set in the extension)" : string.Empty) +
+                    ". Read the result in Visual Studio's Error List.";
+            }
+
+            return new JsonObject
+            {
+                ["content"] = new JsonArray(new JsonObject { ["type"] = "text", ["text"] = data.ToJsonString() }),
+                ["isError"] = false,
+            };
+        }
+        finally
+        {
+            this.buildLock.Release();
+        }
+    }
+
+    private static string ReadLog(string path)
+    {
+        try
+        {
+            return File.ReadAllText(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return string.Empty;
+        }
     }
 
     private static JsonObject ToolError(string message) => new()
@@ -470,6 +609,32 @@ public sealed class McpGateway : IAsyncDisposable
                 },
             },
             ["required"] = new JsonArray("paths"),
+            ["additionalProperties"] = false,
+        },
+        ["annotations"] = new JsonObject
+        {
+            ["readOnlyHint"] = false,
+            ["destructiveHint"] = false,
+            ["idempotentHint"] = true,
+            ["openWorldHint"] = false,
+        },
+    };
+
+    private static JsonObject BuildProjectTool() => new()
+    {
+        ["name"] = BuildProjectToolName,
+        ["description"] = BuildProjectToolDescription,
+        ["inputSchema"] = new JsonObject
+        {
+            ["type"] = "object",
+            ["properties"] = new JsonObject
+            {
+                ["project"] = new JsonObject
+                {
+                    ["type"] = "string",
+                    ["description"] = "Project name; needed only when the solution has several Finance and Operations projects.",
+                },
+            },
             ["additionalProperties"] = false,
         },
         ["annotations"] = new JsonObject

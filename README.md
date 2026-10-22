@@ -599,7 +599,9 @@ exists). The model comes from `D365_TARGET_MODEL`, or the project selected with
 `D365_VISUAL_STUDIO_WORKSPACE_DIR`/`D365_TARGET_PROJECT`; without one, `targets` says why there are none.
 In Visual Studio, the extension's `workspace_add_to_project` adds the saved files to the project through
 Visual Studio's project system, so the project needs no reload
-([details](docs/visual-studio-extension.md#adding-generated-files-to-the-project)).
+([details](docs/visual-studio-extension.md#adding-generated-files-to-the-project)), and
+`workspace_build_project` builds it and returns the X++ compiler's errors and warnings
+([details](docs/visual-studio-extension.md#building-from-the-agent)).
 
 Write tools (only with `D365_ENABLE_WRITE_TOOLS=1`):
 `write_table_extension`, `apply_table_extension_change`

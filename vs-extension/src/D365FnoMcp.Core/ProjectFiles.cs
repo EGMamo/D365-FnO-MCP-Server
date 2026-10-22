@@ -101,8 +101,8 @@ public static partial class ProjectFiles
     private static partial Regex ElementName();
 }
 
-/// <summary>Adds existing files to a project through Visual Studio's project system, so the project needs no reload.</summary>
-public interface IProjectFileAdder
+/// <summary>The open Finance and Operations projects, changed and built through Visual Studio's project system.</summary>
+public interface IVisualStudioProjects
 {
     /// <summary>
     /// The full path of the open Finance and Operations project: the one named, or the solution's only one.
@@ -110,6 +110,9 @@ public interface IProjectFileAdder
     /// </summary>
     Task<string> FindProjectAsync(string? projectName, CancellationToken cancellationToken);
 
-    /// <summary>Adds the files to the project and saves it.</summary>
+    /// <summary>Adds the files to the project and saves it, so the project needs no reload.</summary>
     Task AddFilesAsync(string projectPath, IReadOnlyList<string> paths, CancellationToken cancellationToken);
+
+    /// <summary>Builds the project as Visual Studio's Build command does; completes when the build has finished.</summary>
+    Task BuildAsync(string projectPath, CancellationToken cancellationToken);
 }

@@ -188,7 +188,7 @@ public sealed class ProjectFilesTests : IDisposable
     }
 
     /// <summary>Stands in for Visual Studio's project system; it either records the item in the .rnrproj or ignores it.</summary>
-    private sealed class Adder(string projectPath, bool writesProject) : IProjectFileAdder
+    private sealed class Adder(string projectPath, bool writesProject) : IVisualStudioProjects
     {
         public List<string> Added { get; } = [];
 
@@ -209,6 +209,8 @@ public sealed class ProjectFilesTests : IDisposable
 
             return Task.CompletedTask;
         }
+
+        public Task BuildAsync(string project, CancellationToken cancellationToken) => Task.CompletedTask;
     }
 
     private sealed class Context : IWorkspaceContextProvider
