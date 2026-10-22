@@ -17,9 +17,10 @@ internal static class ToolPicker
         string serverUrl,
         IEnumerable<ToolInfo> hostedTools,
         List<string>? current,
+        bool customModelsIndexed,
         CancellationToken cancellationToken)
     {
-        IReadOnlyList<ToolInfo> available = ToolSelection.Available(hostedTools);
+        IReadOnlyList<ToolInfo> available = ToolSelection.Available(hostedTools, customModelsIndexed);
         var data = new ToolSelectionData(serverUrl, available, ToolSelection.ToSet(current));
         using var control = new ToolSelectionControl(data);
         DialogResult result = await shell.ShowDialogAsync(control, "D365 F&O MCP: allowed tools", DialogOption.OKCancel, cancellationToken);

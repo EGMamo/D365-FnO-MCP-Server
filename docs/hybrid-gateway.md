@@ -55,6 +55,11 @@ You need Node.js 24 or higher, a build of this repo (`npm install`, `npm run bui
 server's URL and your personal API key from the operator, and the folder that holds your custom
 models.
 
+In Visual Studio you do not need the steps below: the extension's **Set Custom Models Folder...**
+starts this gateway for you and keeps the hosted key in Windows Credential Manager (see
+[Visual Studio extension](visual-studio-extension.md#custom-models)). Use the steps for other
+clients such as Claude Code, Copilot CLI or VS Code.
+
 ### 1. Configure
 
 Set these in the environment or in a `.env` file in the folder you start the gateway from (the same
@@ -70,6 +75,7 @@ Set these in the environment or in a `.env` file in the folder you start the gat
 | `D365_GATEWAY_TOKEN` | _(generated)_ | Bearer token your agent presents. At least 32 characters, no whitespace, not a documentation placeholder; `openssl rand -hex 32` makes one. When unset, the gateway generates one and keeps it in a token file (see [Token](#3-start-and-find-the-token)). |
 | `D365_APP_VERSION` | _(empty)_ | Four-part application version of your own `PackagesLocalDirectory`, e.g. `10.0.2645.136`. The gateway declares it to the hosted server in `X-D365-Client-Sdk-Version`, which tells the agent when its index describes a different application version (see [SDK version warnings](../README.md#sdk-version-warnings)). A version your agent's client declares itself takes precedence. A value that is not printable ASCII of 64 characters or fewer is not sent, with a warning. |
 | `D365_GATEWAY_PRIVATE_PREFIXES` | _(empty)_ | Comma-separated name prefixes (for example your customer prefix) that must never be sent to the hosted server. See [Privacy](#privacy). |
+| `D365_GATEWAY_STANDARD_INDEX_DB_PATH` | _(empty)_ | Optional index of the standard application, built with `index` (the file `serve` uses). The gateway opens it read-only and lays the custom index over it, so the forwarded tools run locally. It must be an existing file and differ from `D365_LOCAL_INDEX_DB_PATH`. See [Standard index](#standard-index). |
 | `D365_GATEWAY_UPSTREAM_TIMEOUT_MS` | `15000` | How long to wait for the hosted server before falling back to local results with a warning. 1000 to 120000. |
 | `D365_GATEWAY_REINDEX_TTL_MS` | `30000` | Longest the custom index is served without a re-check, in case the file watcher misses a change. 1000 to 3600000. |
 | `D365_VISUAL_STUDIO_WORKSPACE_DIR`, `D365_TARGET_SOLUTION`, `D365_TARGET_PROJECT`, `D365_TARGET_PACKAGE`, `D365_TARGET_MODEL` | _(empty)_ | Optional. Read by the local `get_visual_studio_workspace` tool exactly as `serve` reads them. |
@@ -268,6 +274,40 @@ A tool the hosted server adds later is forwarded as well, and so are the hosted 
 knowledge base) and prompts. The gateway offers no resource templates of its own. The write tools
 are not registered in the gateway, and a hosted server refuses them.
 
+## Standard index
+
+Forwarded tools are answered by the hosted index alone, so they cannot see custom objects: a custom
+role is missing from `find_security_path`, and `create_data_entity` does not know a custom table.
+Set `D365_GATEWAY_STANDARD_INDEX_DB_PATH` to an index of the standard application to fix that. Build
+it once with `d365-fno-mcp-server index` over your `PackagesLocalDirectory` (or reuse the file of a
+`serve` setup), and rebuild it when you move to a new application version.
+
+The gateway opens the file read-only and lays the custom index over it through views on a second
+connection: each of `ax_objects`, `ax_fields`, `ax_methods`, `ax_enum_values`, `ax_datasources`,
+`ax_form_controls`, `ax_properties`, `ax_security_grants`, `ax_labels`, `ax_label_sources` and
+`ax_xref` reads the standard rows followed by the custom rows. Custom ids are offset by 2^40 so the
+two never collide, and a custom object with the same type and name as a standard one (an
+overlayered object) hides the standard row with its fields, methods and cross-references. A custom
+label with the same id and language hides the standard one. The views read the custom index live, so
+a refresh shows up on the next call. Nothing is written to either index through them.
+
+With a standard index set, every forwarded tool the gateway implements runs over the layered index
+and nothing is sent upstream for it, which also means a private prefix no longer blocks the call:
+
+- Security analysis: `find_security_path`, `analyze_sod_conflicts`, `diff_roles`,
+  `convert_security_customizations`.
+- Entities and generators: `check_entity_odata_readiness`, `create_data_entity`,
+  `create_security_privilege`, `create_readonly_role_for_entities`, `create_odata_action`,
+  `generate_xpp_class`, `create_runbase_batch`, `create_sys_operation`.
+- Code quality: `get_bp_findings` (findings are those imported into the standard index).
+
+These keep going to the hosted server: the index tools (`get_index_stats`, `get_index_staleness`,
+`get_usage_snapshot_status`), which describe the hosted index; the trace, telemetry, batch and
+release-plan tools, which the gateway does not implement; and any tool whose hosted arguments differ
+from the gateway's (it is listed in `skewedTools`). Local-only, owner-routed and merged tools are
+routed as before. `local_index_status` reports the standard index under `standardIndex` by file name,
+object count, build time and application version, never by path.
+
 ## How rows are tagged
 
 Merged lists say which side each row came from.
@@ -378,7 +418,7 @@ the hosted server for most tools, and those arguments can contain custom object 
 
 | Call | Sent to the hosted server |
 | --- | --- |
-| Forwarded tools | Always, with every argument (including pasted content such as the `xml` of `convert_security_customizations` and the field lists of generators). |
+| Forwarded tools | Always, with every argument (including pasted content such as the `xml` of `convert_security_customizations` and the field lists of generators). With a [standard index](#standard-index), never for the tools listed there. |
 | Owner-routed tools | Only when the named object is not in the custom index; then with every argument, including a generator's draft specification (extension, field and method names). |
 | `get_table_schema`, `get_class_hierarchy` | Only when the table or class is not in the custom index. |
 | `resolve_label`, `resolve_label_by_language` | Only when the label is not found locally. |
@@ -450,12 +490,16 @@ hosted answer arrives, so no local path or model name is sent upstream.
   resolves EDTs and labels against the custom index, which holds no standard objects: a table
   extension field typed with a standard EDT is reported as not found. A generator whose target is a
   standard object is validated by the hosted index, which does not know your custom EDTs or labels.
-  Forwarded generators validate against the hosted index only, so a custom parent class
-  (`generate_xpp_class`) or table (`create_data_entity`) is reported as not found.
-- **Forwarded tools do not see custom objects.** This covers the security analysis tools
-  (`find_security_path`, `analyze_sod_conflicts`, `diff_roles`), `check_entity_odata_readiness`,
-  `get_bp_findings`, `analyze_batch_class` and the other forwarded tools. `get_security_object`
-  is owner-routed and works for custom roles, duties and privileges.
+  Without a [standard index](#standard-index), forwarded generators validate against the hosted
+  index only, so a custom parent class (`generate_xpp_class`) or table (`create_data_entity`) is
+  reported as not found.
+- **Forwarded tools do not see custom objects** unless a [standard index](#standard-index) is set.
+  This covers the security analysis tools (`find_security_path`, `analyze_sod_conflicts`,
+  `diff_roles`), `check_entity_odata_readiness`, `get_bp_findings` and the other forwarded tools.
+  `analyze_batch_class` and the trace tools stay hosted-only either way. `get_security_object` is
+  owner-routed and works for custom roles, duties and privileges.
+- **The standard index can be older than the hosted one.** Locally run tools see the application
+  version the standard index was built from (`local_index_status` reports it), not the hosted one.
 - **Role extensions are not merged.** For a standard role, duty or privilege, `get_security_object`
   returns the hosted answer; custom extensions of it in the custom index are not added.
 - **Impact chains beyond `maxDepth`.** `analyze_impact` finds a custom dependent of a standard

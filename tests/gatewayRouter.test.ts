@@ -126,6 +126,7 @@ function setup(overrides: Partial<RouteContext> = {}) {
   const localIndex: LocalIndex = {
     db,
     customDir: CUSTOM_DIR,
+    attachUri: 'file:test?mode=memory',
     ensureFresh,
     markDirty: () => {},
     status: () => ({

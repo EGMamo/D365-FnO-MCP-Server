@@ -24,6 +24,11 @@ export interface GatewayConfig {
   customMetadataDir: string;
   /** Absolute path of the custom-models SQLite index (never the main index). */
   localIndexDbPath: string;
+  /**
+   * Read-only index of the standard application the custom index is laid over, or null. With one, the tools
+   * the hosted server would otherwise answer alone run on this machine and see custom objects.
+   */
+  standardIndexDbPath: string | null;
   port: number;
   host: '127.0.0.1';
   /** Bearer token agents must present to the loopback gateway. */
@@ -50,10 +55,21 @@ export interface LocalIndexStatus {
   lastError: string | null;
 }
 
+/** The standard index under the custom one, as local_index_status reports it; never a full path. */
+export interface StandardIndexStatus {
+  fileName: string;
+  objects: number;
+  builtAt: string | null;
+  appVersion: string | null;
+  schemaVersion: string | null;
+}
+
 /** Incrementally maintained SQLite index of the developer's custom models. */
 export interface LocalIndex {
   readonly db: Database;
   readonly customDir: string;
+  /** SQLite URI another connection attaches to read this index (read-only for a file). */
+  readonly attachUri: string;
   /** Re-indexes when dirty or older than the TTL. Single-flight; never throws. */
   ensureFresh(): Promise<void>;
   markDirty(): void;
@@ -101,6 +117,11 @@ export interface RouteContext {
   privatePrefixes: readonly string[];
   /** Merge tools whose hosted schema differs from the local one; they are forwarded instead of merged. */
   skewedTools: ReadonlySet<string>;
+  /**
+   * Tool handlers over the standard index with the custom index laid on top, or null without a standard index.
+   * Tools that are otherwise forwarded run here instead, so nothing goes to the hosted server.
+   */
+  layered?: LocalTools | null;
 }
 
 /**

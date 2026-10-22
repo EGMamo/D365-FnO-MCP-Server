@@ -16,6 +16,7 @@ import { startHttpServer, type RunningHttpServer, type SessionContext } from '..
 import { logger } from '../utils/logger.js';
 import { VERSION } from '../version.js';
 import { GatewayConfigError, loadGatewayConfig } from './config.js';
+import { openLayeredIndex, type LayeredIndex } from './layeredIndex.js';
 import { openLocalIndex } from './localIndex.js';
 import { captureLocalTools } from './localTools.js';
 import { sanitizeReason } from './merge.js';
@@ -25,6 +26,7 @@ import {
   OWNER_ROUTED_TOOL_NAMES,
   computeSkewedTools,
   executeToolCall,
+  layerableToolNames,
 } from './router.js';
 import { HOSTED_RETRY_MS, UpstreamSession, UpstreamUnavailableError, compareVersions } from './upstream.js';
 import { addFileTargets } from '../workspace/fileTargets.js';
@@ -145,7 +147,15 @@ export class HostedCatalog {
   private lastFailure: string | null = null;
   private readonly listeners = new Set<() => void>();
 
-  constructor(private readonly local: LocalTools) {}
+  /** Tools whose hosted schema is compared with the local one: the merge tools, plus the forwarded ones the gateway runs itself over a standard index. */
+  private readonly skewChecked: readonly string[];
+
+  constructor(
+    private readonly local: LocalTools,
+    layered = false
+  ) {
+    this.skewChecked = layered ? [...MERGE_TOOL_NAMES, ...layerableToolNames(local)] : MERGE_TOOL_NAMES;
+  }
 
   /** False until a hosted tool list was received once. */
   get loaded(): boolean {
@@ -239,10 +249,10 @@ export class HostedCatalog {
 
   private apply(tools: Tool[]): void {
     const byName = new Map(tools.map((tool) => [tool.name, tool]));
-    const skewed = computeSkewedTools(byName, this.local, MERGE_TOOL_NAMES);
+    const skewed = computeSkewedTools(byName, this.local, this.skewChecked);
     for (const name of skewed) {
       if (!this.skewed.has(name)) {
-        logger.warn('Hosted tool arguments differ from the gateway implementation; forwarding without merging', { tool: name });
+        logger.warn('Hosted tool arguments differ from the gateway implementation; forwarding it unchanged', { tool: name });
       }
     }
     const changed = !this.loaded || JSON.stringify(tools) !== JSON.stringify(this.list);
@@ -261,6 +271,8 @@ export interface GatewayRuntime {
   readonly config: GatewayConfig;
   readonly localIndex: LocalIndex;
   readonly local: LocalTools;
+  /** Handlers over the standard index with the custom one laid on top; null without a standard index. */
+  readonly layered: LocalTools | null;
   readonly catalog: HostedCatalog;
   /** Opens the hosted connection of one downstream session; connects on first use. */
   openUpstream(clientSdkVersion?: string | null): UpstreamSession;
@@ -272,9 +284,20 @@ export interface GatewayRuntime {
   closeUpstreams(): Promise<void>;
 }
 
+/** The standard index under the custom one and the tool handlers over both. */
+export interface LayeredTools {
+  index: LayeredIndex;
+  tools: LocalTools;
+}
+
 /** Wires the shared state around an open local index and its tool handlers; `createGatewayServer` builds one server per session on it. */
-export function createGatewayRuntime(config: GatewayConfig, localIndex: LocalIndex, local: LocalTools): GatewayRuntime {
-  const catalog = new HostedCatalog(local);
+export function createGatewayRuntime(
+  config: GatewayConfig,
+  localIndex: LocalIndex,
+  local: LocalTools,
+  layered: LayeredTools | null = null
+): GatewayRuntime {
+  const catalog = new HostedCatalog(local, layered !== null);
   const sessions = new Set<UpstreamSession>();
   const closing = new Set<Promise<void>>();
 
@@ -288,6 +311,7 @@ export function createGatewayRuntime(config: GatewayConfig, localIndex: LocalInd
   local.setStatusExtras(() => ({
     gateway: { version: VERSION },
     hosted: { ...hosted(), version: catalog.version, versionNote: catalog.versionNote },
+    standardIndex: layered?.index.status() ?? null,
     skewedTools: [...catalog.skewedTools].sort(),
   }));
 
@@ -302,6 +326,7 @@ export function createGatewayRuntime(config: GatewayConfig, localIndex: LocalInd
     config,
     localIndex,
     local,
+    layered: layered?.tools ?? null,
     catalog,
     openUpstream(clientSdkVersion) {
       const upstream = connectTo(config, declarableVersion(clientSdkVersion) ?? declarableVersion(config.appVersion));
@@ -336,10 +361,15 @@ function asTool(definition: LocalToolDefinition, unavailable: boolean): Tool {
  * The tools an agent sees: the hosted tools as received, plus the gateway-only ones the hosted list lacks. When
  * no hosted list was ever received, the tools the local index can answer on its own.
  */
-function listedTools({ catalog, local }: GatewayRuntime): Tool[] {
+function listedTools({ catalog, local, layered }: GatewayRuntime): Tool[] {
   const definitions = new Map(local.definitions().map((definition) => [definition.name, definition]));
   if (!catalog.loaded) {
-    const answerable = new Set([...LOCAL_ONLY_TOOL_NAMES, ...MERGE_TOOL_NAMES, ...OWNER_ROUTED_TOOL_NAMES]);
+    const answerable = new Set([
+      ...LOCAL_ONLY_TOOL_NAMES,
+      ...MERGE_TOOL_NAMES,
+      ...OWNER_ROUTED_TOOL_NAMES,
+      ...(layered ? layerableToolNames(layered) : []),
+    ]);
     return [...definitions.values()].filter((definition) => answerable.has(definition.name)).map((definition) => asTool(definition, true));
   }
   const gatewayOnly = LOCAL_ONLY_TOOL_NAMES.filter((name) => !catalog.toolMap.has(name)).flatMap((name) => definitions.get(name) ?? []);
@@ -355,6 +385,7 @@ function routeContext(runtime: GatewayRuntime, upstream: UpstreamPort): RouteCon
     hostedTools: runtime.catalog.toolMap,
     privatePrefixes: runtime.config.privatePrefixes,
     skewedTools: runtime.catalog.skewedTools,
+    layered: runtime.layered,
   };
 }
 
@@ -465,6 +496,8 @@ async function warmCatalog(config: GatewayConfig, runtime: GatewayRuntime): Prom
 export interface RunningGateway {
   readonly config: GatewayConfig;
   readonly localIndex: LocalIndex;
+  /** The standard index under the custom one, when D365_GATEWAY_STANDARD_INDEX_DB_PATH is set. */
+  readonly standardIndex: LayeredIndex | null;
   /** Endpoint agents connect to. */
   readonly url: string;
   /** The address the listener is bound to, as the socket reports it. */
@@ -522,10 +555,17 @@ export async function launchGateway(config: GatewayConfig): Promise<RunningGatew
 
   let runtime: GatewayRuntime;
   let http: RunningHttpServer;
+  let standardIndex: LayeredIndex | null = null;
   let ready = false;
   try {
+    let layered: LayeredTools | null = null;
+    if (config.standardIndexDbPath) {
+      standardIndex = openLayeredIndex(config.standardIndexDbPath, localIndex.attachUri);
+      layered = { index: standardIndex, tools: captureLocalTools(standardIndex.db, localIndex, config.workspace) };
+      logger.info('Standard index laid under the custom models; forwarded tools run locally', { objects: standardIndex.status().objects });
+    }
     localIndex.startWatcher();
-    runtime = createGatewayRuntime(config, localIndex, captureLocalTools(localIndex.db, localIndex, config.workspace));
+    runtime = createGatewayRuntime(config, localIndex, captureLocalTools(localIndex.db, localIndex, config.workspace), layered);
     http = startHttpServer((context) => createGatewayServer(runtime, context), {
       port: config.port,
       host: config.host,
@@ -541,6 +581,7 @@ export async function launchGateway(config: GatewayConfig): Promise<RunningGatew
       allowedHosts: gatewayHostHeaders(config.port),
     });
   } catch (error) {
+    standardIndex?.close();
     localIndex.close();
     throw error;
   }
@@ -552,7 +593,8 @@ export async function launchGateway(config: GatewayConfig): Promise<RunningGatew
       const closed = new Promise<void>((resolve) => http.server.close(() => resolve()));
       http.server.closeAllConnections();
       await closed;
-      // The local index first: closing it is quick and must not wait for a hosted server that does not answer.
+      // The local indexes first: closing them is quick and must not wait for a hosted server that does not answer.
+      standardIndex?.close();
       localIndex.close();
       await settleWithin(runtime.closeUpstreams(), UPSTREAM_CLOSE_GRACE_MS);
     })();
@@ -572,7 +614,7 @@ export async function launchGateway(config: GatewayConfig): Promise<RunningGatew
   }
   const address = http.server.address();
   const boundAddress = typeof address === 'object' && address !== null ? address.address : String(address);
-  return { config, localIndex, url: `http://${config.host}:${config.port}/mcp`, boundAddress, stop };
+  return { config, localIndex, standardIndex, url: `http://${config.host}:${config.port}/mcp`, boundAddress, stop };
 }
 
 /** Prints the problems of an invalid configuration in the style of the server's own config errors. */

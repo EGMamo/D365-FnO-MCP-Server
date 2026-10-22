@@ -56,6 +56,7 @@ function fakeLocalIndex(overrides: Partial<LocalIndexStatus> = {}): LocalIndex {
   return {
     db: seed(),
     customDir: CUSTOM_DIR,
+    attachUri: 'file:test?mode=memory',
     ensureFresh: async () => {},
     markDirty: () => {},
     status: () => status,

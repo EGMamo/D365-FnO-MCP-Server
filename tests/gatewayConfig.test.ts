@@ -286,6 +286,34 @@ describe('loadGatewayConfig token', () => {
   });
 });
 
+describe('loadGatewayConfig standard index', () => {
+  const withToken = (overrides: NodeJS.ProcessEnv) => validEnv({ D365_GATEWAY_TOKEN: TOKEN, ...overrides });
+
+  it('is off unless set', () => {
+    expect(loadGatewayConfig(withToken({})).standardIndexDbPath).toBeNull();
+  });
+
+  it('accepts an existing index file', () => {
+    const file = path.join(root, 'standard.db');
+    fs.writeFileSync(file, '');
+    expect(loadGatewayConfig(withToken({ D365_GATEWAY_STANDARD_INDEX_DB_PATH: file })).standardIndexDbPath).toBe(file);
+  });
+
+  it('rejects a missing file, a folder, :memory: and the custom index itself', () => {
+    const name = 'D365_GATEWAY_STANDARD_INDEX_DB_PATH';
+    expect(problemsOf(withToken({ [name]: path.join(root, 'missing.db') }))).toEqual([
+      expect.stringMatching(/^D365_GATEWAY_STANDARD_INDEX_DB_PATH: file does not exist/),
+    ]);
+    expect(problemsOf(withToken({ [name]: root }))).toEqual([expect.stringMatching(/: is not a file/)]);
+    expect(problemsOf(withToken({ [name]: ':memory:' }))).toEqual([expect.stringMatching(/not :memory:/)]);
+    const custom = path.join(root, 'custom_index.db');
+    fs.writeFileSync(custom, '');
+    expect(problemsOf(withToken({ [name]: custom, D365_LOCAL_INDEX_DB_PATH: custom }))).toEqual([
+      expect.stringMatching(/must differ from D365_LOCAL_INDEX_DB_PATH/),
+    ]);
+  });
+});
+
 describe('loadGatewayConfig numeric settings', () => {
   it('applies the defaults', () => {
     const config = loadGatewayConfig(validEnv({ D365_GATEWAY_TOKEN: TOKEN }));
