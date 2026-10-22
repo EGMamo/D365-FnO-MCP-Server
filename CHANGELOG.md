@@ -53,6 +53,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   custom metadata folder is configured, local `serve` and the hybrid gateway add each file's target
   path, package, model, `.rnrproj` item and whether it exists or the model is writable, so an agent can
   save the file itself. Nothing is written by the server. The gateway reads `D365_WRITABLE_MODELS`.
+- Visual Studio extension: `workspace_add_to_project` adds saved metadata files to the open Finance
+  and Operations project through Visual Studio's project system and saves it, so the project needs
+  no reload. It checks each file's layout, model and folder first, never edits the `.rnrproj`
+  itself, and reports per file what the saved project lists afterwards.
 - Visual Studio extension: **Set Custom Models Folder...** runs the Node hybrid gateway as a child
   process and forwards to it, so Copilot in Visual Studio sees custom code merged with the hosted
   index. The hosted key and the gateway token reach the child through its environment only, the

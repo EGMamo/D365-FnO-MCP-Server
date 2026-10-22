@@ -21,20 +21,30 @@ public sealed class McpGateway : IAsyncDisposable
 
     public const string ContextToolDescription = "Returns privacy-safe D365 F&O context for the current Visual Studio workspace. Local paths and credentials are never returned.";
 
+    public const string AddToProjectToolName = "workspace_add_to_project";
+
+    public const string AddToProjectToolDescription =
+        "Adds metadata files you have already saved (the target.path of a generated file) to the open Finance and Operations project " +
+        "through Visual Studio, so the project needs no reload. Each file must be <Package>\\<Model>\\Ax<Type>\\<Name>.xml in the project's model.";
+
+    private const int MaxFilesPerCall = 100;
+
     /// <summary>Marks the gateway's own 401, so another Visual Studio instance can tell a live gateway from a reused port.</summary>
     private const string GatewayHeader = "X-D365FnoMcp-Gateway";
     private readonly HttpClient upstreamClient;
     private readonly IWorkspaceContextProvider contextProvider;
+    private readonly IProjectFileAdder? projectFiles;
     private WebApplication? application;
     private string upstreamEndpoint = string.Empty;
     private string apiKey = string.Empty;
     private string? sdkVersion;
     private volatile IReadOnlySet<string>? allowedTools;
 
-    public McpGateway(HttpClient upstreamClient, IWorkspaceContextProvider contextProvider)
+    public McpGateway(HttpClient upstreamClient, IWorkspaceContextProvider contextProvider, IProjectFileAdder? projectFiles = null)
     {
         this.upstreamClient = upstreamClient;
         this.contextProvider = contextProvider;
+        this.projectFiles = projectFiles;
     }
 
     public Uri? Endpoint { get; private set; }
@@ -50,6 +60,9 @@ public sealed class McpGateway : IAsyncDisposable
         get => this.allowedTools;
         set => this.allowedTools = value;
     }
+
+    /// <summary>When set, <see cref="AddToProjectToolName"/> adds only files inside this folder.</summary>
+    public string? CustomMetadataDirectory { get; init; }
 
     public async Task StartAsync(string serverUrl, string apiKey, string? sdkVersion, CancellationToken cancellationToken)
     {
@@ -154,6 +167,13 @@ public sealed class McpGateway : IAsyncDisposable
             return;
         }
 
+        if (calledTool == AddToProjectToolName && this.projectFiles is not null)
+        {
+            JsonObject result = await this.AddToProjectAsync(request?["params"]?["arguments"], context.RequestAborted);
+            await WriteResultAsync(context, request?["id"], result);
+            return;
+        }
+
         await this.ProxyAsync(
             context,
             body,
@@ -210,7 +230,7 @@ public sealed class McpGateway : IAsyncDisposable
             for (int i = tools.Count - 1; i >= 0; i--)
             {
                 string? name = (string?)tools[i]?["name"];
-                if (name == ContextToolName || name is null || !ToolSelection.IsAllowed(allowed, name))
+                if (name == ContextToolName || name == AddToProjectToolName || name is null || !ToolSelection.IsAllowed(allowed, name))
                 {
                     tools.RemoveAt(i);
                 }
@@ -219,6 +239,11 @@ public sealed class McpGateway : IAsyncDisposable
             if (ToolSelection.IsAllowed(allowed, ContextToolName))
             {
                 tools.Add(ContextTool());
+            }
+
+            if (this.projectFiles is not null && ToolSelection.IsAllowed(allowed, AddToProjectToolName))
+            {
+                tools.Add(AddToProjectTool());
             }
         }
 
@@ -235,6 +260,126 @@ public sealed class McpGateway : IAsyncDisposable
 
         context.Response.ContentType = "application/json";
         await context.Response.WriteAsync(responseBody?.ToJsonString() ?? responseText, context.RequestAborted);
+    }
+
+    /// <summary>
+    /// Checks the files, has Visual Studio add the valid ones, then reads the saved project back so the
+    /// result reports what the project file now lists rather than what was asked for.
+    /// </summary>
+    private async Task<JsonObject> AddToProjectAsync(JsonNode? arguments, CancellationToken cancellationToken)
+    {
+        if (arguments?["paths"] is not JsonArray pathArray || pathArray.Count is 0 or > MaxFilesPerCall ||
+            pathArray.Any(item => item?.GetValueKind() != System.Text.Json.JsonValueKind.String))
+        {
+            return ToolError($"'paths' must list 1 to {MaxFilesPerCall} full file paths.");
+        }
+
+        JsonNode? projectArgument = arguments["project"];
+        if (projectArgument is not null && projectArgument.GetValueKind() != System.Text.Json.JsonValueKind.String)
+        {
+            return ToolError("'project' must be a project name.");
+        }
+
+        string[] paths = pathArray.Select(item => (string)item!).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        string projectPath;
+        IReadOnlyList<ProjectFileCheck> checks;
+        try
+        {
+            projectPath = await this.projectFiles!.FindProjectAsync((string?)projectArgument, cancellationToken);
+            checks = ProjectFiles.Check(projectPath, paths, this.CustomMetadataDirectory);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException or System.Xml.XmlException)
+        {
+            return ToolError(ex.Message);
+        }
+
+        string[] toAdd = checks.Where(check => check.CanAdd).Select(check => Path.GetFullPath(check.Path)).ToArray();
+        string? addError = null;
+        if (toAdd.Length > 0)
+        {
+            try
+            {
+                await this.projectFiles.AddFilesAsync(projectPath, toAdd, cancellationToken);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException)
+            {
+                addError = ex.Message;
+            }
+        }
+
+        IReadOnlySet<string> listed;
+        try
+        {
+            listed = ProjectFiles.ReadProject(projectPath).Items;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Xml.XmlException)
+        {
+            return ToolError($"Could not read the project back after adding: {ex.Message}");
+        }
+
+        var files = new JsonArray();
+        int inProject = 0;
+        foreach (ProjectFileCheck check in checks)
+        {
+            string status;
+            string? issue = check.Issue;
+            if (issue is not null)
+            {
+                status = "skipped";
+            }
+            else if (check.AlreadyInProject)
+            {
+                status = "alreadyInProject";
+            }
+            else if (listed.Contains(check.ProjectItem!))
+            {
+                status = "added";
+            }
+            else
+            {
+                status = "notAdded";
+                issue = (addError is null ? "Visual Studio did not add the item to the project. " : $"Visual Studio could not add the item: {addError} ") +
+                    "Add it with Add > Existing Item... in Solution Explorer.";
+            }
+
+            if (status is "added" or "alreadyInProject")
+            {
+                inProject++;
+            }
+
+            var file = new JsonObject { ["path"] = check.Path, ["projectItem"] = check.ProjectItem, ["status"] = status };
+            if (issue is not null)
+            {
+                file["issue"] = issue;
+            }
+
+            files.Add(file);
+        }
+
+        var data = new JsonObject { ["project"] = Path.GetFileNameWithoutExtension(projectPath), ["files"] = files };
+        return new JsonObject
+        {
+            ["content"] = new JsonArray(new JsonObject { ["type"] = "text", ["text"] = data.ToJsonString() }),
+            ["isError"] = inProject == 0,
+        };
+    }
+
+    private static JsonObject ToolError(string message) => new()
+    {
+        ["content"] = new JsonArray(new JsonObject { ["type"] = "text", ["text"] = message }),
+        ["isError"] = true,
+    };
+
+    private static async Task WriteResultAsync(HttpContext context, JsonNode? id, JsonObject result)
+    {
+        var response = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = id?.DeepClone(),
+            ["result"] = result,
+        };
+        context.Response.ContentType = "application/json";
+        await context.Response.WriteAsync(response.ToJsonString(), context.RequestAborted);
     }
 
     private async Task WriteContextResultAsync(HttpContext context, JsonNode? id)
@@ -298,6 +443,41 @@ public sealed class McpGateway : IAsyncDisposable
                 ["model"] = NullableStringSchema(),
             },
             ["required"] = new JsonArray("d365SdkVersion", "solution", "project", "model"),
+        },
+    };
+
+    private static JsonObject AddToProjectTool() => new()
+    {
+        ["name"] = AddToProjectToolName,
+        ["description"] = AddToProjectToolDescription,
+        ["inputSchema"] = new JsonObject
+        {
+            ["type"] = "object",
+            ["properties"] = new JsonObject
+            {
+                ["paths"] = new JsonObject
+                {
+                    ["type"] = "array",
+                    ["items"] = new JsonObject { ["type"] = "string" },
+                    ["minItems"] = 1,
+                    ["maxItems"] = MaxFilesPerCall,
+                    ["description"] = "Full paths of the saved files.",
+                },
+                ["project"] = new JsonObject
+                {
+                    ["type"] = "string",
+                    ["description"] = "Project name; needed only when the solution has several Finance and Operations projects.",
+                },
+            },
+            ["required"] = new JsonArray("paths"),
+            ["additionalProperties"] = false,
+        },
+        ["annotations"] = new JsonObject
+        {
+            ["readOnlyHint"] = false,
+            ["destructiveHint"] = false,
+            ["idempotentHint"] = true,
+            ["openWorldHint"] = false,
         },
     };
 

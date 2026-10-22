@@ -482,7 +482,9 @@ package and model, the `.rnrproj` item to add, and whether the file exists alrea
 writable (`D365_WRITABLE_MODELS`). The model is `D365_TARGET_MODEL`, or the model of the project
 selected through `D365_VISUAL_STUDIO_WORKSPACE_DIR` and `D365_TARGET_PROJECT`. The gateway writes
 nothing; the agent saves the file with its own tools. Targets are worked out on this machine after the
-hosted answer arrives, so no local path or model name is sent upstream.
+hosted answer arrives, so no local path or model name is sent upstream. In Visual Studio, the
+extension's `workspace_add_to_project` then adds the saved files to the project without a reload
+([Adding generated files to the project](visual-studio-extension.md#adding-generated-files-to-the-project)).
 
 ## Known gaps
 
