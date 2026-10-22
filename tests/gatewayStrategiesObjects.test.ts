@@ -15,6 +15,7 @@ const workspace: GatewayWorkspaceConfig = {
   targetPackage: '',
   targetModel: '',
   targetSolution: '',
+  writableModels: [],
 };
 
 const KNOWLEDGE: ContentItem = { type: 'text', text: '{"knowledge":{"hints":["use find_usages for call sites"]}}' };

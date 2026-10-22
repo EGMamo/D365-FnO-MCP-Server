@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 import { parseApiKeys } from '../server/apiKeys.js';
-import { canonicalRoot, errorMessage, isMissing } from '../workspace/safety.js';
+import { canonicalRoot, errorMessage, isMissing, safeSegment } from '../workspace/safety.js';
 import type { GatewayConfig } from './types.js';
 
 /**
@@ -63,6 +63,7 @@ const gatewayEnvSchema = z.object({
   D365_TARGET_PACKAGE: z.string().trim().default(''),
   D365_TARGET_MODEL: z.string().trim().default(''),
   D365_TARGET_SOLUTION: z.string().trim().default(''),
+  D365_WRITABLE_MODELS: z.string().default(''),
 });
 
 type GatewayEnv = z.output<typeof gatewayEnvSchema>;
@@ -255,6 +256,21 @@ function parsePrivatePrefixes(raw: string, issue: ReportIssue): string[] {
   return valid ? prefixes : [];
 }
 
+/** Comma-separated literal Package/Model pairs, validated as the server validates them. */
+function parseWritableModels(value: string, issue: ReportIssue): string[] {
+  const entries = value.split(',').map((entry) => entry.trim()).filter(Boolean);
+  for (const entry of entries) {
+    try {
+      const parts = entry.split('/');
+      if (parts.length !== 2) throw new Error('Expected Package/Model.');
+      parts.forEach(safeSegment);
+    } catch {
+      issue('D365_WRITABLE_MODELS', `Invalid writable target '${entry}'; use comma-separated literal Package/Model pairs (spaces allowed).`);
+    }
+  }
+  return entries;
+}
+
 /**
  * Everything the gateway reads from the environment. Validation lives in one
  * transform so that every problem is reported together; zod would otherwise
@@ -299,6 +315,7 @@ export const gatewayConfigSchema = gatewayEnvSchema.transform((env, ctx): Valida
       targetPackage: env.D365_TARGET_PACKAGE,
       targetModel: env.D365_TARGET_MODEL,
       targetSolution: env.D365_TARGET_SOLUTION,
+      writableModels: parseWritableModels(env.D365_WRITABLE_MODELS, issue),
     },
   };
   return failed ? z.NEVER : settings;

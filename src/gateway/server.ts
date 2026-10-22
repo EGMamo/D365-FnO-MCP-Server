@@ -29,6 +29,7 @@ import {
   layerableToolNames,
 } from './router.js';
 import { HOSTED_RETRY_MS, UpstreamSession, UpstreamUnavailableError, compareVersions } from './upstream.js';
+import { addFileTargets } from '../workspace/fileTargets.js';
 import type { GatewayConfig, LocalIndex, LocalToolDefinition, LocalTools, RouteContext, UpstreamPort } from './types.js';
 
 /**
@@ -448,7 +449,9 @@ export function createGatewayServer(runtime: GatewayRuntime, context?: SessionCo
     const session = upstream();
     // Keeps the hosted tool list, the skew check and the reported availability current for clients that rarely list tools.
     if (runtime.catalog.needsRefresh) void runtime.catalog.refresh(session);
-    return executeToolCall(request.params.name, request.params.arguments, routeContext(runtime, session));
+    const result = await executeToolCall(request.params.name, request.params.arguments, routeContext(runtime, session));
+    // Local and hosted generator results alike learn where their files go on this machine.
+    return addFileTargets(result, runtime.config.workspace);
   });
 
   server.setRequestHandler(ListResourcesRequestSchema, async (request) => {

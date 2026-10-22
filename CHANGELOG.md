@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `convert_security_customizations` lists file paths in `files.items` and carries the contents once,
+  in the generated files item.
+- `create_runbase_batch` no longer leaves a blank line after the summary when no menu item is given.
 - The build no longer emits `.d.ts` and declaration maps: the package is a CLI with no library API,
   and the maps pointed at `src/`, which is not published. The packed tarball drops from 416 to 230 files.
 - `package.json` names the repository, homepage and issue tracker.
@@ -32,6 +35,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Generated files: generators (`create_coc_extension`, `create_table_extension`,
+  `create_class_extension`, `create_event_handler`, `create_form_event_handler`, `generate_xpp_class`,
+  `create_runbase_batch`, `create_sys_operation`, `create_data_entity`, `create_security_privilege`,
+  `create_readonly_role_for_entities`, `create_odata_action`) and `convert_security_customizations`
+  end their result with a `{"generatedFiles":[...]}` item holding each AOT file's type, name and full
+  content. Class generators now also produce the `AxClass` XML, with one entry per method. Where a
+  custom metadata folder is configured, local `serve` and the hybrid gateway add each file's target
+  path, package, model, `.rnrproj` item and whether it exists or the model is writable, so an agent can
+  save the file itself. Nothing is written by the server. The gateway reads `D365_WRITABLE_MODELS`.
 - Visual Studio extension: **Set Custom Models Folder...** runs the Node hybrid gateway as a child
   process and forwards to it, so Copilot in Visual Studio sees custom code merged with the hosted
   index. The hosted key and the gateway token reach the child through its environment only, the

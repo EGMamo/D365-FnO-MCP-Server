@@ -41,6 +41,7 @@ const workspace = (customDir: string): GatewayWorkspaceConfig => ({
   targetPackage: '',
   targetModel: '',
   targetSolution: '',
+  writableModels: [],
 });
 
 const textOf = (result: CallToolResult): string => {

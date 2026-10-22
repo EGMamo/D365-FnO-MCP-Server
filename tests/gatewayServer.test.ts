@@ -13,6 +13,7 @@ const workspace = {
   targetPackage: '',
   targetModel: '',
   targetSolution: '',
+  writableModels: [],
 };
 
 function localTools(): LocalTools {

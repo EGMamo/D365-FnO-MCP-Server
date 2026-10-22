@@ -24,6 +24,7 @@ const unconfigured: GatewayWorkspaceConfig = {
   targetPackage: '',
   targetModel: '',
   targetSolution: '',
+  writableModels: [],
 };
 
 function seed() {

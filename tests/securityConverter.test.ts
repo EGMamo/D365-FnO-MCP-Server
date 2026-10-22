@@ -107,6 +107,12 @@ describe('security converter', () => {
     expect(json.files.truncated).toBe(true);
     expect(json.nameClashesWithIndex).toEqual(['Privilege NewPriv']);
     expect(json.unresolvedReferences).toEqual([{ from: 'Role MyClerk', kind: 'Privilege', name: 'MissingPriv' }]);
+    // Contents travel once, in the generated files item; the listing keeps the paths.
+    expect(json.files.items.every((item: Record<string, unknown>) => !('content' in item))).toBe(true);
+    const generated = JSON.parse(res.content.at(-1)!.text).generatedFiles;
+    expect(generated).toHaveLength(2);
+    expect(generated[0].aotType).toMatch(/^AxSecurity(Role|Duty|Privilege)$/);
+    expect(generated[0].content).toContain('<Name>');
     expect((await tool({ xml: '<x/>', includeDependencies: true, maxFiles: 50 })).isError).toBe(true);
     db.close();
     fs.rmSync(dir, { recursive: true, force: true });

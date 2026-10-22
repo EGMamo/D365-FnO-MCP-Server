@@ -12,6 +12,8 @@ export interface GatewayWorkspaceConfig {
   targetPackage: string;
   targetModel: string;
   targetSolution: string;
+  /** Package/Model pairs new generated files may go to (D365_WRITABLE_MODELS); others are reported read-only. */
+  writableModels: string[];
 }
 
 /** Validated gateway settings (src/gateway/config.ts). */

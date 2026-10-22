@@ -13,6 +13,7 @@ const workspace: GatewayWorkspaceConfig = {
   targetPackage: '',
   targetModel: '',
   targetSolution: '',
+  writableModels: [],
 };
 
 type Row = Record<string, unknown>;
