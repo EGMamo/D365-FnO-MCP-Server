@@ -7,7 +7,7 @@ using Microsoft.VisualStudio.ProjectSystem.Query;
 namespace D365FnoMcp.Extension;
 
 /// <summary>Shared state: settings file, secret store, HTTP client and the Output pane.</summary>
-internal sealed class ExtensionServices : IWorkspaceContextProvider, IAsyncDisposable
+internal sealed class ExtensionServices : IWorkspaceContextProvider, IProjectFileAdder, IAsyncDisposable
 {
     private readonly VisualStudioExtensibility extensibility;
     private readonly SemaphoreSlim outputLock = new(1, 1);
@@ -148,6 +148,43 @@ internal sealed class ExtensionServices : IWorkspaceContextProvider, IAsyncDispo
         return WorkspaceContextResolver.Resolve(solutionDirectory, sdkVersion);
     }
 
+    public async Task<string> FindProjectAsync(string? projectName, CancellationToken cancellationToken)
+    {
+        IQueryResults<IProjectSnapshot> projects = await this.extensibility.Workspaces().QueryProjectsAsync(
+            query => query.With(project => new { project.Name, project.Path }),
+            cancellationToken);
+        List<IProjectSnapshot> finOps = projects
+            .Where(project => project.Path?.EndsWith(".rnrproj", StringComparison.OrdinalIgnoreCase) == true)
+            .ToList();
+        List<IProjectSnapshot> matches = string.IsNullOrWhiteSpace(projectName)
+            ? finOps
+            : finOps.Where(project => string.Equals(project.Name, projectName, StringComparison.OrdinalIgnoreCase)).ToList();
+        return matches.Count switch
+        {
+            1 => matches[0].Path!,
+            0 when finOps.Count == 0 => throw new InvalidOperationException("No Finance and Operations project (.rnrproj) is open in Visual Studio."),
+            0 => throw new InvalidOperationException($"No open project is named '{projectName}'. Open projects: {string.Join(", ", finOps.Select(project => project.Name))}."),
+            _ => throw new InvalidOperationException($"Several projects are open; name one in 'project': {string.Join(", ", matches.Select(project => project.Name))}."),
+        };
+    }
+
+    public async Task AddFilesAsync(string projectPath, IReadOnlyList<string> paths, CancellationToken cancellationToken)
+    {
+        await this.extensibility.Workspaces().UpdateProjectsAsync(
+            query => query.Where(project => project.Path == projectPath),
+            project => project.AddFiles(paths),
+            cancellationToken);
+        IQueryResults<IProjectSnapshot> saved = await this.extensibility.Workspaces().QueryProjectsAsync(
+            query => query.Where(project => project.Path == projectPath),
+            cancellationToken);
+        foreach (IProjectSnapshot project in saved)
+        {
+            await project.SaveAsync(cancellationToken);
+        }
+
+        this.Log($"Asked Visual Studio to add {paths.Count} file(s) to {Path.GetFileName(projectPath)}.");
+    }
+
     public async ValueTask DisposeAsync()
     {
         this.logQueue.Writer.TryComplete();
@@ -209,9 +246,10 @@ internal sealed class ExtensionServices : IWorkspaceContextProvider, IAsyncDispo
         string? sdkVersion = PackagesDirectoryLocator.SdkVersion(PackagesDirectoryLocator.Detect());
         ExtensionSettings settings = this.Settings.Load();
         NodeGatewayProcess? node = await this.StartNodeGatewayAsync(settings, serverUrl, apiKey, cancellationToken);
-        var created = new McpGateway(this.GatewayHttp, this)
+        var created = new McpGateway(this.GatewayHttp, this, this)
         {
             AllowedTools = ToolSelection.ToSet(settings.AllowedTools),
+            CustomMetadataDirectory = string.IsNullOrWhiteSpace(settings.CustomMetadataDirectory) ? null : settings.CustomMetadataDirectory,
         };
         try
         {

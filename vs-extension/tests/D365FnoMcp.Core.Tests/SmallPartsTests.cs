@@ -150,15 +150,15 @@ public class ToolSelectionTests
     private static readonly ToolInfo[] Hosted = [new("b_tool", "B"), new("a_tool", "A")];
 
     [Fact]
-    public void AvailableAddsTheLocalContextToolAndSorts() =>
+    public void AvailableAddsTheLocalToolsAndSorts() =>
         Assert.Equal(
-            new[] { "a_tool", "b_tool", McpGateway.ContextToolName },
+            new[] { "a_tool", "b_tool", McpGateway.AddToProjectToolName, McpGateway.ContextToolName },
             ToolSelection.Available(Hosted).Select(tool => tool.Name));
 
     [Fact]
     public void AvailableAddsTheLocalIndexStatusWhenCustomModelsAreIndexed() =>
         Assert.Equal(
-            new[] { "a_tool", "b_tool", "local_index_status", McpGateway.ContextToolName },
+            new[] { "a_tool", "b_tool", "local_index_status", McpGateway.AddToProjectToolName, McpGateway.ContextToolName },
             ToolSelection.Available(Hosted, customModelsIndexed: true).Select(tool => tool.Name));
 
     [Fact]

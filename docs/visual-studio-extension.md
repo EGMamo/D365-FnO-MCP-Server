@@ -21,7 +21,7 @@ To enter or replace only the key later, use **Extensions > D365 F&O MCP > Set AP
 tests the key, stores it in Windows Credential Manager and restarts the local gateway with it.
 
 Once the connection test passes, Configure Connection shows the server's tools with a checkbox
-each, plus the local `workspace_get_context`. Only checked tools are offered to Copilot; the
+each, plus the local `workspace_get_context` and `workspace_add_to_project`. Only checked tools are offered to Copilot; the
 gateway also refuses calls to unchecked ones. To change the choice later, use **Extensions > D365
 F&O MCP > Select Tools...**, which re-validates the connection, shows the same list and applies the
 change to the running gateway without a restart. Copilot may keep its earlier tool list until you
@@ -72,7 +72,7 @@ Visual Studio extension gateway
 - Other MCP server entries and inputs in the file are preserved.
 - **Test Connection** checks `/health`, performs MCP `initialize`, and lists hosted tools.
 - The gateway forwards hosted tools, resources and prompts and adds
-  `workspace_get_context`, limited to the tools selected in **Select Tools...** (stored as
+  `workspace_get_context` and `workspace_add_to_project`, limited to the tools selected in **Select Tools...** (stored as
   `AllowedTools` in `%LOCALAPPDATA%\D365FnoMcp\settings.json`; absent means all tools).
 - With a custom models folder set, the paired session goes to the Node hybrid gateway that the
   extension runs, and that gateway holds the session to Azure ([Custom models](#custom-models)).
@@ -93,7 +93,7 @@ Copilot in Visual Studio
         |
         | http://127.0.0.1:<random>/mcp, per-process bearer token
         v
-Visual Studio extension gateway      tool selection, workspace_get_context
+Visual Studio extension gateway      tool selection, workspace_get_context, workspace_add_to_project
         |
         | http://127.0.0.1:<random>, second per-process token
         v
@@ -165,6 +165,31 @@ names, and credentials remain local.
 Authoritative active-project selection, metadata-provider reads and guarded writes require the
 planned in-process F&O bridge. They remain unavailable until the bridge passes the Windows/UDE
 compatibility proof; the gateway does not advertise unsupported write tools.
+
+## Adding generated files to the project
+
+Generators return ready-to-save files, and on this machine each comes with a `target.path` under
+the custom models folder ([Generated files](hybrid-gateway.md#generated-files)). The agent saves the
+file with its own editing tools, then calls `workspace_add_to_project`:
+
+```json
+{ "paths": ["C:\\CustomMetadata\\ContosoPkg\\Contoso Model\\AxClass\\ContosoInvoiceHelper.xml"], "project": "ContosoProject" }
+```
+
+`project` is needed only when the solution holds several `.rnrproj` projects. Before anything
+changes, the extension checks that each file exists, is laid out as
+`<Package>\<Model>\Ax<Type>\<Name>.xml` in the project's model, and, with a custom models folder
+set, lies inside it. It then asks Visual Studio's project system to add the valid files and save the
+project, so Visual Studio never sees an outside edit and does not offer to reload. The extension
+never edits the `.rnrproj` itself. Afterwards it reads the saved project back and reports each file
+as `added`, `alreadyInProject`, `skipped` (with the check that failed) or `notAdded`. `notAdded`
+means the project system accepted the request but the `.rnrproj` does not list the item; add it
+with **Add > Existing Item...** in Solution Explorer. Whether the Finance and Operations project
+type records the item exactly as `AxClass\Name` through this path has not been confirmed in a real
+UDE installation yet; the read-back makes the result honest either way.
+
+The tool changes only the project's item list, never metadata files. Turn it off in **Select
+Tools...** like any other tool; Copilot also asks before it runs a tool unless you allowed it.
 
 ## Write safety contract
 

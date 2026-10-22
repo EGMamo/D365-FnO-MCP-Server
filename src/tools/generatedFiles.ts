@@ -26,7 +26,8 @@ export interface GeneratedFilesPayload {
 
 const SAVE_NOTE =
   'Nothing has been written. Save each file as <custom metadata folder>\\<Package>\\<Model>\\<aotType>\\<name>.xml ' +
-  'and add it to the Finance and Operations project. Where a target is given, use its path and projectItem.';
+  'and add it to the Finance and Operations project. Where a target is given, use its path and projectItem. ' +
+  'In Visual Studio, pass the saved paths to workspace_add_to_project to add them without a project reload.';
 
 const AOT_TYPE = /^Ax[A-Za-z]+$/;
 
