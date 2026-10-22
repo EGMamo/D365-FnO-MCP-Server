@@ -26,6 +26,7 @@ const baseConfig: GatewayConfig = {
   hostedApiKey: HOSTED_KEY,
   customMetadataDir: workspace.customMetadataDir,
   localIndexDbPath: ':memory:',
+  standardIndexDbPath: null,
   port: 3101,
   host: '127.0.0.1',
   token: 'gateway-token-0123456789-abcdefghijklmnopqrstu',
@@ -73,6 +74,7 @@ function fakeRuntime(upstream: FakeUpstream): GatewayRuntime & { opened: (string
     localIndex,
     local,
     catalog: new HostedCatalog(local),
+    layered: null,
     openUpstream(clientSdkVersion) {
       opened.push(clientSdkVersion);
       return upstream as unknown as UpstreamSession;
