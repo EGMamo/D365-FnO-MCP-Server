@@ -436,6 +436,14 @@ export function createHttpApp(createMcpServer: ServerFactory, options: HttpTrans
       res.status(400).json(jsonRpcError(-32700, 'Parse error'));
       return;
     }
+    // Any other client error from the body parser (unsupported charset or
+    // content encoding, aborted upload) keeps its own 4xx status: it is the
+    // caller's fault, so it must not surface as a 500 or page on-call.
+    if (typeof err?.status === 'number' && err.status >= 400 && err.status < 500) {
+      logger.warn('Request body rejected', { type: err.type, status: err.status });
+      res.status(err.status).json(jsonRpcError(-32600, `Invalid Request: ${err.message}`));
+      return;
+    }
     logger.error('Unhandled request error', { message: err?.message });
     res.status(500).json(jsonRpcError(-32603, 'Internal error'));
   });
