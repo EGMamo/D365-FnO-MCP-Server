@@ -50,6 +50,8 @@ const gatewayEnvSchema = z.object({
   D365_LOCAL_INDEX_DB_PATH: z.string().trim().default(''),
   /** The server's main index; the gateway only compares against it. */
   D365_INDEX_DB_PATH: z.string().trim().default(''),
+  /** Optional standard index the custom index is laid over; opened read-only. */
+  D365_GATEWAY_STANDARD_INDEX_DB_PATH: z.string().trim().default(''),
   D365_GATEWAY_PORT: z.string().trim().default(''),
   D365_GATEWAY_TOKEN: z.string().trim().default(''),
   D365_APP_VERSION: z.string().trim().default(''),
@@ -177,6 +179,34 @@ function resolveLocalIndexDbPath(env: GatewayEnv, issue: ReportIssue): string {
   return resolved;
 }
 
+/** The standard index must be an existing file, read-only to the gateway, and never the custom index itself. */
+function resolveStandardIndexDbPath(env: GatewayEnv, localIndexDbPath: string, issue: ReportIssue): string | null {
+  const name = 'D365_GATEWAY_STANDARD_INDEX_DB_PATH';
+  const configured = env.D365_GATEWAY_STANDARD_INDEX_DB_PATH;
+  if (!configured) return null;
+  if (configured === IN_MEMORY_DB) {
+    issue(name, 'must be the file of an index built with the index command, not :memory:');
+    return null;
+  }
+  const resolved = path.resolve(configured);
+  let isFile = false;
+  try {
+    isFile = fs.statSync(resolved).isFile();
+  } catch (err) {
+    issue(name, isMissing(err) ? `file does not exist: ${resolved}` : errorMessage(err));
+    return null;
+  }
+  if (!isFile) {
+    issue(name, `is not a file: ${resolved}`);
+    return null;
+  }
+  if (localIndexDbPath !== IN_MEMORY_DB && canonicalDbPath(resolved) === canonicalDbPath(localIndexDbPath)) {
+    issue(name, 'must differ from D365_LOCAL_INDEX_DB_PATH; the standard index is read-only and the custom index is laid over it');
+    return null;
+  }
+  return resolved;
+}
+
 function parseIntegerSetting(
   env: GatewayEnv,
   name: keyof GatewayEnv,
@@ -238,11 +268,13 @@ export const gatewayConfigSchema = gatewayEnvSchema.transform((env, ctx): Valida
   };
 
   const customMetadataDir = resolveCustomMetadataDir(env, issue);
+  const localIndexDbPath = resolveLocalIndexDbPath(env, issue);
   const settings: ValidatedGatewayEnv = {
     hostedUrl: parseHostedUrl(env.D365_HOSTED_MCP_URL, issue),
     hostedApiKey: resolveHostedApiKey(env, issue),
     customMetadataDir,
-    localIndexDbPath: resolveLocalIndexDbPath(env, issue),
+    localIndexDbPath,
+    standardIndexDbPath: resolveStandardIndexDbPath(env, localIndexDbPath, issue),
     port: parseIntegerSetting(env, 'D365_GATEWAY_PORT', { min: 1, max: 65_535, fallback: DEFAULT_PORT }, issue),
     host: '127.0.0.1',
     token: parseToken(env.D365_GATEWAY_TOKEN, issue),

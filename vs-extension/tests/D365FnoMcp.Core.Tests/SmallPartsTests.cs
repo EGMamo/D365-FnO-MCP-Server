@@ -156,6 +156,12 @@ public class ToolSelectionTests
             ToolSelection.Available(Hosted).Select(tool => tool.Name));
 
     [Fact]
+    public void AvailableAddsTheLocalIndexStatusWhenCustomModelsAreIndexed() =>
+        Assert.Equal(
+            new[] { "a_tool", "b_tool", "local_index_status", McpGateway.ContextToolName },
+            ToolSelection.Available(Hosted, customModelsIndexed: true).Select(tool => tool.Name));
+
+    [Fact]
     public void SelectingEverythingSavesNullSoNewToolsStayOn()
     {
         IReadOnlyList<ToolInfo> available = ToolSelection.Available(Hosted);
