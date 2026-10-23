@@ -75,6 +75,11 @@ If you are an agent setting this up *for a user*, start with `llms-install.md`.
 - Validate tool inputs + environment with `zod`.
 - Prefer named exports.
 - Keep MCP tool handlers thin; put shared DB queries/index logic in `src/indexer/`.
+- Every tool passes annotations at registration, right before the handler: `READ_ONLY_TOOL` from
+  `src/tools/annotations.ts` for a read-only tool, an explicit literal with all four hints otherwise.
+  `tests/toolAnnotations.test.ts` fails when a registration lacks them. The hybrid gateway lists every
+  local tool as read-only (`asTool` in `src/gateway/server.ts`), so a tool that is not read-only must
+  not be registered in `src/gateway/localTools.ts`.
 - Do not invent AOT object names: always resolve against the index and report what was
   unresolved.
 - Write tools are **off by default**; do not enable `D365_ENABLE_WRITE_TOOLS=1` unless explicitly

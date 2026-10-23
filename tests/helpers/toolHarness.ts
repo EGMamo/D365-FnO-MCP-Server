@@ -21,23 +21,13 @@ export interface ToolResult {
 
 type Handler = (args: Record<string, unknown>) => Promise<ToolResult>;
 
-/** Minimal McpServer stand-in that captures registered tool handlers. */
-export function collectGeneratorTools(db: Database): Map<string, Handler> {
-  const handlers = new Map<string, Handler>();
-  const fakeServer = {
-    tool: (name: string, _desc: string, _schema: unknown, handler: Handler) => {
-      handlers.set(name, handler);
-    },
-  } as unknown as McpServer;
-
-  registerGeneratorTools(fakeServer, db);
-  return handlers;
-}
-
-/** Same stand-in, but for the metadata tool registrations. */
-export function collectMetadataTools(db: Database, options: MetadataToolOptions = {}): Map<string, Handler> {
-  const handlers = new Map<string, Handler>();
-  const fakeServer = {
+/**
+ * Minimal McpServer stand-in that records each registered tool's handler under its name. The
+ * handler is the last argument because the description, input shape and annotations in between are
+ * all optional.
+ */
+export function fakeToolServer(handlers: Map<string, Handler>): McpServer {
+  return {
     tool: (...args: unknown[]) => {
       const name = args[0];
       const handler = args.at(-1);
@@ -47,21 +37,26 @@ export function collectMetadataTools(db: Database, options: MetadataToolOptions 
       handlers.set(name, handler as Handler);
     },
   } as unknown as McpServer;
+}
 
-  registerMetadataTools(fakeServer, db, options);
+/** The stand-in applied to the generator tool registrations. */
+export function collectGeneratorTools(db: Database): Map<string, Handler> {
+  const handlers = new Map<string, Handler>();
+  registerGeneratorTools(fakeToolServer(handlers), db);
+  return handlers;
+}
+
+/** Same stand-in, but for the metadata tool registrations. */
+export function collectMetadataTools(db: Database, options: MetadataToolOptions = {}): Map<string, Handler> {
+  const handlers = new Map<string, Handler>();
+  registerMetadataTools(fakeToolServer(handlers), db, options);
   return handlers;
 }
 
 /** Same stand-in, but for the labels tool registrations. */
 export function collectLabelsTools(db: Database): Map<string, Handler> {
   const handlers = new Map<string, Handler>();
-  const fakeServer = {
-    tool: (name: string, _desc: string, _schema: unknown, handler: Handler) => {
-      handlers.set(name, handler);
-    },
-  } as unknown as McpServer;
-
-  registerLabelsTools(fakeServer, db);
+  registerLabelsTools(fakeToolServer(handlers), db);
   return handlers;
 }
 

@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { SQLInputValue } from 'node:sqlite';
 import { z } from 'zod';
 import type { Database } from '../indexer/db.js';
+import { READ_ONLY_TOOL } from './annotations.js';
 import { fail, ok, type ToolResult } from './generators.js';
 
 const NO_DOCS =
@@ -161,6 +162,7 @@ export function registerDocsTools(server: McpServer, db: Database): void {
       source: z.string().optional().describe('Only this imported source (the label given to index-docs).'),
       limit: z.number().int().min(1).max(50).default(10),
     },
+    READ_ONLY_TOOL,
     async (args) => searchDocs(db, args)
   );
 
@@ -173,6 +175,7 @@ export function registerDocsTools(server: McpServer, db: Database): void {
       fromSection: z.number().int().min(0).optional().describe('Continue a long page from this section.'),
       maxChars: z.number().int().min(1000).max(50_000).default(12_000),
     },
+    READ_ONLY_TOOL,
     async (args) => getDocPage(db, args)
   );
 }

@@ -2,7 +2,6 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { Database } from '../src/indexer/db.js';
 import { openDb } from '../src/indexer/db.js';
 import { buildIndex } from '../src/indexer/buildIndex.js';
@@ -12,7 +11,7 @@ import { findFieldAccess } from '../src/xpp/fieldAccess.js';
 import { parseBpLog, parseBpPath, modelFromFileName, publishBpFindings } from '../src/indexer/bpFindings.js';
 import { registerCodeQualityTools } from '../src/tools/codeQuality.js';
 import { indexBpCommand } from '../src/cli/index-bp-command.js';
-import type { ToolResult } from './helpers/toolHarness.js';
+import { fakeToolServer, type ToolResult } from './helpers/toolHarness.js';
 
 type Handler = (args: Record<string, unknown>) => Promise<ToolResult>;
 
@@ -218,8 +217,7 @@ describe('code quality tools', () => {
     }));
     db = openDb(path.join(dir, 'idx.db'));
     await buildIndex(db, root, true);
-    const server = { tool: (name: string, _d: string, _s: unknown, h: Handler) => handlers.set(name, h) } as unknown as McpServer;
-    registerCodeQualityTools(server, db);
+    registerCodeQualityTools(fakeToolServer(handlers), db);
   });
   afterAll(() => {
     db.close();

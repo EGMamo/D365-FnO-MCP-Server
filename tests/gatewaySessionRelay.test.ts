@@ -282,3 +282,34 @@ describe('gateway runtime connections', () => {
     expect(runtime.hosted()).toEqual({ reachable: true, lastError: null });
   });
 });
+
+describe('gateway tool annotations', () => {
+  // Spelled out here, not imported, so a change to the shared constant has to change this test too.
+  const readOnly = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
+
+  it('lists every local tool as read-only while the hosted server cannot be reached', async () => {
+    const upstream = fakeUpstream();
+    upstream.listTools.mockRejectedValue(new UpstreamUnavailableError('The hosted MCP server at hosted.example is unreachable (ECONNREFUSED).'));
+    const client = await connect(fakeRuntime(upstream));
+
+    const { tools } = await client.listTools();
+    expect(tools.map(({ name }) => name)).toContain('local_index_status');
+    for (const tool of tools) expect(tool.annotations, tool.name).toEqual(readOnly);
+  });
+
+  it('marks the gateway-only tool read-only and passes hosted tools through exactly as received', async () => {
+    const upstream = fakeUpstream();
+    const hostedAnnotations = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false };
+    upstream.listTools.mockResolvedValue([
+      { name: 'hosted_writer', description: 'h', inputSchema: { type: 'object' as const }, annotations: hostedAnnotations },
+      { name: 'hosted_plain', description: 'p', inputSchema: { type: 'object' as const } },
+    ]);
+    const client = await connect(fakeRuntime(upstream));
+
+    const { tools } = await client.listTools();
+    const byName = new Map(tools.map((tool) => [tool.name, tool]));
+    expect(byName.get('local_index_status')?.annotations).toEqual(readOnly);
+    expect(byName.get('hosted_writer')?.annotations).toEqual(hostedAnnotations);
+    expect(byName.get('hosted_plain')?.annotations).toBeUndefined();
+  });
+});

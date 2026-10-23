@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 import { z } from 'zod';
 import { stripFrontMatter } from '../knowledge/topics.js';
 import type { KnowledgeFilter, KnowledgeSession } from '../knowledge/filter.js';
+import { READ_ONLY_TOOL } from './annotations.js';
 
 const KB_DIR_NAME = 'd365-fno-assistant-knowledge';
 const RESOURCE_SUBDIR = 'resources';
@@ -213,7 +214,7 @@ export function registerTaskGuidanceTool(
             'The knowledge base matches English text only, so translate a request written in another language first.'
         ),
     },
-    { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    READ_ONLY_TOOL,
     async ({ task }) => {
       const filter = currentFilter();
       if (!filter) {

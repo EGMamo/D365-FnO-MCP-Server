@@ -4,6 +4,7 @@ import { discoverVisualStudioWorkspace, selectVisualStudioProject } from '../wor
 import { resolveModelTarget } from '../workspace/models.js';
 import { metadataProvenance, workspaceCapabilities } from '../workspace/capabilities.js';
 import { errorMessage } from '../workspace/safety.js';
+import { READ_ONLY_TOOL } from './annotations.js';
 
 export interface WorkspaceToolOptions {
   workspaceDir: string;
@@ -24,6 +25,7 @@ export function registerWorkspaceTools(server: McpServer, options: WorkspaceTool
     'get_visual_studio_workspace',
     'Read-only server-configured .sln/.slnx project membership, literal model identity and capabilities. No live IDE/unsaved state, MSBuild evaluation or compiler execution.',
     { projectName: z.string().optional(), solutionPath: z.string().optional() },
+    READ_ONLY_TOOL,
     async ({ projectName, solutionPath }) => {
       const provenance = {
         workspace: { configuredPath: options.workspaceDir || null, source: 'D365_VISUAL_STUDIO_WORKSPACE_DIR' },

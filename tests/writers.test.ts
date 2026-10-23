@@ -2,11 +2,10 @@ import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll, vi } 
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Database } from '../src/indexer/db.js';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { registerWriterTools, type WriterOptions } from '../src/tools/writers.js';
 import { parseRnrProject } from '../src/workspace/visualStudio.js';
 import { literalText, parseXml } from '../src/workspace/xml.js';
-import { seedDb, type ToolResult } from './helpers/toolHarness.js';
+import { fakeToolServer, seedDb, type ToolResult } from './helpers/toolHarness.js';
 import { descriptorXml, projectXml, slnXml, treeSnapshot, workspaceFixture } from './workspaceFixtures.js';
 
 type Handler = (args: Record<string, unknown>) => Promise<ToolResult>;
@@ -16,10 +15,7 @@ let options: WriterOptions;
 
 function tools(settings = options): Map<string, Handler> {
   const handlers = new Map<string, Handler>();
-  const server = {
-    tool: (name: string, _description: string, _schema: unknown, handler: Handler) => handlers.set(name, handler),
-  } as unknown as McpServer;
-  registerWriterTools(server, db, settings);
+  registerWriterTools(fakeToolServer(handlers), db, settings);
   return handlers;
 }
 

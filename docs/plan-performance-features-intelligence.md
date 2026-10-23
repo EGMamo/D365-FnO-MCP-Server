@@ -6,9 +6,10 @@ commit `33ff457`.
 
 Execution evidence and remaining production gates: [production-readiness.md](production-readiness.md).
 The C1.1 casing fixes, shared object-row lookup, and corresponding case-insensitive query indexes
-are implemented, including security traversal and read-only snapshot regressions. A2 remains
-partial; the benchmark, other optimizations, and subsequent feature phases remain open. The
-baseline below records the original assessment and is not a claim that all findings still apply.
+are implemented, including security traversal and read-only snapshot regressions. B5.1 (tool
+annotations) is implemented. A2 remains partial; the benchmark, other optimizations, and subsequent
+feature phases remain open. The baseline below records the original assessment and is not a claim
+that all findings still apply.
 
 ## 0. Baseline (what the code does today)
 
@@ -49,8 +50,8 @@ Performance
 
 Features and intelligence
 
-- 54 tools, one resource template (`d365kb://{slug}`), one prompt. No tool annotations
-  (`readOnlyHint` etc.), no `outputSchema`, no sampling, no elicitation.
+- 54 tools, one resource template (`d365kb://{slug}`), one prompt. Every tool carries annotations
+  (`readOnlyHint` etc., B5.1); no `outputSchema`, no sampling, no elicitation.
 - Name resolution is exact, then `COLLATE NOCASE`; there is no fuzzy or "did you mean" path
   (`db.ts:1141-1145`). Casing is inconsistent: `get_table_schema`/`get_class_hierarchy` pass the
   caller's casing to the case-sensitive `getXrefsTo` (`src/tools/metadata.ts:75,87`);
@@ -242,12 +243,18 @@ Priority order, each with a `capabilityCoverage.ts` entry flipped to `complete`:
 
 ### B5. MCP protocol surface
 
-1. Tool annotations on all tools: `readOnlyHint: true` everywhere except the two writers, which get
-   `destructiveHint: false, idempotentHint: true` (preview/apply). Clients use these for
-   auto-approval, so this is a UX win at no cost.
+1. Implemented: tool annotations on all tools. `READ_ONLY_TOOL` (`src/tools/annotations.ts`) marks
+   every tool read-only except the two writers: `write_table_extension` (preview) is not read-only
+   and not idempotent, `apply_table_extension_change` is not read-only, destructive and not
+   idempotent. `tests/toolAnnotations.test.ts` fails when a tool is registered without them. They
+   only describe the tool; whether a client skips its confirmation for read-only tools is its call.
 2. `outputSchema` (zod) for the 20 most-used tools; structured content alongside text.
+   Deferred: the knowledge filter, the file targets and the gateway merge append or rebuild text
+   items, which a client that sends only `structuredContent` to the model would drop. `outputSchema`
+   also needs `registerTool`, which the `server.tool` wrappers do not intercept.
 3. Resources: `d365aot://{type}/{name}` serving element XML, and `d365aot://{type}/{name}/source`
-   for method source (B2), with completion over the index.
+   for method source (B2), with completion over the index. The gateway needs routing and a privacy
+   rule for `d365aot://` first: it forwards `resources/read` to the hosted server unchecked today.
 4. Prompts for the four agent workflows (performance review, security review, release planning,
    extension design) so clients without custom-agent support get them.
 5. Elicitation (capability-gated): when the client supports it, `apply_table_extension_change`

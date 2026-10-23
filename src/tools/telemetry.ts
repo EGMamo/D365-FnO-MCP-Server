@@ -4,6 +4,7 @@ import { z } from 'zod';
 import type { Database } from '../indexer/db.js';
 import * as dbUtils from '../indexer/db.js';
 import { parseAxClassSources, type AxClassSources } from '../indexer/parser.js';
+import { READ_ONLY_TOOL } from './annotations.js';
 import { fail, ok, type ToolResult } from './generators.js';
 
 /*
@@ -616,6 +617,7 @@ export function registerTelemetryTools(server: McpServer, db: Database) {
       className: z.string().optional().describe('Batch/X++ class name; checked against the index.'),
       computer: z.string().optional().describe('Store machine name (Commerce scenarios).'),
     },
+    READ_ONLY_TOOL,
     async (args) => generateKqlQuery(db, args)
   );
 
@@ -624,6 +626,7 @@ export function registerTelemetryTools(server: McpServer, db: Database) {
     'Analyze an indexed batch class: framework (RunBaseBatch / SysOperation controller, service or contract), inheritance, batch capability, ' +
       'BatchRetryable status, pack/unpack versioning, idempotency and set-based hints, plus ready KQL queries for its batch telemetry.',
     { className: z.string().min(1) },
+    READ_ONLY_TOOL,
     async ({ className }) => {
       const analysis = await analyzeBatchClass(db, className);
       if (!analysis) return fail(`Class ${className} not found in the index.`);

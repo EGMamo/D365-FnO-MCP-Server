@@ -12,6 +12,7 @@ import {
   validateTableFieldEdts,
 } from '../validation/grounding.js';
 import * as dbUtils from '../indexer/db.js';
+import { READ_ONLY_TOOL } from './annotations.js';
 import { axClassFile, withGeneratedFiles, xppClassText, type XppClassParts } from './generatedFiles.js';
 
 export type ToolResult = {
@@ -261,6 +262,7 @@ export function registerGeneratorTools(server: McpServer, db: Database) {
         })
       ).max(200),
     },
+    READ_ONLY_TOOL,
     async ({ targetClass, extensionName, methods }) => {
       const naming = validateNaming(extensionName);
       if (!naming.ok) return fail(`Invalid extension name: ${naming.error}`);
@@ -419,6 +421,7 @@ export function registerGeneratorTools(server: McpServer, db: Database) {
         })
         .optional(),
     },
+    READ_ONLY_TOOL,
     async ({ targetTable, extensionName, fields, indexes, properties }) => {
       const result = generateTableExtensionXml(db, { targetTable, extensionName, fields, indexes, properties });
       if (result.isError) return result;
@@ -441,6 +444,7 @@ export function registerGeneratorTools(server: McpServer, db: Database) {
       event: z.enum(DATA_EVENTS).optional().describe('Required when kind is "data".'),
       methodName: z.string().optional().describe('Required when kind is "pre" or "post".'),
     },
+    READ_ONLY_TOOL,
     async ({ handlerClass, kind, targetType, targetName, event, methodName }) => {
       const naming = validateNaming(handlerClass);
       if (!naming.ok) return fail(`Invalid handler class name: ${naming.error}`);
@@ -508,6 +512,7 @@ export function registerGeneratorTools(server: McpServer, db: Database) {
       event: z.string(),
       elementName: z.string().optional().describe('Data source or control name; required unless scope is "form".'),
     },
+    READ_ONLY_TOOL,
     async ({ handlerClass, formName, scope, event, elementName }) => {
       const naming = validateNaming(handlerClass);
       if (!naming.ok) return fail(`Invalid handler class name: ${naming.error}`);
@@ -562,6 +567,7 @@ export function registerGeneratorTools(server: McpServer, db: Database) {
     'create_class_extension',
     'Create X++ class extension boilerplate, grounded against the index',
     { targetClass: z.string(), extensionName: z.string() },
+    READ_ONLY_TOOL,
     async ({ targetClass, extensionName }) => {
       const naming = validateNaming(extensionName);
       if (!naming.ok) return fail(`Invalid extension name: ${naming.error}`);
@@ -593,6 +599,7 @@ export function registerGeneratorTools(server: McpServer, db: Database) {
       isAbstract: z.boolean().optional(),
       description: z.string().optional(),
     },
+    READ_ONLY_TOOL,
     async ({ className, extends: ext, implements: impl, isAbstract, description }) => {
       const naming = validateNaming(className);
       if (!naming.ok) return fail(`Invalid class name: ${naming.error}`);
@@ -623,6 +630,7 @@ export function registerGeneratorTools(server: McpServer, db: Database) {
     'create_runbase_batch',
     'Create RunBaseBatch framework class',
     { className: z.string(), description: z.string(), menuItemName: z.string().optional() },
+    READ_ONLY_TOOL,
     async ({ className, description, menuItemName }) => {
       const naming = validateNaming(className);
       if (!naming.ok) return fail(`Invalid class name: ${naming.error}`);
@@ -677,6 +685,7 @@ export function registerGeneratorTools(server: McpServer, db: Database) {
     'create_sys_operation',
     'Create SysOperation framework classes',
     { baseName: z.string(), description: z.string(), menuItemName: z.string().optional() },
+    READ_ONLY_TOOL,
     async ({ baseName, description, menuItemName }) => {
       const naming = validateNaming(baseName);
       if (!naming.ok) return fail(`Invalid base name: ${naming.error}`);

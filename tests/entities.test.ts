@@ -2,7 +2,6 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { Database } from '../src/indexer/db.js';
 import { openDb } from '../src/indexer/db.js';
 import { buildIndex } from '../src/indexer/buildIndex.js';
@@ -15,7 +14,7 @@ import {
   parseAxTableKeys,
 } from '../src/indexer/parser.js';
 import { chooseNaturalKey, registerEntityTools } from '../src/tools/entities.js';
-import type { ToolResult } from './helpers/toolHarness.js';
+import { fakeToolServer, type ToolResult } from './helpers/toolHarness.js';
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const fixture = (name: string) => fs.readFileSync(path.join(testDir, 'fixtures', name), 'utf-8');
@@ -140,10 +139,7 @@ describe('entity and security generator tools', () => {
     ]);
     db = openDb(path.join(root, 'index.db'));
     await buildIndex(db, root, true);
-    const fakeServer = {
-      tool: (name: string, _d: string, _s: unknown, handler: Handler) => tools.set(name, handler),
-    } as unknown as McpServer;
-    registerEntityTools(fakeServer, db);
+    registerEntityTools(fakeToolServer(tools), db);
   });
 
   afterAll(() => {

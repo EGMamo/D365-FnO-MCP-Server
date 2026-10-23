@@ -2,11 +2,10 @@ import { describe, it, expect } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { openDb, upsertObject } from '../src/indexer/db.js';
 import { convertSecurityExport, parseSecurityExport } from '../src/security/converter.js';
 import { registerSecurityTools } from '../src/tools/security.js';
-import type { ToolResult } from './helpers/toolHarness.js';
+import { fakeToolServer, type ToolResult } from './helpers/toolHarness.js';
 
 const EXPORT = `<?xml version="1.0" encoding="utf-8"?>
 <SecurityDatabaseCustomizations xmlns:i="http://www.w3.org/2001/XMLSchema-instance">
@@ -99,7 +98,7 @@ describe('security converter', () => {
     upsertObject(db, { type: 'SecurityDuty', name: 'StdDuty', model: 'M', package: 'P', file_path: 'x', raw_xml: null, file_mtime: 0 } as never);
     upsertObject(db, { type: 'SecurityPrivilege', name: 'NewPriv', model: 'M', package: 'P', file_path: 'y', raw_xml: null, file_mtime: 0 } as never);
     const handlers = new Map<string, (a: Record<string, unknown>) => Promise<ToolResult>>();
-    registerSecurityTools({ tool: (n: string, _d: string, _s: unknown, h: never) => handlers.set(n, h) } as unknown as McpServer, db);
+    registerSecurityTools(fakeToolServer(handlers), db);
     const tool = handlers.get('convert_security_customizations')!;
     const res = await tool({ xml: EXPORT, renames: { MyPriv: 'NewPriv' }, includeDependencies: true, maxFiles: 2 });
     const json = JSON.parse(res.content[0].text);

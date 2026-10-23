@@ -7,8 +7,9 @@ type ToolCallback = (...args: unknown[]) => CallToolResult | Promise<CallToolRes
 
 /**
  * Runs `register` with `server.tool` patched so that every tool it registers passes its result
- * through the knowledge filter. Tools registered outside `register` (generators, writers) are
- * untouched. A filter failure never fails the call: the unfiltered result is returned.
+ * through the knowledge filter. Tools registered outside `register` (the writers, the workspace
+ * tool and get_task_guidance) are untouched. A filter failure never fails the call: the unfiltered
+ * result is returned.
  */
 export function registerWithKnowledgeFilter(
   server: McpServer,

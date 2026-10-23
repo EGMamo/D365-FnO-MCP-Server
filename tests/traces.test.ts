@@ -3,7 +3,6 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { Database } from '../src/indexer/db.js';
 import { openDb } from '../src/indexer/db.js';
 import { buildIndex } from '../src/indexer/buildIndex.js';
@@ -14,7 +13,7 @@ import {
 import { registerTraceTools, resolveTraceMethod } from '../src/tools/traces.js';
 import { defaultTraceSource, indexTraceCommand } from '../src/cli/index-trace-command.js';
 import { snapshotIndex } from '../src/indexer/indexSnapshot.js';
-import type { ToolResult } from './helpers/toolHarness.js';
+import { fakeToolServer, type ToolResult } from './helpers/toolHarness.js';
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 type Handler = (args: Record<string, unknown>) => Promise<ToolResult>;
@@ -137,10 +136,7 @@ describe('trace tools', () => {
     dbPath = path.join(dir, 'idx.db');
     db = openDb(dbPath);
     await buildIndex(db, root, true);
-    const server = {
-      tool: (name: string, _d: string, _s: unknown, handler: Handler) => handlers.set(name, handler),
-    } as unknown as McpServer;
-    registerTraceTools(server, db);
+    registerTraceTools(fakeToolServer(handlers), db);
   });
   afterAll(() => {
     db.close();

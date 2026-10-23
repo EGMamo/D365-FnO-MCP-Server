@@ -29,6 +29,7 @@ import {
   layerableToolNames,
 } from './router.js';
 import { HOSTED_RETRY_MS, UpstreamSession, UpstreamUnavailableError, compareVersions } from './upstream.js';
+import { READ_ONLY_TOOL } from '../tools/annotations.js';
 import { addFileTargets } from '../workspace/fileTargets.js';
 import type { GatewayConfig, LocalIndex, LocalToolDefinition, LocalTools, RouteContext, UpstreamPort } from './types.js';
 
@@ -74,14 +75,6 @@ const TOKEN_INPUT_ID = 'd365-gateway-token';
 
 /** Name agents and the prebuilt agent definitions expect for the D365 server entry. */
 const CLIENT_ENTRY_NAME = 'd365-fno';
-
-/** Every local tool is a read-only lookup or a text draft; the writers are not registered in the gateway. */
-const READ_ONLY_HINTS: NonNullable<Tool['annotations']> = {
-  readOnlyHint: true,
-  destructiveHint: false,
-  idempotentHint: true,
-  openWorldHint: false,
-};
 
 const HYBRID_NOTE = [
   'This server is a local gateway in front of the hosted D365 Finance and Operations MCP server.',
@@ -353,7 +346,8 @@ function asTool(definition: LocalToolDefinition, unavailable: boolean): Tool {
     name: definition.name,
     description: unavailable ? `${UNAVAILABLE_PREFIX}${definition.description}` : definition.description,
     inputSchema: definition.inputSchema,
-    annotations: READ_ONLY_HINTS,
+    // Every local tool is a read-only lookup or a text draft; the writers are not registered in the gateway.
+    annotations: READ_ONLY_TOOL,
   };
 }
 

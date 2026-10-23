@@ -9,6 +9,7 @@ import {
 } from '../xpp/bestPractices.js';
 import { FIELD_ACCESS_ATTRIBUTION, findFieldAccess, type FieldAccess } from '../xpp/fieldAccess.js';
 import { extractMethodSources, maskXpp, type XppMethodSource } from '../xpp/scanner.js';
+import { READ_ONLY_TOOL } from './annotations.js';
 import { fail, ok, type ToolResult } from './generators.js';
 
 /** AOT element types that carry X++ method source. */
@@ -264,6 +265,7 @@ export function registerCodeQualityTools(server: McpServer, db: Database): void 
       minSeverity: z.enum(['Error', 'Warning', 'Info']).optional().describe('Lowest severity to report (default Info).'),
       methods: z.array(z.string()).max(50).optional().describe('Only these methods.'),
     },
+    READ_ONLY_TOOL,
     async (args) => checkBestPractices(db, args)
   );
 
@@ -276,7 +278,7 @@ export function registerCodeQualityTools(server: McpServer, db: Database): void 
       objectType: z.enum(CODE_TYPES).optional().describe('Narrow to one element type when names collide.'),
       maxChars: z.number().int().min(500).max(500_000).optional().describe('Maximum source characters to return.'),
     },
-    { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    READ_ONLY_TOOL,
     async (args) => getMethodSource(db, args)
   );
 
@@ -292,6 +294,7 @@ export function registerCodeQualityTools(server: McpServer, db: Database): void 
       objectType: z.enum(CODE_TYPES).optional().describe('Only scan this element type.'),
       maxObjects: z.number().int().min(1).max(2000).optional().describe('Cap on objects scanned (default 200).'),
     },
+    READ_ONLY_TOOL,
     async (args) => fieldAccessReport(db, args)
   );
 
@@ -307,6 +310,7 @@ export function registerCodeQualityTools(server: McpServer, db: Database): void 
       model: z.string().optional(),
       limit: z.number().int().min(1).max(500).optional(),
     },
+    READ_ONLY_TOOL,
     async (args) => {
       const status = bpSnapshotStatus(db);
       if (status.status !== 'imported') return ok(JSON.stringify({ status }));

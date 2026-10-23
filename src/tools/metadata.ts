@@ -6,6 +6,7 @@ import { getIndexStats } from '../indexer/buildIndex.js';
 import { loadObjectXml, sourceFileReadsAllowed } from '../indexer/sourceFiles.js';
 import { findUsageRefs, getUsageSnapshotStatus } from '../indexer/xrefUsage.js';
 import { capLists, DEFAULT_MAX_ITEMS } from './bounds.js';
+import { READ_ONLY_TOOL } from './annotations.js';
 import { analyzeImpact, explainSearchHits } from './impact.js';
 
 /** Every object type the indexer stores, for tools that accept any indexed type. */
@@ -61,6 +62,7 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
     'get_usage_snapshot_status',
     'Inspect compiler usage import provenance and completeness. Check this before interpreting empty find_usages results as no usages. Static references are not runtime execution counts.',
     {},
+    READ_ONLY_TOOL,
     async () => ({ content: [{ type: 'text' as const, text: JSON.stringify(getUsageSnapshotStatus(db)) }] })
   );
   server.tool(
@@ -89,7 +91,7 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
         .default(false)
         .describe('When true, each result states why it matched (exact, prefix, substring or token) and why it ranks where it does.'),
     },
-    { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    READ_ONLY_TOOL,
     async ({ query, type, limit, explain }) => {
       const results = dbUtils.searchSymbols(db, query, type, limit);
       if (explain) {
@@ -106,6 +108,7 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
     'get_table_schema',
     'Full table details. Each list is capped at maxItems (default 1000); clipped lists are reported under "truncated".',
     { tableName: z.string(), xrefLimit: z.number().int().min(1).max(500).default(100), maxItems: z.number().int().min(10).max(10_000).default(1000).describe('Maximum items returned per list (fields, methods, controls, ...); a clipped list is reported under "truncated".') },
+    READ_ONLY_TOOL,
     async ({ tableName, xrefLimit, maxItems = DEFAULT_MAX_ITEMS }) => {
       const obj = dbUtils.getObjectByName(db, tableName, 'Table');
       if (!obj) return { content: [{ type: 'text', text: dbUtils.notFoundMessage(db, 'Table', tableName, 'Table') }] };
@@ -118,6 +121,7 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
     'get_class_hierarchy',
     'Class inheritance',
     { className: z.string(), childLimit: z.number().int().min(1).max(500).default(100) },
+    READ_ONLY_TOOL,
     async ({ className, childLimit }) => {
       const obj = dbUtils.getObjectByName(db, className, 'Class');
       if (!obj) return { content: [{ type: 'text', text: dbUtils.notFoundMessage(db, 'Class', className, 'Class') }] };
@@ -130,6 +134,7 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
     'get_method_signature',
     'Method details',
     { className: z.string(), methodName: z.string() },
+    READ_ONLY_TOOL,
     async ({ className, methodName }) => {
       const obj = dbUtils.getObjectByName(db, className, 'Class');
       if (!obj) return { content: [{ type: 'text', text: dbUtils.notFoundMessage(db, 'Class', className, 'Class') }] };
@@ -148,6 +153,7 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
       type: z.enum(['Table', 'Class', 'Enum', 'Form', 'Edt']).optional(),
       limit: z.number().int().min(1).max(500).default(100),
     },
+    READ_ONLY_TOOL,
     async ({ name, type, limit }) => {
       let xrefs: dbUtils.Xref[] = [];
       if (type) {
@@ -173,7 +179,7 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
       maxDepth: z.number().int().min(1).max(4).default(2).describe('How many dependency levels to follow (1-4; default 2).'),
       limit: z.number().int().min(1).max(500).default(200).describe('Maximum dependents to return (1-500; default 200).'),
     },
-    { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    READ_ONLY_TOOL,
     async ({ name, type, maxDepth = 2, limit = 200 }) => {
       const result = analyzeImpact(db, name, type, maxDepth, limit);
       if (!result) return { content: [{ type: 'text', text: dbUtils.notFoundMessage(db, `Object (${type})`, name, type) }] };
@@ -190,6 +196,7 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
       method: z.string().optional(),
       limit: z.number().int().min(1).max(500).default(100),
     },
+    READ_ONLY_TOOL,
     async ({ name, type, method, limit }) => {
       const usages = findUsageRefs(db, name, type, method, limit);
       return { content: [{ type: 'text', text: JSON.stringify(usages) }] };
@@ -200,6 +207,7 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
     'get_enum_values',
     'Enum details. The values list is capped at maxItems (default 1000); a clipped list is reported under "truncated".',
     { enumName: z.string(), maxItems: z.number().int().min(10).max(10_000).default(1000).describe('Maximum items returned per list; a clipped list is reported under "truncated".') },
+    READ_ONLY_TOOL,
     async ({ enumName, maxItems = DEFAULT_MAX_ITEMS }) => {
       const obj = dbUtils.getObjectByName(db, enumName, 'Enum');
       if (!obj) return { content: [{ type: 'text', text: dbUtils.notFoundMessage(db, 'Enum', enumName, 'Enum') }] };
@@ -218,6 +226,7 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
     'get_edt_details',
     'Extended Data Type details',
     { edtName: z.string() },
+    READ_ONLY_TOOL,
     async ({ edtName }) => {
       const obj = dbUtils.getObjectByName(db, edtName, 'Edt');
       if (!obj) return { content: [{ type: 'text', text: dbUtils.notFoundMessage(db, 'Edt', edtName, 'Edt') }] };
@@ -238,6 +247,7 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
     'get_form_datasources',
     'Form datasource and control info. Each list is capped at maxItems (default 1000); clipped lists are reported under "truncated".',
     { formName: z.string(), maxItems: z.number().int().min(10).max(10_000).default(1000).describe('Maximum items returned per list (fields, methods, controls, ...); a clipped list is reported under "truncated".') },
+    READ_ONLY_TOOL,
     async ({ formName, maxItems = DEFAULT_MAX_ITEMS }) => {
       const obj = dbUtils.getObjectByName(db, formName, 'Form');
       if (!obj) return { content: [{ type: 'text', text: dbUtils.notFoundMessage(db, 'Form', formName, 'Form') }] };
@@ -257,6 +267,7 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
     'get_query_datasources',
     'Query datasource info. The list is capped at maxItems (default 1000); a clipped list is reported under "truncated".',
     { queryName: z.string(), maxItems: z.number().int().min(10).max(10_000).default(1000).describe('Maximum items returned per list; a clipped list is reported under "truncated".') },
+    READ_ONLY_TOOL,
     async ({ queryName, maxItems = DEFAULT_MAX_ITEMS }) => {
       const obj = dbUtils.getObjectByName(db, queryName, 'Query');
       if (!obj) return { content: [{ type: 'text', text: dbUtils.notFoundMessage(db, 'Query', queryName, 'Query') }] };
@@ -274,6 +285,7 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
     'get_data_entity_details',
     'Data entity fields and datasources. Each list is capped at maxItems (default 1000); clipped lists are reported under "truncated".',
     { entityName: z.string(), maxItems: z.number().int().min(10).max(10_000).default(1000).describe('Maximum items returned per list (fields, methods, controls, ...); a clipped list is reported under "truncated".') },
+    READ_ONLY_TOOL,
     async ({ entityName, maxItems = DEFAULT_MAX_ITEMS }) => {
       const obj = dbUtils.getObjectByName(db, entityName, 'DataEntity');
       if (!obj) return { content: [{ type: 'text', text: dbUtils.notFoundMessage(db, 'DataEntity', entityName, 'DataEntity') }] };
@@ -300,6 +312,7 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
       type: z.enum(INDEXED_OBJECT_TYPES),
       maxChars: z.number().int().min(1000).max(2_000_000).default(100_000).describe('Maximum characters of XML to return.'),
     },
+    READ_ONLY_TOOL,
     async ({ name, type, maxChars = 100_000 }) => {
       const obj = dbUtils.getObjectByName(db, name, type);
       if (!obj) return { content: [{ type: 'text', text: dbUtils.notFoundMessage(db, `Object (${type})`, name, type) }] };
@@ -338,6 +351,7 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
       offset: z.number().int().min(0).default(0),
       limit: z.number().int().min(1).max(500).default(50),
     },
+    READ_ONLY_TOOL,
     async ({ type, package: pkg, offset, limit }) => {
       const results = dbUtils.getAllObjects(db, type, pkg, offset, limit);
       return { content: [{ type: 'text', text: JSON.stringify(results) }] };
@@ -348,6 +362,7 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
     'list_packages',
     'List distinct packages present in the index',
     {},
+    READ_ONLY_TOOL,
     async () => {
       const results = dbUtils.listPackages(db);
       return { content: [{ type: 'text', text: JSON.stringify(results) }] };
@@ -358,6 +373,7 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
     'list_models',
     'List distinct models present in the index',
     {},
+    READ_ONLY_TOOL,
     async () => {
       const results = dbUtils.listModels(db);
       return { content: [{ type: 'text', text: JSON.stringify(results) }] };
@@ -371,6 +387,7 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
       limit: z.number().int().min(1).max(100).default(100),
       maxScan: z.number().int().min(1).max(5000).default(1000),
     },
+    READ_ONLY_TOOL,
     async ({ limit, maxScan }) => {
       if (options.sourceFilesAvailable === false) {
         const report = {
@@ -390,6 +407,7 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
     'get_index_stats',
     'Index status',
     {},
+    READ_ONLY_TOOL,
     async () => {
       const stats = getIndexStats(db);
       return { content: [{ type: 'text', text: JSON.stringify(stats) }] };
