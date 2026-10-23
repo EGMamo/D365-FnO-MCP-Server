@@ -16,6 +16,7 @@ import {
   rolesContainingDuty,
   rolesContainingPrivilegeDirectly,
 } from '../security/model.js';
+import { READ_ONLY_TOOL } from './annotations.js';
 import { withGeneratedFiles } from './generatedFiles.js';
 import {
   convertSecurityExport, SECURITY_CONVERTER_ATTRIBUTION, SECURITY_KIND_TO_AOT,
@@ -59,6 +60,7 @@ export function registerSecurityTools(server: McpServer, db: Database) {
       flatten: z.boolean().default(false),
       maxItems: z.number().int().min(1).max(1000).default(100),
     },
+    READ_ONLY_TOOL,
     async ({ type, name, flatten, maxItems }) => {
       const aotType = SECURITY_TYPE_TO_AOT[type];
       const summary = objectSummary(db, aotType, name);
@@ -133,6 +135,7 @@ export function registerSecurityTools(server: McpServer, db: Database) {
       objectName: z.string(),
       maxPaths: z.number().int().min(1).max(1000).default(100),
     },
+    READ_ONLY_TOOL,
     async ({ objectType, objectName, maxPaths }) => {
       const entryPoints = resolveEntryPoints(db, objectType, objectName);
       if (entryPoints.length === 0) {
@@ -172,6 +175,7 @@ export function registerSecurityTools(server: McpServer, db: Database) {
       roles: z.array(z.string()).max(2000).optional(),
       maxConflicts: z.number().int().min(1).max(2000).default(200),
     },
+    READ_ONLY_TOOL,
     async ({ rules, roles, maxConflicts }) => {
       const roleNames = roles && roles.length > 0 ? roles : listRoleNames(db);
       const unknownRoles = roleNames.filter(
@@ -199,6 +203,7 @@ export function registerSecurityTools(server: McpServer, db: Database) {
       roleB: z.string(),
       maxItems: z.number().int().min(1).max(1000).default(100),
     },
+    READ_ONLY_TOOL,
     async ({ roleA, roleB, maxItems }) => {
       for (const role of [roleA, roleB]) {
         if (!getObjectByName(db, role, 'SecurityRole') && getRoleDefinition(db, role).extensions.length === 0) {
@@ -239,6 +244,7 @@ export function registerSecurityTools(server: McpServer, db: Database) {
       includeDependencies: z.boolean().default(true).describe('With include: also convert exported elements they reference.'),
       maxFiles: z.number().int().min(1).max(200).default(50),
     },
+    READ_ONLY_TOOL,
     async ({ xml, prefix, renames, include, includeDependencies, maxFiles }) => {
       let result;
       try {

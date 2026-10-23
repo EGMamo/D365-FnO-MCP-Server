@@ -583,6 +583,13 @@ public sealed class McpGateway : IAsyncDisposable
             },
             ["required"] = new JsonArray("d365SdkVersion", "solution", "project", "model"),
         },
+        ["annotations"] = new JsonObject
+        {
+            ["readOnlyHint"] = true,
+            ["destructiveHint"] = false,
+            ["idempotentHint"] = true,
+            ["openWorldHint"] = false,
+        },
     };
 
     private static JsonObject AddToProjectTool() => new()

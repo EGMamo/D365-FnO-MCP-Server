@@ -3,6 +3,7 @@ import type { SQLInputValue } from 'node:sqlite';
 import { z } from 'zod';
 import type { Database } from '../indexer/db.js';
 import type { ReleasePlan } from '../indexer/releasePlans.js';
+import { READ_ONLY_TOOL } from './annotations.js';
 import { fail, ok, type ToolResult } from './generators.js';
 
 const NO_PLANS =
@@ -289,6 +290,7 @@ export function registerReleasePlanTools(server: McpServer, db: Database): void 
       planId: z.string().optional().describe('Release Plan ID for full details.'),
       limit: z.number().int().min(1).max(100).default(20),
     },
+    READ_ONLY_TOOL,
     async (args) => searchReleasePlans(db, args)
   );
 
@@ -303,6 +305,7 @@ export function registerReleasePlanTools(server: McpServer, db: Database): void 
       types: z.array(z.string()).max(20).optional().describe('AOT object types to consider (default: tables, classes, forms, data entities, queries, enums, EDTs, menu items, privileges).'),
       limit: z.number().int().min(1).max(200).default(30),
     },
+    READ_ONLY_TOOL,
     async (args) => checkFeatureImpact(db, args)
   );
 }

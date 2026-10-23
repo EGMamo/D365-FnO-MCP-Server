@@ -74,6 +74,10 @@ Visual Studio extension gateway
 - The gateway forwards hosted tools, resources and prompts and adds
   `workspace_get_context`, `workspace_add_to_project` and `workspace_build_project`, limited to the tools selected in **Select Tools...** (stored as
   `AllowedTools` in `%LOCALAPPDATA%\D365FnoMcp\settings.json`; absent means all tools).
+- The three local tools carry MCP annotations. `workspace_get_context` is read-only;
+  `workspace_add_to_project` and `workspace_build_project` are not read-only, and a build follows the
+  project's own build settings. The annotations only describe the tools; the client decides whether
+  to act on them.
 - With a custom models folder set, the paired session goes to the Node hybrid gateway that the
   extension runs, and that gateway holds the session to Azure ([Custom models](#custom-models)).
 

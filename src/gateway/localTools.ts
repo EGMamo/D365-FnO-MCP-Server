@@ -1,7 +1,8 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import type { CallToolResult, ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import type { Database } from '../indexer/db.js';
+import { READ_ONLY_TOOL } from '../tools/annotations.js';
 import { registerCodeQualityTools } from '../tools/codeQuality.js';
 import { registerEntityTools } from '../tools/entities.js';
 import { registerGeneratorTools } from '../tools/generators.js';
@@ -44,6 +45,9 @@ function createToolCollector(): { server: McpServer; tools: Map<string, Captured
     const handler = rest.pop();
     if (typeof handler !== 'function') throw new Error(`Tool ${name} has no handler.`);
     const shape = rest.find(isRawShape) ?? null;
+    // The gateway lists every local tool as read-only (asTool in server.ts), so one that says otherwise must not be captured.
+    const annotations = rest.find((item) => item !== shape && typeof item === 'object' && item !== null) as ToolAnnotations | undefined;
+    if (annotations?.readOnlyHint !== true) throw new Error(`Tool ${name} is not declared read-only, so the gateway cannot list it.`);
     tools.set(name, { name, description, shape, schema: z.object(shape ?? {}), handler: handler as ToolHandler });
   };
   return { server: { tool } as unknown as McpServer, tools };
@@ -98,7 +102,7 @@ export function captureLocalTools(db: Database, localIndex: LocalIndex, workspac
   });
 
   let statusExtras: () => Record<string, unknown> = () => ({});
-  server.tool(STATUS_TOOL, STATUS_DESCRIPTION, {}, async () => ({
+  server.tool(STATUS_TOOL, STATUS_DESCRIPTION, {}, READ_ONLY_TOOL, async () => ({
     content: [
       {
         type: 'text' as const,

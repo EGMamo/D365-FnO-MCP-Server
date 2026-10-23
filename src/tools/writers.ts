@@ -152,6 +152,8 @@ export function registerWriterTools(server: McpServer, db: Database, options: Wr
     'write_table_extension',
     'Prepare/preview a grounded table extension. NEVER writes files. Returns a short-lived, session/target-bound change ID for apply_table_extension_change; raw project edits require explicit offline/unloaded acknowledgement.',
     previewSchema,
+    // Only parks a pending change in this session's memory, nothing on disk; every call mints a new id and takes a pending slot.
+    { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     async (args) => {
       try {
         for (const [id, entry] of pending) if (entry.expiresAt <= Date.now()) pending.delete(id);
@@ -196,6 +198,8 @@ export function registerWriterTools(server: McpServer, db: Database, options: Wr
     'apply_table_extension_change',
     'Apply an unexpired change ID from this server session, after checking exact target/project/descriptor bytes. Acknowledge the project is saved and unloaded/closed and other writers/builds are stopped. No live Visual Studio awareness.',
     { changeId: z.string().uuid(), acknowledgeOfflineProject: z.boolean() },
+    // Creates the extension file (exclusively) and replaces the .rnrproj with an edited copy; the old project file is held only in a journal that is deleted once the apply succeeds. The change id is spent on first use, so a retry is rejected rather than repeating the first outcome.
+    { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
     async ({ changeId, acknowledgeOfflineProject }) => {
       const prepared = pending.get(changeId);
       if (!prepared) return result({ state: 'rejected', written: false, error: 'Unknown/consumed change ID for this server session.' }, true);

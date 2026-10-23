@@ -2,7 +2,6 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { Database } from '../src/indexer/db.js';
 import { openDb } from '../src/indexer/db.js';
 import { buildIndex } from '../src/indexer/buildIndex.js';
@@ -10,7 +9,7 @@ import { parseAxClassSources } from '../src/indexer/parser.js';
 import {
   buildKqlQuery, kqlString, KQL_SCENARIO_NAMES, KQL_SCENARIOS, registerTelemetryTools, TELEMETRY_ATTRIBUTION,
 } from '../src/tools/telemetry.js';
-import type { ToolResult } from './helpers/toolHarness.js';
+import { fakeToolServer, type ToolResult } from './helpers/toolHarness.js';
 
 type Handler = (args: Record<string, unknown>) => Promise<ToolResult>;
 
@@ -141,10 +140,7 @@ describe('telemetry tools', () => {
     for (const [name, xml] of Object.entries(CLASSES)) fs.writeFileSync(path.join(classDir, `${name}.xml`), xml);
     db = openDb(path.join(dir, 'idx.db'));
     await buildIndex(db, root, true);
-    const server = {
-      tool: (name: string, _d: string, _s: unknown, handler: Handler) => handlers.set(name, handler),
-    } as unknown as McpServer;
-    registerTelemetryTools(server, db);
+    registerTelemetryTools(fakeToolServer(handlers), db);
   });
   afterAll(() => {
     db.close();

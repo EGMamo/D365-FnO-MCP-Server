@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { openDb, type Database } from '../src/indexer/db.js';
 import {
   cleanDocsMarkdown, crawlSite, extractLinks, htmlToMarkdown, htmlToPage, markdownToPage, parseRobotsTxt, parseSitemap, publishDocs,
@@ -10,7 +9,7 @@ import {
 } from '../src/indexer/docs.js';
 import { indexDocsCommand } from '../src/cli/index-docs-command.js';
 import { docsFtsQuery, registerDocsTools } from '../src/tools/docs.js';
-import type { ToolResult } from './helpers/toolHarness.js';
+import { fakeToolServer, type ToolResult } from './helpers/toolHarness.js';
 
 type Handler = (args: Record<string, unknown>) => Promise<ToolResult>;
 
@@ -25,8 +24,7 @@ function html(title: string, body: string, links: string[] = [], head = ''): str
 
 function tools(db: Database): Map<string, Handler> {
   const handlers = new Map<string, Handler>();
-  const server = { tool: (name: string, ...rest: unknown[]) => handlers.set(name, rest[rest.length - 1] as Handler) };
-  registerDocsTools(server as unknown as McpServer, db);
+  registerDocsTools(fakeToolServer(handlers), db);
   return handlers;
 }
 

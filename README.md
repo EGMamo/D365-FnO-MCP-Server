@@ -606,6 +606,10 @@ Visual Studio's project system, so the project needs no reload
 Write tools (only with `D365_ENABLE_WRITE_TOOLS=1`):
 `write_table_extension`, `apply_table_extension_change`
 
+Annotations: each tool carries MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`,
+`openWorldHint`) describing what it does; the Node server's tools are read-only except the two write tools.
+Whether a client skips its own confirmation for read-only tools is the client's decision, so do not rely on it.
+
 Resources and prompts:
 `d365kb://{slug}` knowledge base topics, and the `d365_pattern_assistant` prompt. Index tool results also carry matching topic notes, and `get_task_guidance` matches a whole request against the knowledge base (see [Knowledge filter](#knowledge-filter)).
 

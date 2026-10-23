@@ -4,6 +4,7 @@ import { z } from 'zod';
 import type { Database } from '../indexer/db.js';
 import { parseAxTableKeys } from '../indexer/parser.js';
 import { parseTraceMethodName, parseTraceTableNames } from '../indexer/traces.js';
+import { READ_ONLY_TOOL } from './annotations.js';
 import { fail, ok, type ToolResult } from './generators.js';
 
 /*
@@ -293,6 +294,7 @@ export function registerTraceTools(server: McpServer, db: Database): void {
     'list_trace_sessions',
     'List imported Trace Parser (AxTrace) captures and their sessions, slowest first, with total/database time and call counts. Start here before the other trace tools.',
     { source: scopeShape.source, limit: z.number().int().min(1).max(500).default(50) },
+    READ_ONLY_TOOL,
     async ({ source, limit }) => listTraceSessions(db, source, limit)
   );
 
@@ -305,6 +307,7 @@ export function registerTraceTools(server: McpServer, db: Database): void {
       maxAvgMs: z.number().positive().default(N_PLUS_ONE_MAX_AVG_MS),
       limit,
     },
+    READ_ONLY_TOOL,
     async (args) => findNPlusOne(db, args)
   );
 
@@ -317,6 +320,7 @@ export function registerTraceTools(server: McpServer, db: Database): void {
       metric: z.enum(['max', 'total']).default('max'),
       limit,
     },
+    READ_ONLY_TOOL,
     async (args) => findSlowSql(db, args)
   );
 
@@ -324,6 +328,7 @@ export function registerTraceTools(server: McpServer, db: Database): void {
     'get_top_methods',
     'Rank X++ methods in imported traces by exclusive (own) time, inclusive time or database time, mapped to indexed AOT objects.',
     { ...scopeShape, orderBy: z.enum(['exclusive', 'inclusive', 'db']).default('exclusive'), limit },
+    READ_ONLY_TOOL,
     async (args) => getTopMethods(db, args)
   );
 
@@ -331,6 +336,7 @@ export function registerTraceTools(server: McpServer, db: Database): void {
     'search_trace',
     'Search imported traces for a method name, table name or SQL fragment (case-insensitive substring).',
     { ...scopeShape, keyword: z.string().min(1), limit },
+    READ_ONLY_TOOL,
     async (args) => searchTrace(db, args)
   );
 }

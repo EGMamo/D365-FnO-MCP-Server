@@ -9,7 +9,7 @@ import { checkGateway, checkVisualStudioIntegration, runChecks, type CheckResult
 import { createHttpApp } from '../src/server/httpTransport.js';
 import { registerWorkspaceTools, type WorkspaceToolOptions } from '../src/tools/workspace.js';
 import { projectXml, treeSnapshot, workspaceFixture } from './workspaceFixtures.js';
-import type { ToolResult } from './helpers/toolHarness.js';
+import { fakeToolServer, type ToolResult } from './helpers/toolHarness.js';
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -22,17 +22,14 @@ afterEach(() => {
 });
 
 function workspaceTool(overrides: Partial<WorkspaceToolOptions> = {}) {
-  let handler: ((input: Record<string, unknown>) => Promise<ToolResult>) | undefined;
-  const server = {
-    tool: (_name: string, _description: string, _schema: unknown, callback: typeof handler) => { handler = callback; },
-  } as unknown as McpServer;
-  registerWorkspaceTools(server, {
+  const handlers = new Map<string, (input: Record<string, unknown>) => Promise<ToolResult>>();
+  registerWorkspaceTools(fakeToolServer(handlers), {
     workspaceDir: fixture.workspaceDir, customMetadataDir: fixture.metadataDir,
     targetProject: '', targetPackage: '', targetModel: '',
     writableModels: ['MyPackage/My Model'], enableWriteTools: true, ...overrides,
   });
   return async (input: Record<string, unknown> = {}) => {
-    const response = await handler!(input);
+    const response = await handlers.get('get_visual_studio_workspace')!(input);
     return { response, data: JSON.parse(response.content[0].text) };
   };
 }

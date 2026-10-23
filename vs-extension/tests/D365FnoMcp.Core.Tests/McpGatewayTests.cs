@@ -42,6 +42,16 @@ public class McpGatewayTests
 
     }
 
+    /// <summary>Only its presence matters: the gateway lists the project tools when it has a project system.</summary>
+    private sealed class Projects : IVisualStudioProjects
+    {
+        public Task<string> FindProjectAsync(string? projectName, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task AddFilesAsync(string projectPath, IReadOnlyList<string> paths, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task BuildAsync(string projectPath, CancellationToken cancellationToken) => throw new NotSupportedException();
+    }
+
     [Fact]
     public async Task AddsLocalContextToInitializeInstructions()
     {
@@ -90,6 +100,41 @@ public class McpGatewayTests
             body["result"]!["tools"]!.AsArray().Select(tool => (string?)tool!["name"]));
         Assert.Equal("upstream-secret", upstream.LastRequest!.Headers.GetValues("X-API-Key").Single());
         Assert.Equal("10.0.2095.13", upstream.LastRequest.Headers.GetValues("X-D365-Client-Sdk-Version").Single());
+    }
+
+    [Fact]
+    public async Task AnnotatesTheThreeLocalTools()
+    {
+        await using var gateway = new McpGateway(new HttpClient(new Upstream()), new ContextProvider(), new Projects());
+        await gateway.StartAsync("https://app.example.net", "upstream-secret", null, CancellationToken.None);
+        using var client = new HttpClient();
+        client.DefaultRequestHeaders.Authorization =
+            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", gateway.BearerToken);
+
+        using HttpResponseMessage response = await client.PostAsync(
+            gateway.Endpoint,
+            new StringContent(
+                """{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}""",
+                Encoding.UTF8,
+                "application/json"));
+        JsonArray tools = JsonNode.Parse(await response.Content.ReadAsStringAsync())!["result"]!["tools"]!.AsArray();
+
+        // Only the context tool leaves the workspace unchanged; adding to and building the project do not.
+        var expectedReadOnly = new Dictionary<string, bool>
+        {
+            [McpGateway.ContextToolName] = true,
+            [McpGateway.AddToProjectToolName] = false,
+            [McpGateway.BuildProjectToolName] = false,
+        };
+        foreach ((string name, bool readOnly) in expectedReadOnly)
+        {
+            JsonNode? annotations = tools.Single(tool => (string?)tool!["name"] == name)!["annotations"];
+            Assert.NotNull(annotations);
+            Assert.Equal(readOnly, (bool?)annotations["readOnlyHint"]);
+            Assert.False((bool?)annotations["destructiveHint"]);
+            Assert.True((bool?)annotations["idempotentHint"]);
+            Assert.False((bool?)annotations["openWorldHint"]);
+        }
     }
 
     [Fact]

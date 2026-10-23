@@ -2,7 +2,6 @@ import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { Database } from '../src/indexer/db.js';
 import { openDb } from '../src/indexer/db.js';
 import { buildIndex } from '../src/indexer/buildIndex.js';
@@ -11,7 +10,7 @@ import {
 } from '../src/indexer/releasePlans.js';
 import { indexReleasePlansCommand } from '../src/cli/index-release-plans-command.js';
 import { registerReleasePlanTools, releaseStatus, suggestImpactTerms } from '../src/tools/releasePlans.js';
-import type { ToolResult } from './helpers/toolHarness.js';
+import { fakeToolServer, type ToolResult } from './helpers/toolHarness.js';
 
 type Handler = (args: Record<string, unknown>) => Promise<ToolResult>;
 
@@ -185,10 +184,7 @@ describe('release plan tools', () => {
     stage(root, 'ContosoExt', 'AxClass', 'ContosoVendInvoiceHelper', axClass('ContosoVendInvoiceHelper', 'class ContosoVendInvoiceHelper\n{\n}'));
     db = openDb(path.join(dir, 'idx.db'));
     await buildIndex(db, root, true);
-    const server = {
-      tool: (name: string, _d: string, _s: unknown, handler: Handler) => handlers.set(name, handler),
-    } as unknown as McpServer;
-    registerReleasePlanTools(server, db);
+    registerReleasePlanTools(fakeToolServer(handlers), db);
   });
   afterAll(() => {
     db.close();

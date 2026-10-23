@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `MAX_SESSIONS_PER_API_KEY` caps how many simultaneous sessions one API key may hold. A key at its
   cap gets HTTP 429 on `initialize`, while other keys can still open sessions. `0` (the default)
   keeps the old behaviour of a single global `MAX_CONCURRENT_SESSIONS` cap.
+- MCP tool annotations: every tool of the Node server, and `workspace_get_context` in the Visual
+  Studio extension, now says what it does to the workspace in `tools/list`. Lookups, searches,
+  analyses and generators, which only read the index or return text drafts, are read-only. The two
+  write tools, off unless `D365_ENABLE_WRITE_TOOLS=1`, are not: `write_table_extension` only holds a
+  pending change in memory and is not idempotent, and `apply_table_extension_change` is destructive
+  and not idempotent. `tests/toolAnnotations.test.ts` fails when a tool is registered without
+  annotations. Whether a client acts on them is the client's decision.
 
 ### Fixed
 

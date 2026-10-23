@@ -2,7 +2,6 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { Database } from '../src/indexer/db.js';
 import { openDb, getMeta, META_KEYS } from '../src/indexer/db.js';
 import { buildIndex, getIndexStats } from '../src/indexer/buildIndex.js';
@@ -14,7 +13,7 @@ import {
 } from '../src/indexer/parser.js';
 import { expandRole, extensionBaseName } from '../src/security/model.js';
 import { registerSecurityTools } from '../src/tools/security.js';
-import { collectMetadataTools, type ToolResult } from './helpers/toolHarness.js';
+import { collectMetadataTools, fakeToolServer, type ToolResult } from './helpers/toolHarness.js';
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const fixturesDir = path.join(testDir, 'fixtures');
@@ -24,10 +23,7 @@ type Handler = (args: Record<string, unknown>) => Promise<ToolResult>;
 
 function collectSecurityTools(db: Database): Map<string, Handler> {
   const handlers = new Map<string, Handler>();
-  const fakeServer = {
-    tool: (name: string, _desc: string, _schema: unknown, handler: Handler) => handlers.set(name, handler),
-  } as unknown as McpServer;
-  registerSecurityTools(fakeServer, db);
+  registerSecurityTools(fakeToolServer(handlers), db);
   return handlers;
 }
 

@@ -6,6 +6,7 @@ import * as dbUtils from '../indexer/db.js';
 import { parseAxDataEntityDetails, parseAxTableKeys, type AxTableIndexDetail, type AxTableKeys } from '../indexer/parser.js';
 import { findSecurityPaths } from '../security/model.js';
 import { resolveLabel, validateNaming } from '../validation/grounding.js';
+import { READ_ONLY_TOOL } from './annotations.js';
 import { fail, ok, okClass, xmlCommentSafe, xmlEscape, type ToolResult } from './generators.js';
 import { withGeneratedFiles, type GeneratedFile } from './generatedFiles.js';
 
@@ -708,6 +709,7 @@ export function registerEntityTools(server: McpServer, db: Database) {
     'check_entity_odata_readiness',
     'Check whether a data entity can be called through OData (/data) by integrations, Power Platform or AI agents: public names, keys, read-only flag, unsupported field types, backing tables and which privileges/roles grant it',
     { entityName: z.string() },
+    READ_ONLY_TOOL,
     async ({ entityName }) => checkEntityODataReadiness(db, entityName)
   );
 
@@ -725,6 +727,7 @@ export function registerEntityTools(server: McpServer, db: Database) {
       entityCategory: z.enum(['Master', 'Reference', 'Document', 'Transaction', 'Parameter']).default('Master'),
       label: z.string().optional(),
     },
+    READ_ONLY_TOOL,
     async (args) => generateDataEntityXml(db, args)
   );
 
@@ -743,6 +746,7 @@ export function registerEntityTools(server: McpServer, db: Database) {
         })
       ).min(1).max(500),
     },
+    READ_ONLY_TOOL,
     async (args) => generateSecurityPrivilegeXml(db, args)
   );
 
@@ -757,6 +761,7 @@ export function registerEntityTools(server: McpServer, db: Database) {
       privilegeName: z.string().optional().describe('Default: <roleName>View'),
       dutyName: z.string().optional().describe('Default: <roleName>Inquire'),
     },
+    READ_ONLY_TOOL,
     async (args) => generateReadOnlyRoleXml(db, args)
   );
 
@@ -772,6 +777,7 @@ export function registerEntityTools(server: McpServer, db: Database) {
       extensionName: z.string().optional().describe('Default: <entityName>_Extension'),
       description: z.string().optional(),
     },
+    READ_ONLY_TOOL,
     async (args) => generateODataActionXpp(db, args)
   );
 }
