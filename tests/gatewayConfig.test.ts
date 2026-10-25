@@ -1,9 +1,18 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { GatewayConfigError, gatewayConfigSchema, loadGatewayConfig } from '../src/gateway/config.js';
+import {
+  GatewayConfigError,
+  gatewayConfigSchema,
+  loadGatewayConfig,
+  validateCustomMetadataDir,
+  validateHostedApiKey,
+  validateHostedUrl,
+  type FieldCheck,
+} from '../src/gateway/config.js';
 import { containsPrivateName } from '../src/gateway/merge.js';
+import { UpstreamSession } from '../src/gateway/upstream.js';
 
 const HOSTED_KEY = 'hosted-secret-key-0123456789-abcdefghijklmnop';
 const TOKEN = 'gateway-token-0123456789-abcdefghijklmnopqrstu';
@@ -491,5 +500,201 @@ describe('gatewayConfigSchema', () => {
 
   it('ignores unrelated environment variables', () => {
     expect(gatewayConfigSchema.safeParse({ ...validEnv(), PATH: '/usr/bin', MCP_PORT: '3000' }).success).toBe(true);
+  });
+});
+
+describe('field checks', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  function writeFile(name: string, content: string): string {
+    const file = path.join(root, name);
+    fs.writeFileSync(file, content);
+    return file;
+  }
+
+  /**
+   * A field checked alone must say what `loadGatewayConfig` says about the same value: the same variable, the same
+   * text, and (when valid) the value the loaded config holds. `env` is otherwise valid, so the field is the only
+   * possible source of a problem.
+   */
+  function expectParity(
+    check: FieldCheck<string>,
+    env: NodeJS.ProcessEnv,
+    field: 'hostedUrl' | 'hostedApiKey' | 'customMetadataDir'
+  ): void {
+    if (check.ok) {
+      expect(loadGatewayConfig(env)[field]).toBe(check.value);
+    } else {
+      expect(problemsOf(env)).toEqual([`${check.variable}: ${check.message}`]);
+    }
+  }
+
+  const urlRows: Array<[label: string, raw: string, valid: boolean]> = [
+    ['empty', '', false],
+    ['blank', '   ', false],
+    ['padded', ' https://H.example.com ', true],
+    ['remote http', 'http://d365.example.com/mcp', false],
+    ['ftp', 'ftp://d365.example.com/mcp', false],
+    ['not a URL', 'nonsense', false],
+    ['credentials in the URL', 'https://user:hunter2-password@d365.example.com/mcp', false],
+    ['a lone slash', '/', false],
+    ['loopback http with a trailing slash', 'http://localhost:3000/', true],
+  ];
+
+  it.each(urlRows)('hosted URL (%s) matches loadGatewayConfig', (_label, raw, valid) => {
+    const check = validateHostedUrl(raw);
+    expect(check.ok).toBe(valid);
+    expectParity(check, validEnv({ D365_HOSTED_MCP_URL: raw }), 'hostedUrl');
+  });
+
+  it('returns the normalised URL the gateway would use', () => {
+    expect(validateHostedUrl(' https://H.example.com ')).toEqual({ ok: true, value: 'https://h.example.com/mcp' });
+    expect(validateHostedUrl('http://localhost:3000/')).toEqual({ ok: true, value: 'http://localhost:3000/mcp' });
+    expect(validateHostedUrl('https://d365.example.com/gateway/mcp')).toEqual({
+      ok: true,
+      value: 'https://d365.example.com/gateway/mcp',
+    });
+  });
+
+  type KeySource = { key?: string; keyFile?: string };
+  const keyRows: Array<[label: string, source: () => KeySource, valid: boolean]> = [
+    ['inline key', () => ({ key: HOSTED_KEY }), true],
+    ['blank inline key', () => ({ key: '   ' }), false],
+    ['no source', () => ({}), false],
+    ['both sources', () => ({ key: HOSTED_KEY, keyFile: writeFile('hosted.key', HOSTED_KEY) }), false],
+    ['key file', () => ({ keyFile: writeFile('hosted.key', `  ${HOSTED_KEY}\r\n`) }), true],
+    ['missing key file', () => ({ keyFile: path.join(root, 'missing.key') }), false],
+    ['empty key file', () => ({ keyFile: writeFile('empty.key', ' \n') }), false],
+    ['two-line key file', () => ({ keyFile: writeFile('two-lines.key', `${HOSTED_KEY}\nsecond-line`) }), false],
+    ['directory as the key file', () => ({ keyFile: customDir }), false],
+    ['key with a tab', () => ({ key: 'abc\tdef-0123456789' }), false],
+  ];
+
+  it.each(keyRows)('hosted API key (%s) matches loadGatewayConfig', (_label, makeSource, valid) => {
+    const source = makeSource();
+    const check = validateHostedApiKey(source);
+    expect(check.ok).toBe(valid);
+    expectParity(
+      check,
+      validEnv({ D365_HOSTED_API_KEY: source.key, D365_HOSTED_API_KEY_FILE: source.keyFile }),
+      'hostedApiKey'
+    );
+  });
+
+  it('returns the key that was read, trimmed, for both sources', () => {
+    expect(validateHostedApiKey({ key: ` ${HOSTED_KEY} ` })).toEqual({ ok: true, value: HOSTED_KEY });
+    expect(validateHostedApiKey({ keyFile: writeFile('hosted.key', `  ${HOSTED_KEY}\r\n`) })).toEqual({
+      ok: true,
+      value: HOSTED_KEY,
+    });
+  });
+
+  const dirRows: Array<[label: string, raw: () => string, valid: boolean]> = [
+    ['an existing directory', () => customDir, true],
+    ['a padded directory', () => `  ${customDir}  `, true],
+    ['a missing directory', () => path.join(root, 'nope'), false],
+    ['a file', () => writeFile('a-file', ''), false],
+    ['blank', () => '   ', false],
+  ];
+
+  it.each(dirRows)('custom metadata dir (%s) matches loadGatewayConfig', (_label, makeRaw, valid) => {
+    const raw = makeRaw();
+    const check = validateCustomMetadataDir(raw);
+    expect(check.ok).toBe(valid);
+    expectParity(check, validEnv({ D365_CUSTOM_METADATA_DIR: raw }), 'customMetadataDir');
+  });
+
+  it('returns the canonical directory', () => {
+    expect(validateCustomMetadataDir(`  ${customDir}  `)).toEqual({ ok: true, value: fs.realpathSync(customDir) });
+  });
+
+  it('never echoes a key pasted into the key file field', () => {
+    const result = validateHostedApiKey({ keyFile: HOSTED_KEY });
+    expect(result.ok).toBe(false);
+    expect(JSON.stringify(result)).not.toContain(HOSTED_KEY);
+  });
+
+  it('never echoes a key read from a file it rejects', () => {
+    const result = validateHostedApiKey({ keyFile: writeFile('two-lines.key', `${HOSTED_KEY}\nsecond-line`) });
+    expect(result.ok).toBe(false);
+    expect(JSON.stringify(result)).not.toContain(HOSTED_KEY);
+    expect(JSON.stringify(result)).not.toContain('second-line');
+  });
+
+  it('never echoes an inline key it rejects, nor credentials in a URL', () => {
+    const inline = validateHostedApiKey({ key: `${HOSTED_KEY} with spaces` });
+    expect(inline.ok).toBe(false);
+    expect(JSON.stringify(inline)).not.toContain(HOSTED_KEY);
+
+    const url = validateHostedUrl('https://user:hunter2-password@d365.example.com/mcp');
+    expect(url.ok).toBe(false);
+    expect(JSON.stringify(url)).not.toContain('hunter2-password');
+  });
+
+  it('judges only what it is given, not the process environment', () => {
+    // setup runs with an old .env already loaded into process.env.
+    vi.stubEnv('D365_HOSTED_MCP_URL', 'https://stale.example.com/mcp');
+    vi.stubEnv('D365_HOSTED_API_KEY', HOSTED_KEY);
+    vi.stubEnv('D365_CUSTOM_METADATA_DIR', customDir);
+    vi.stubEnv('D365_PROJECT_DIR', customDir);
+
+    expect(validateHostedUrl('')).toMatchObject({ ok: false, variable: 'D365_HOSTED_MCP_URL' });
+    expect(validateHostedApiKey({})).toMatchObject({ ok: false, variable: 'D365_HOSTED_API_KEY' });
+    expect(validateCustomMetadataDir('')).toMatchObject({ ok: false, variable: 'D365_CUSTOM_METADATA_DIR' });
+    // An ambient inline key is not "both sources" for a key file checked alone.
+    expect(validateHostedApiKey({ keyFile: writeFile('hosted.key', HOSTED_KEY) })).toEqual({ ok: true, value: HOSTED_KEY });
+  });
+
+  it('writes nothing', () => {
+    validateHostedUrl('https://d365.example.com');
+    validateHostedApiKey({ key: HOSTED_KEY });
+    validateCustomMetadataDir(customDir);
+    expect(fs.readdirSync(root)).toEqual(['custom']);
+  });
+
+  const printable = String.fromCharCode(...Array.from({ length: 0x7e - 0x21 + 1 }, (_, index) => 0x21 + index));
+  const upstreamRows: Array<[label: string, key: string, accepted: boolean]> = [
+    ['plain', 'ok-0123456789', true],
+    ['every printable ASCII character', printable, true],
+    ['a space', 'abc def', false],
+    ['a non-ASCII letter', 'clé', false],
+    ['a tab', 'x\ty', false],
+    ['a line break', 'x\ny', false],
+    ['a non-breaking space', 'x y', false],
+    ['DEL', 'x\u007fy', false],
+  ];
+
+  function upstreamAccepts(apiKey: string): boolean {
+    try {
+      new UpstreamSession({ url: 'https://d365.example.com/mcp', apiKey, timeoutMs: 1000, gatewayVersion: '1.0.0' });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  it.each(upstreamRows)('accepts a key with %s only if the upstream session does', (_label, key, accepted) => {
+    expect(upstreamAccepts(key)).toBe(accepted);
+    expect(validateHostedApiKey({ key }).ok).toBe(accepted);
+  });
+
+  it('applies the same character rule to a key read from a file', () => {
+    expect(upstreamAccepts('clé-0123456789')).toBe(false);
+    const result = validateHostedApiKey({ keyFile: writeFile('hosted.key', 'clé-0123456789\n') });
+    expect(result).toEqual({
+      ok: false,
+      variable: 'D365_HOSTED_API_KEY_FILE',
+      message: 'the key must be printable ASCII without spaces or line breaks',
+    });
+  });
+
+  it('rejects, at load time, a key the connection would refuse', () => {
+    const error = loadError(validEnv({ D365_HOSTED_API_KEY: 'abc def-0123456789' }));
+    expect(error.problems).toEqual([
+      'D365_HOSTED_API_KEY: the key must be printable ASCII without spaces or line breaks',
+    ]);
+    expect(error.message).not.toContain('abc def-0123456789');
   });
 });

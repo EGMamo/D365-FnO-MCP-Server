@@ -5,8 +5,9 @@ import rateLimit from 'express-rate-limit';
 import { createHash, randomUUID, timingSafeEqual } from 'crypto';
 import { createServer, type Server } from 'http';
 import { logger } from '../utils/logger.js';
-import { readDeclaredClientVersion } from '../indexer/appVersion.js';
+import { INDEX_VERSION_HEADER, readDeclaredClientVersion } from '../indexer/appVersion.js';
 import type { ApiKeyEntry } from './apiKeys.js';
+import type { StatusProvider } from './serverStatus.js';
 
 /**
  * What a session needs from its server. `McpServer` and the SDK's low-level
@@ -53,7 +54,8 @@ export interface HttpTransportOptions {
   /**
    * Readiness gate. While it reports not ready, `/health` answers 503 and
    * authenticated requests are refused with 503, so a platform probe routes no
-   * traffic to this replica. Omitted means always ready.
+   * traffic to this replica. Omitted means always ready. `/status`, when there
+   * is one, is the exception: it answers while not ready, saying so.
    */
   readiness?: ReadinessProbe;
   /**
@@ -63,6 +65,12 @@ export interface HttpTransportOptions {
    * loopback listener. Omitted means no Host check.
    */
   allowedHosts?: readonly string[];
+  /**
+   * Tells authenticated callers what this server is serving: mounts `GET /status` and sends the indexed
+   * application version in the `x-d365-index-version` response header. Omitted, neither exists (the gateway
+   * runs this way).
+   */
+  status?: StatusProvider;
 }
 
 export interface ReadinessProbe {
@@ -221,6 +229,38 @@ export function createHttpApp(createMcpServer: ServerFactory, options: HttpTrans
     logger.info('Request', { method: req.method, path: req.path, ip: clientIp(req), apiKey: entry.name });
     next();
   });
+
+  // ── What this server is serving ───────────────────────────────────────────
+  // After authentication, so an unauthenticated caller learns nothing; before the readiness gate, so it answers
+  // while the server is starting. Nothing here may fail a request: the version is only a header.
+  if (options.status) {
+    const status = options.status;
+    app.use((_req: Request, res: Response, next: NextFunction) => {
+      try {
+        const version = isReady() ? status.indexVersion() : null;
+        // The provider normalises the version, so only digits and dots can pass; anything else is left out.
+        if (version !== null && /^[0-9]+(\.[0-9]+){3}$/.test(version)) res.setHeader(INDEX_VERSION_HEADER, version);
+      } catch {
+        // An unknown version is no reason to refuse a request.
+      }
+      next();
+    });
+    app.get('/status', (_req: Request, res: Response) => {
+      try {
+        res.set('Cache-Control', 'no-store').json(
+          status.describe({
+            ready: isReady(),
+            keyName: res.locals.apiKeyName as string,
+            sessions: { active: sessions.size, max: maxConcurrentSessions, maxPerKey: maxSessionsPerApiKey },
+          })
+        );
+      } catch (err) {
+        // Not `message`: the logger's own message field would overwrite it and the reason would be lost.
+        logger.error('Status unavailable', { error: String(err) });
+        res.status(500).json({ error: 'status unavailable' });
+      }
+    });
+  }
 
   // ── Readiness gate ────────────────────────────────────────────────────────
   app.use((_req: Request, res: Response, next: NextFunction) => {

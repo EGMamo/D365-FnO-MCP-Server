@@ -138,11 +138,21 @@ Commands:
       --dir <dir>            Models directory (default models/ at the package root)
   knowledge-check           Validate topic headers and cache topic vectors for the knowledge filter
       --kb-dir <dir>         Override the knowledge base resources directory
-  setup [--non-interactive] Create a .env configuration file
-      --packages-dir <dir>  D365 PackagesLocalDirectory path
-      --api-key <key>       MCP API key (>= 32 chars; generated when omitted)
-      --db-path <path>      SQLite index path (default ./d365_index.db)
-      --transport <mode>    http only (default http)
+  setup [--non-interactive] Create a .env configuration file. Interactive setup asks how you will use the
+                            server, checks each answer as you give it, and offers to build the index and run
+                            doctor. --mode and --force also apply to interactive setup and --db-path sets its
+                            default; the other flags below are read only with --non-interactive.
+      --mode <local|hosted> local (default): build the index here from PackagesLocalDirectory.
+                            hosted: use a hosted server and index only your custom models (run gateway)
+      --packages-dir <dir>  D365 PackagesLocalDirectory path (local)
+      --api-key <key>       MCP API key (>= 32 chars; generated when omitted) (local)
+      --db-path <path>      SQLite index path (default ./d365_index.db) (local)
+      --transport <mode>    http only (default http) (local)
+      --host <address>      Interface the server binds, for example 127.0.0.1 (local; default every interface)
+      --hosted-url <url>    Hosted MCP endpoint, https:// unless loopback (hosted)
+      --hosted-api-key-file <file>  File holding the hosted API key (hosted; preferred)
+      --hosted-api-key <key>        Hosted API key (hosted; visible in the process list, so prefer the file)
+      --custom-dir <dir>    Folder with your custom models (hosted)
       --force               Replace an existing .env
   artifact publish         Validate and idempotently upload a local bundle
       --bundle-dir <dir>   Validated local artifact bundle directory

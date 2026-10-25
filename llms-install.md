@@ -22,27 +22,37 @@ npm link
 
 After `npm link`, the `d365-fno-mcp-server` command is on the PATH.
 
-## 2. Build the local index
+## 2. Configure and build the local index
 
-Use absolute paths. The first run takes several minutes on a full `PackagesLocalDirectory`.
+Use absolute paths. Generate the API key yourself and pass it in: `setup` writes it to `.env` but never
+prints a key it generated, so you could not register it in the client otherwise. `setup` writes the
+`.env` file in the current directory (owner-only on macOS and Linux; on Windows it keeps the folder's
+access rules, so keep that folder private); run every later command from that directory.
 
 ```bash
-d365-fno-mcp-server index --packages-dir "<PackagesLocalDirectory>" --db-path "<absolute path>/d365_index.db"
+export API_KEY="$(openssl rand -hex 32)"
+d365-fno-mcp-server setup --non-interactive \
+  --packages-dir "<PackagesLocalDirectory>" \
+  --api-key "$API_KEY" \
+  --db-path "<absolute path>/d365_index.db" \
+  --host 127.0.0.1
+d365-fno-mcp-server doctor
+d365-fno-mcp-server index
 ```
+
+The `index` run takes several minutes on a full `PackagesLocalDirectory`. `doctor` should report `0 failed`
+and end with a `Next:` line saying what to run.
 
 ## 3. Run the local HTTP server (local-data setup)
 
-Generate a key, check the setup (`doctor` fails without a key), and start the authenticated server:
+Start the authenticated server from the same directory (it reads `.env`):
 
 ```bash
-export MCP_API_KEYS="local=$(openssl rand -hex 32)"
-D365_PACKAGES_DIR="<PackagesLocalDirectory>" D365_INDEX_DB_PATH="<absolute path>/d365_index.db" \
-  d365-fno-mcp-server doctor
-MCP_HOST=127.0.0.1 D365_INDEX_DB_PATH="<absolute path>/d365_index.db" \
-  d365-fno-mcp-server serve
+d365-fno-mcp-server serve
 ```
 
-Register `http://127.0.0.1:3000/mcp` in the client using the same key:
+It prints its URL and a client entry. Register `http://127.0.0.1:3000/mcp` in the client using the key from
+step 2:
 
 ```json
 {
@@ -50,7 +60,7 @@ Register `http://127.0.0.1:3000/mcp` in the client using the same key:
     "d365-fno": {
       "type": "http",
       "url": "http://127.0.0.1:3000/mcp",
-      "headers": { "X-API-Key": "<the value after local=>"}
+      "headers": { "X-API-Key": "<the value of API_KEY>"}
     }
   }
 }
@@ -91,6 +101,24 @@ VS Code uses a `servers` key:
   }
 }
 ```
+
+### Hosted server plus your own custom models (gateway)
+
+To search your custom models next to the hosted standard index, configure the local gateway instead of
+registering the hosted server directly. Put the hosted key in a file (a key on the command line is
+visible in the process list):
+
+```bash
+d365-fno-mcp-server setup --non-interactive --mode hosted \
+  --hosted-url "https://<app>.azurewebsites.net/mcp" \
+  --hosted-api-key-file "<absolute path to a file holding the hosted key>" \
+  --custom-dir "<folder with the custom models>"
+d365-fno-mcp-server doctor
+d365-fno-mcp-server gateway
+```
+
+`gateway` prints a client entry for its loopback endpoint; register that in place of the hosted entry
+(see `docs/hybrid-gateway.md`).
 
 ## 5. Verify
 

@@ -8,7 +8,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { createHash } from 'crypto';
 import { logger } from '../utils/logger.js';
-import { detectAppVersionFromPackagesDir } from './appVersion.js';
+import { detectAppVersionFromPackagesDir, parseAppVersion } from './appVersion.js';
 import { VERSION } from '../version.js';
 
 /** Above this share of failed parses the scan is treated as untrustworthy and pruning is skipped. */
@@ -51,6 +51,28 @@ export interface IndexStats {
   deleted: number;
   collisions: number;
   durationMs: number;
+}
+
+/** What `BuildIndexOptions.onProgress` is told while a scan runs. */
+export interface IndexProgress {
+  /**
+   * Files the scan has found so far, counted as `IndexStats.total` counts them. It runs ahead
+   * of the rows written, and the total is not known until the scan ends.
+   */
+  files: number;
+  /** True on the last report only: the scan is over and the last batch is committed. */
+  done: boolean;
+}
+
+export interface BuildIndexOptions extends ScanOptions {
+  /**
+   * Called once before the first file, after each scanned file, and once when the scan is
+   * done, so even a small tree gets a start and a finish. It runs inside the scan loop:
+   * keep it synchronous and cheap. If it throws, or returns a promise that rejects, the
+   * failure is logged once and no further reports are made; the index still completes.
+   * While it is set the periodic `Indexing progress` log line is not written.
+   */
+  onProgress?: (progress: IndexProgress) => void;
 }
 
 export function shouldStoreRawXml(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -118,8 +140,9 @@ export async function buildIndex(
   db: Database,
   packagesDir: string,
   force: boolean = false,
-  scanOptions: ScanOptions = {}
+  options: BuildIndexOptions = {}
 ): Promise<IndexStats> {
+  const { onProgress } = options;
   const startTime = Date.now();
   const stats: IndexStats = {
     total: 0,
@@ -476,11 +499,35 @@ export async function buildIndex(
     if (++batchFiles >= INDEX_BATCH_FILES) commitBatch();
   };
 
-  try {
-    for await (const file of scanPackagesDir(packagesDir, scanOptions)) {
-      stats.total++;
+  // A progress display must never cost the index: an exception escaping the scan loop
+  // would leave the FTS triggers dropped and the rebuild undone, so a failing callback
+  // is switched off instead.
+  let progressFailed = false;
+  const reportProgressFailure = (err: unknown) => {
+    if (progressFailed) return;
+    progressFailed = true;
+    logger.warn('Progress callback failed; progress reporting is off for this run', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  };
+  const notify = (done: boolean) => {
+    if (!onProgress || progressFailed) return;
+    try {
+      const returned: unknown = onProgress({ files: stats.total, done });
+      // The callback is typed synchronous; an async one would reject outside this try/catch.
+      if (returned instanceof Promise) returned.catch(reportProgressFailure);
+    } catch (err) {
+      reportProgressFailure(err);
+    }
+  };
 
-      if (stats.total % 500 === 0) {
+  notify(false);
+  try {
+    for await (const file of scanPackagesDir(packagesDir, options)) {
+      stats.total++;
+      notify(false);
+
+      if (!onProgress && stats.total % 500 === 0) {
         logger.info('Indexing progress', { files: stats.total });
       }
 
@@ -538,6 +585,7 @@ export async function buildIndex(
   } finally {
     commitBatch();
   }
+  notify(true);
   stats.objectFiles = seenObjectFiles.size;
 
   // Pruning deletes every indexed row whose file was not seen during this scan.
@@ -661,11 +709,52 @@ export interface IndexStatsSummary {
   serverVersion: string | null;
   storeRawXml: boolean | null;
   usageSnapshot: { status: string; importedAt: string | null; rowCount: number | null };
+  /** The four-part D365 application version the index describes, or null when it is unknown. */
+  applicationVersion: string | null;
+  /** Where `applicationVersion` came from (`packages-dir`, …), `configured` for the server's own setting, or null. */
+  applicationVersionSource: string | null;
 }
 
-export function getIndexStats(db: Database): IndexStatsSummary {
-  const totalObjects = (db.prepare(`SELECT COUNT(*) as count FROM ax_objects`).get() as { count: number }).count;
-  const totalLabels = (db.prepare(`SELECT COUNT(*) as count FROM ax_labels`).get() as { count: number }).count;
+/** Object and label counts of an index: two scans of covering indexes, cheap even for a full installation. */
+export function countIndexRows(db: Database): { objects: number; labels: number } {
+  const objects = (db.prepare(`SELECT COUNT(*) as count FROM ax_objects`).get() as { count: number }).count;
+  const labels = (db.prepare(`SELECT COUNT(*) as count FROM ax_labels`).get() as { count: number }).count;
+  return { objects, labels };
+}
+
+export interface IndexApplicationVersion {
+  version: string | null;
+  source: string | null;
+}
+
+/**
+ * The application version an index describes, exactly as the session instructions state it: the version recorded
+ * in the index, else `configuredVersion` (the server's own setting), read as a four-part version and shown in
+ * its normalised form. Anything that is not a four-part version is unknown, with no source: nothing is guessed,
+ * and the result can safely go into a header. A version recorded without its source has a null source.
+ */
+export function readIndexApplicationVersion(db: Database, configuredVersion?: string | null): IndexApplicationVersion {
+  const recorded = dbUtils.getMeta(db, dbUtils.META_KEYS.appVersion);
+  const version = parseAppVersion(recorded || configuredVersion || null)?.text ?? null;
+  if (version === null) return { version: null, source: null };
+  return { version, source: recorded ? dbUtils.getMeta(db, dbUtils.META_KEYS.appVersionSource) : 'configured' };
+}
+
+/** The schema version recorded in the index, or null when it is missing or not a positive integer. */
+export function readIndexSchemaVersion(db: Database): number | null {
+  const text = dbUtils.getMeta(db, dbUtils.META_KEYS.schemaVersion);
+  // Digits only: Number() would also accept '0x10', '1e1' and ' 7 '.
+  const recorded = text !== null && /^[0-9]+$/.test(text) ? Number(text) : NaN;
+  return Number.isSafeInteger(recorded) && recorded > 0 ? recorded : null;
+}
+
+export interface IndexStatsOptions {
+  /** The server's own application version setting, used when the index records none. */
+  configuredApplicationVersion?: string | null;
+}
+
+export function getIndexStats(db: Database, options: IndexStatsOptions = {}): IndexStatsSummary {
+  const { objects: totalObjects, labels: totalLabels } = countIndexRows(db);
 
   const typesRows = db.prepare(`SELECT type, COUNT(*) as count FROM ax_objects GROUP BY type`).all() as { type: string; count: number }[];
   const byType: Record<string, number> = {};
@@ -676,6 +765,7 @@ export function getIndexStats(db: Database): IndexStatsSummary {
   const builtAt = dbUtils.getMeta(db, dbUtils.META_KEYS.builtAt);
   const storeRawXml = dbUtils.getMeta(db, dbUtils.META_KEYS.storeRawXml);
   const usage = getUsageSnapshotStatus(db) as { status: string; importedAt?: string; rowCount?: number };
+  const applicationVersion = readIndexApplicationVersion(db, options.configuredApplicationVersion);
 
   return {
     totalObjects,
@@ -690,5 +780,7 @@ export function getIndexStats(db: Database): IndexStatsSummary {
       importedAt: usage.importedAt ?? null,
       rowCount: usage.rowCount ?? null,
     },
+    applicationVersion: applicationVersion.version,
+    applicationVersionSource: applicationVersion.source,
   };
 }

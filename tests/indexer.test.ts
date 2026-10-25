@@ -1,12 +1,13 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import fsp from 'fs/promises';
+import os from 'os';
 import path from 'path';
 import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
 import type { Database } from '../src/indexer/db.js';
 import { openDb, prune, getObjectByName, searchSymbols, resolveLabelByLanguage, setMeta, getMeta, META_KEYS, type Xref } from '../src/indexer/db.js';
-import { buildIndex, getIndexStats } from '../src/indexer/buildIndex.js';
+import { buildIndex, getIndexStats, type IndexProgress } from '../src/indexer/buildIndex.js';
 import { setSourceFileReads } from '../src/indexer/sourceFiles.js';
 import { logger } from '../src/utils/logger.js';
 import { collectMetadataTools } from './helpers/toolHarness.js';
@@ -1119,5 +1120,136 @@ describe('Incremental runs', () => {
     const stats = await buildIndex(incDb, incRoot, false);
 
     expect(stats.updated).toBe(1);
+  });
+});
+
+describe('buildIndex progress', () => {
+  let progressRoot: string;
+  let progressDb: Database;
+
+  beforeEach(() => {
+    progressRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'd365-index-progress-'));
+    stagePackages(progressRoot);
+    progressDb = openDb(':memory:');
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    progressDb.close();
+    fs.rmSync(progressRoot, { recursive: true, force: true });
+  });
+
+  /** Adds `count` more class files so the scan passes the 500-file log interval. */
+  function addClassFiles(count: number): void {
+    const classDir = path.join(progressRoot, 'TestPackage', 'TestModel', 'AxClass');
+    for (let i = 0; i < count; i++) {
+      fs.copyFileSync(path.join(fixturesDir, 'AxClassSample.xml'), path.join(classDir, `Bulk${i}.xml`));
+    }
+  }
+
+  it('reports the start, every scanned file and one finish, even for a tiny tree', async () => {
+    const calls: IndexProgress[] = [];
+
+    const stats = await buildIndex(progressDb, progressRoot, true, { onProgress: (progress) => calls.push({ ...progress }) });
+
+    expect(stats.total).toBeGreaterThan(0);
+    expect(calls[0]).toEqual({ files: 0, done: false });
+    expect(calls[calls.length - 1]).toEqual({ files: stats.total, done: true });
+    expect(calls.filter((call) => call.done)).toHaveLength(1);
+    for (let i = 1; i < calls.length; i++) {
+      expect(calls[i].files).toBeGreaterThanOrEqual(calls[i - 1].files);
+    }
+    expect(calls).toHaveLength(stats.total + 2);
+  });
+
+  it('reports an empty scan with a start and a finish', async () => {
+    const emptyRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'd365-index-progress-empty-'));
+    const calls: IndexProgress[] = [];
+    try {
+      const stats = await buildIndex(progressDb, emptyRoot, false, { onProgress: (progress) => calls.push({ ...progress }) });
+
+      expect(stats.total).toBe(0);
+      expect(calls).toEqual([
+        { files: 0, done: false },
+        { files: 0, done: true },
+      ]);
+    } finally {
+      fs.rmSync(emptyRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('still honours the scan options passed alongside the callback', async () => {
+    const calls: IndexProgress[] = [];
+
+    const stats = await buildIndex(progressDb, progressRoot, true, {
+      confined: true,
+      onProgress: (progress) => calls.push({ ...progress }),
+    });
+
+    expect(stats.added).toBe(7);
+    expect(calls[calls.length - 1]).toEqual({ files: stats.total, done: true });
+  });
+
+  it.each([
+    ['before the scan', (progress: IndexProgress) => progress.files === 0 && !progress.done],
+    ['in the middle of the scan', (progress: IndexProgress) => progress.files === 3],
+    ['after the scan', (progress: IndexProgress) => progress.done],
+  ])('finishes a complete index when the callback throws %s', async (_when, shouldThrow) => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    const calls: IndexProgress[] = [];
+
+    const stats = await buildIndex(progressDb, progressRoot, true, {
+      onProgress: (progress) => {
+        calls.push({ ...progress });
+        if (shouldThrow(progress)) throw new Error('renderer broke');
+      },
+    });
+
+    expect(stats.added).toBe(7);
+    expect(stats.errors).toBe(0);
+    expect(getMeta(progressDb, META_KEYS.ftsPending)).toBe('0');
+    expect(progressDb.isTransaction).toBe(false);
+    // The FTS triggers were dropped for the rebuild and put back after it.
+    const triggers = progressDb.prepare(`SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'trigger'`).get() as { n: number };
+    expect(triggers.n).toBeGreaterThan(0);
+    expect((searchSymbols(progressDb, 'SampleClass') as { name: string }[]).map((row) => row.name)).toContain('SampleClass');
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('Progress callback failed'),
+      expect.objectContaining({ error: 'renderer broke' })
+    );
+    // The call that threw is the last one made.
+    expect(calls.filter(shouldThrow)).toHaveLength(1);
+    expect(shouldThrow(calls[calls.length - 1])).toBe(true);
+  });
+
+  it('survives a callback that returns a rejected promise', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    const onProgress = vi.fn(async () => {
+      throw new Error('async renderer broke');
+    });
+
+    const stats = await buildIndex(progressDb, progressRoot, true, { onProgress });
+
+    expect(stats.added).toBe(7);
+    expect(getMeta(progressDb, META_KEYS.ftsPending)).toBe('0');
+    expect(onProgress).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('Progress callback failed'),
+      expect.objectContaining({ error: 'async renderer broke' })
+    );
+  });
+
+  it('leaves the structured progress log to the callback when one is set', async () => {
+    addClassFiles(600);
+    const info = vi.spyOn(logger, 'info').mockImplementation(() => {});
+
+    await buildIndex(progressDb, progressRoot, true, { onProgress: () => {} });
+    expect(info).not.toHaveBeenCalledWith('Indexing progress', expect.anything());
+
+    info.mockClear();
+    await buildIndex(progressDb, progressRoot, true);
+    expect(info).toHaveBeenCalledWith('Indexing progress', { files: 500 });
   });
 });

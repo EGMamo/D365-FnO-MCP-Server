@@ -4,9 +4,12 @@ import path from 'path';
 import { config, VERSION } from '../config.js';
 import { openDb, openDbReadOnly, getMeta, INDEX_SCHEMA_VERSION, META_KEYS, type Database } from '../indexer/db.js';
 import { buildSessionInstructions } from '../indexer/appVersion.js';
+import { readIndexApplicationVersion } from '../indexer/buildIndex.js';
 import { materializeAzureArtifactIndex, prepareArtifactBackedIndex } from './artifactStartup.js';
 import { setSourceFileReads } from '../indexer/sourceFiles.js';
 import { startHttpServer, type SessionContext } from './httpTransport.js';
+import { createStatusProvider, describeArtifact, type ArtifactDescription } from './serverStatus.js';
+import { printServeClientEntry } from '../utils/clientEntry.js';
 import { logger } from '../utils/logger.js';
 import { registerMetadataTools } from '../tools/metadata.js';
 import { registerLabelsTools } from '../tools/labels.js';
@@ -70,15 +73,17 @@ export async function startServer(): Promise<void> {
   };
   if (!hosted) openIndex();
 
+  /** The bundle a hosted server was activated from at startup; set before the index opens, so before readiness. */
+  let servedArtifact: ArtifactDescription | null = null;
+
   /**
    * Application version the served index describes. A locally built index on a
    * path that does not name the version (classic AOS layouts) falls back to the
-   * configured version, which describes this host's own SDK.
+   * configured version, which describes this host's own SDK. The same function
+   * feeds `/status` and `get_index_stats`, so the three cannot disagree.
    */
   function resolveIndexAppVersion(): string | null {
-    const recorded = getMeta(requireDb(), META_KEYS.appVersion);
-    if (recorded) return recorded;
-    return config.appVersion || null;
+    return readIndexApplicationVersion(requireDb(), config.appVersion).version;
   }
 
   // Index tool results pass through the knowledge base (filter, rank, annotate). Embeddings load
@@ -111,7 +116,11 @@ export async function startServer(): Promise<void> {
     const knowledgeSession = new KnowledgeSession();
 
     registerWithKnowledgeFilter(server, knowledgeFilter.current, () => {
-      registerMetadataTools(server, db, { sourceFilesAvailable });
+      registerMetadataTools(server, db, {
+        sourceFilesAvailable,
+        configuredApplicationVersion: config.appVersion,
+        artifact: servedArtifact,
+      });
       registerLabelsTools(server, db);
       registerTraceTools(server, db);
       registerTelemetryTools(server, db);
@@ -184,6 +193,7 @@ export async function startServer(): Promise<void> {
         managedIdentityClientId: config.artifactManagedIdentityClientId || undefined,
       });
       const materialized = await materializeAzureArtifactIndex({ ...options, store });
+      servedArtifact = describeArtifact('azure-blob', materialized.pointerRevision, materialized.bundle.manifest);
       logger.info('Activated validated artifact bundle', {
         source: 'azure-blob',
         bundleId: materialized.bundle.manifest.bundleId,
@@ -195,6 +205,7 @@ export async function startServer(): Promise<void> {
       return;
     }
     const prepared = prepareArtifactBackedIndex(options);
+    servedArtifact = describeArtifact('local', prepared.pointerRevision, prepared.bundle.manifest);
     logger.info('Activated validated artifact bundle', {
       source: 'local',
       bundleId: prepared.bundle.manifest.bundleId,
@@ -222,6 +233,12 @@ export async function startServer(): Promise<void> {
     maxSessionsPerApiKey: config.maxSessionsPerApiKey,
     sessionIdleTimeoutMs: config.sessionIdleTimeoutMs,
     readiness: { isReady: () => db !== null },
+    status: createStatusProvider({
+      version: VERSION,
+      database: () => db,
+      configuredApplicationVersion: config.appVersion,
+      artifact: () => servedArtifact,
+    }),
   });
 
   try {
@@ -229,6 +246,19 @@ export async function startServer(): Promise<void> {
   } catch (error) {
     if (!hosted) requireDb().close();
     throw error;
+  }
+
+  if (!hosted) {
+    // Stdout, not the logger: the structured log lines on stderr are one JSON object each, and the entry is for a person.
+    // Printed only now, so a port that was taken never gets an entry; hosted mode listens unready and prints none.
+    const address = http.server.address();
+    const bound = address !== null && typeof address === 'object' ? address : null;
+    printServeClientEntry({
+      host: config.host,
+      port: bound?.port ?? config.port,
+      boundAddress: bound?.address,
+      apiKeyNames: config.apiKeys.map((entry) => entry.name),
+    });
   }
 
   if (hosted) {

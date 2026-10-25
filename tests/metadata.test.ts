@@ -4,6 +4,10 @@ import fs from 'fs';
 import path from 'path';
 import os from 'node:os';
 import { openDb, openDbReadOnly, setMeta, META_KEYS } from '../src/indexer/db.js';
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { ArtifactDescription } from '../src/server/serverStatus.js';
+import { registerMetadataTools, type MetadataToolOptions } from '../src/tools/metadata.js';
+import { READ_ONLY_TOOL } from '../src/tools/annotations.js';
 import { snapshotIndex } from '../src/indexer/indexSnapshot.js';
 import { collectMetadataTools, seedDb, type ToolResult } from './helpers/toolHarness.js';
 import { seedLegacyUsageRefs } from './helpers/usageRefs.js';
@@ -103,6 +107,88 @@ describe('get_index_stats', () => {
     expect(stats.builtAt).toBeNull();
     expect(stats.lastIndexed).toBeNull();
     expect(stats.usageSnapshot).toEqual({ status: 'not-imported', importedAt: null, rowCount: null });
+  });
+
+  describe('application version and live bundle', () => {
+    const artifact: ArtifactDescription = {
+      source: 'local',
+      bundleId: `sha256:${'ab'.repeat(32)}`,
+      pointerRevision: 12,
+      createdAt: '2026-10-24T21:40:00.000Z',
+      applicationVersion: '10.0.2428.63',
+    };
+    let stamped: Database;
+
+    beforeAll(() => {
+      stamped = seedDb([{ type: 'Table', name: 'CustTable', package: 'ApplicationSuite', model: 'Foundation' }]);
+      setMeta(stamped, META_KEYS.appVersion, '10.0.2428.63');
+      setMeta(stamped, META_KEYS.appVersionSource, 'packages-dir');
+    });
+
+    afterAll(() => {
+      stamped.close();
+    });
+
+    async function statsOf(options: Parameters<typeof collectMetadataTools>[1], target: Database = stamped) {
+      const handler = collectMetadataTools(target, options).get('get_index_stats');
+      if (!handler) throw new Error('get_index_stats not registered');
+      return JSON.parse((await handler({})).content[0].text) as Record<string, unknown>;
+    }
+
+    it('reports the application version and where it came from, and keeps every field it had', async () => {
+      const stats = await statsOf({});
+
+      expect(stats).toMatchObject({
+        totalObjects: 1,
+        builtAt: null,
+        lastIndexed: null,
+        serverVersion: null,
+        storeRawXml: null,
+        usageSnapshot: { status: 'not-imported', importedAt: null, rowCount: null },
+        applicationVersion: '10.0.2428.63',
+        applicationVersionSource: 'packages-dir',
+      });
+    });
+
+    it('leaves the live bundle out when the server was not started from one', async () => {
+      expect(await statsOf({})).not.toHaveProperty('artifact');
+      expect(await statsOf({ artifact: null })).not.toHaveProperty('artifact');
+    });
+
+    it('adds the live bundle, with exactly the fields it was given', async () => {
+      const stats = await statsOf({ artifact });
+
+      expect(stats.artifact).toEqual(artifact);
+      expect(Object.keys(stats.artifact as object).sort()).toEqual([
+        'applicationVersion', 'bundleId', 'createdAt', 'pointerRevision', 'source',
+      ]);
+    });
+
+    it('falls back to the version configured on the server, and says so', async () => {
+      const unrecorded = seedDb([{ type: 'Table', name: 'CustTable', package: 'ApplicationSuite', model: 'Foundation' }]);
+      try {
+        const stats = await statsOf({ configuredApplicationVersion: '10.0.2500.1' }, unrecorded);
+
+        expect(stats.applicationVersion).toBe('10.0.2500.1');
+        expect(stats.applicationVersionSource).toBe('configured');
+      } finally {
+        unrecorded.close();
+      }
+    });
+
+    it('does not change what the tool is called, says, accepts or promises', () => {
+      // The shared harness keeps only handlers, so record the whole registration here.
+      const registration = (options: MetadataToolOptions): unknown[] | undefined => {
+        const calls: unknown[][] = [];
+        const recorder = { tool: (...args: unknown[]) => void calls.push(args) } as unknown as McpServer;
+        registerMetadataTools(recorder, stamped, options);
+        return calls.find((args) => args[0] === 'get_index_stats');
+      };
+      const unchanged = ['get_index_stats', 'Index status', {}, READ_ONLY_TOOL];
+
+      expect(registration({})?.slice(0, 4)).toEqual(unchanged);
+      expect(registration({ artifact, configuredApplicationVersion: '10.0.2500.1' })?.slice(0, 4)).toEqual(unchanged);
+    });
   });
 });
 

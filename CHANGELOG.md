@@ -19,12 +19,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pending change in memory and is not idempotent, and `apply_table_extension_change` is destructive
   and not idempotent. `tests/toolAnnotations.test.ts` fails when a tool is registered without
   annotations. Whether a client acts on them is the client's decision.
+- `setup` asks how you will use the server, then checks each answer as you give it: build the index
+  here from `PackagesLocalDirectory` (local), or use a hosted server and index only your custom
+  models (hosted). A wrong answer is asked again with the reason; API keys are typed hidden and never
+  echoed. It then offers to build the index and run `doctor` on the answers it just collected, and
+  ends with the command to start. `setup --non-interactive` gains `--mode local|hosted`, `--host`,
+  `--hosted-url`, `--hosted-api-key-file` (or `--hosted-api-key`) and `--custom-dir`. Without `--mode`
+  it behaves as before, except that it now also refuses an API key that `serve` would refuse (a
+  `change-me` documentation placeholder). A flag that belongs to the other mode, a
+  `setup` flag without its value and an unknown `--mode` are now errors instead of being ignored.
+  When `setup` generates the API key it says where it saved it.
+- `serve` prints its MCP URL and a paste-ready client entry once it is listening (not in hosted
+  artifact mode). The key is never printed. The entry is built by the same code as the gateway's, so
+  both use the `d365-fno` name and replace each other rather than adding a second server.
+- `doctor` ends with a `Next:` line saying what to run, or what to fix first.
+- `index` shows a live `Scanned <n> files` count when stdout is a terminal. It stays silent when
+  piped, in `prepare-bundle` and in the gateway's refreshes.
+- `GET /status` tells an authenticated caller what a server is serving: the server version and uptime,
+  the application version and build time of the index, the bundle a hosted server activated at
+  startup, and the session counts. It answers while a hosted replica is still starting. The indexed
+  application version is also sent in the `x-d365-index-version` response header, which the code
+  always documented but never sent, and `get_index_stats` reports `applicationVersion`,
+  `applicationVersionSource` and, on a hosted server, `artifact`; its old fields are unchanged. The
+  gateway `doctor` adds `gateway-hosted-index`: what the hosted server serves, a warning when
+  `D365_APP_VERSION` differs from it, and nothing for a hosted server that has no `/status`.
+  `/health` and `/live` are unchanged.
 
 ### Fixed
 
 - The HTTP transport answers a request body it cannot decode (unsupported charset or
   `Content-Encoding`, aborted upload) with the parser's own 4xx status and a JSON-RPC error, instead
   of a 500 "Internal error" logged at error level.
+- Interactive `setup` no longer exits 0 without a word when its input ends, and no longer drops
+  answers that arrive together (a pipe, a script). The input ending now exits 1 with nothing
+  written, and Ctrl-C exits 130.
+- `setup` and the files it writes: an API key or path containing `#`, or with leading or trailing
+  space, was cut or trimmed when `dotenv` read the `.env` back. Such values are now quoted, and a
+  value that cannot be written is refused before any folder is created.
 
 ### Security
 
@@ -48,6 +79,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the change check reads from a covering index instead of the XML row, and triggers keep the FTS
   indexes current so an incremental run no longer rebuilds them. On a 29k-object synthetic tree a
   cold build went from about 25s to 14s.
+- Interactive `setup` binds the server to `127.0.0.1` by default (`MCP_HOST`), as `.env.example`
+  advises for a local server. Answer no to bind every interface. `setup --non-interactive` still
+  writes no `MCP_HOST` unless `--host` is given.
+- `doctor` reports `workspace-capabilities` and an unconfigured Visual Studio workspace only when
+  write tools are on or a workspace is configured, so a healthy machine no longer shows two warnings.
+- The packages-folder check in `doctor` no longer walks the whole tree to count metadata files: it
+  finds a sample file and reports its path instead of a count, which is quick on a full
+  `PackagesLocalDirectory`.
+- The gateway rejects a hosted API key that holds a space or a non-ASCII character when it reads its
+  configuration, as the hosted connection always did, instead of failing only when it connects.
 
 ### Added
 

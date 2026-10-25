@@ -170,6 +170,18 @@ version and merges local workspace tools into the hosted tool list. See
 Other clients may connect directly to `https://<api>/mcp` with `X-API-Key`, but they do not receive
 Visual Studio workspace tools.
 
+To see what a server is serving, ask it. Any valid key works. Probes belong on `/live` (liveness) and
+`/health` (readiness), which are not rate limited: `/status` spends the same rate-limit budget as the MCP
+routes.
+
+```bash
+curl -H "X-API-Key: $D365_MCP_API_KEY" https://<api>/status
+```
+
+The answer names the application version and build time of the index, the bundle id, pointer
+revision and creation time of the bundle this replica activated at startup, and the server version.
+It answers while a replica is still starting. See [Transport](../README.md#transport) for the fields.
+
 ## Operations
 
 | Task | Action |
@@ -178,7 +190,8 @@ Visual Studio workspace tools.
 | Roll back | Swap the active/previous pointer to the retained validated bundle and signal the API |
 | Rotate client access | Rotate the named API-key secret and recycle the API |
 | Rotate acquisition credentials | Add a new Key Vault secret version, update the worker, verify, then retire the old credential |
-| Diagnose mismatch | Compare the worker-recorded application version with `X-D365-Client-Sdk-Version` |
+| Check what is live | `GET /status` with a key: bundle id, pointer revision, application version and build time of what this replica activated at startup |
+| Diagnose mismatch | Read `index.applicationVersion` from `GET /status` (or `get_index_stats`) and compare it with the client's `X-D365-Client-Sdk-Version` |
 | Diagnose candidate failure | Inspect worker logs and validation report; do not alter the active database |
 
 The operator CLI can publish and control the same immutable Blob artifact store without

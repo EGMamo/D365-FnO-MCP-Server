@@ -43,7 +43,8 @@ Hybrid gateway  (this machine; 127.0.0.1 only; Host allow-list)
 ```
 
 - The gateway reuses the server's HTTP transport (API-key check, sessions, rate limit, `/health`),
-  so an agent talks to it exactly as it talks to `serve`.
+  so an agent talks to it exactly as it talks to `serve`. The hosted server's `GET /status` is not
+  part of it: the gateway answers `404` there, and `local_index_status` is its counterpart.
 - Every agent session opens its own session to the hosted server, so the hosted server keeps its
   per-agent state. The hosted tool list is shared and cached.
 - The local tools are the same read-only handlers the server uses, run against the custom index.
@@ -101,8 +102,13 @@ npm run doctor
 
 When `D365_HOSTED_MCP_URL` is set, `doctor` also validates the gateway settings, that the custom
 folder is readable and holds metadata, that the local index path is writable, that the hosted server
-answers `/health`, that the hosted key is accepted, and whether the hosted server's major and minor
-version match the gateway's. It reports no key or token. On a machine that sets the hosted URL but
+answers `/health`, that the hosted key is accepted, whether the hosted server's major and minor
+version match the gateway's and, when the hosted server provides `/status`, which index it serves
+(application version and build time, bundle id, server version), compared with `D365_APP_VERSION`: a
+difference is a warning, and an older hosted server without `/status` adds nothing. `/status` is asked
+for beside the configured MCP URL (`https://<host>/d365/mcp` gives `https://<host>/d365/status`); a URL
+that does not end in `/mcp` is not asked, so the key never goes to a path you did not configure. It reports no key
+or token. On a machine that sets the hosted URL but
 not `D365_PACKAGES_DIR`, the packages-folder, index and API-key checks of `serve` are skipped.
 
 ### 3. Start and find the token
@@ -259,7 +265,9 @@ the usual "Input validation error". Forwarded tools are validated by the hosted 
 At the time of writing the forwarded tools of the hosted server are:
 
 - Index: `get_index_stats`, `get_index_staleness`, `get_usage_snapshot_status`. They describe the
-  hosted index; `local_index_status` is the custom index's counterpart.
+  hosted index (`get_index_stats` also gives its application version and bundle);
+  `local_index_status` is the custom index's counterpart, and its `standardIndex.appVersion` is the
+  copy on your machine.
 - Security analysis: `find_security_path`, `analyze_sod_conflicts`, `diff_roles`,
   `convert_security_customizations`.
 - Entities and generators: `check_entity_odata_readiness`, `create_data_entity`,
@@ -367,7 +375,8 @@ kept in place. When one side could not answer, a trailing item names the reason:
   that says so. `local_index_status` lists these under `skewedTools`. Update the gateway (or ask
   the operator to update the hosted server) to restore merging.
 - `D365_APP_VERSION` is separate: it lets the hosted server tell the agent when its index describes
-  another application version than yours.
+  another application version than yours. `doctor` makes the same comparison and shows the hosted
+  index it compared with.
 
 **The custom index fails to refresh:** the previous index stays in service and `local_index_status`
 shows `lastError` (folder paths replaced by `<customDir>` and `<dbDir>`). If the file watcher

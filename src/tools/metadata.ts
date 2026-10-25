@@ -7,6 +7,7 @@ import { loadObjectXml, sourceFileReadsAllowed } from '../indexer/sourceFiles.js
 import { findUsageRefs, getUsageSnapshotStatus } from '../indexer/xrefUsage.js';
 import { capLists, DEFAULT_MAX_ITEMS } from './bounds.js';
 import { READ_ONLY_TOOL } from './annotations.js';
+import type { ArtifactDescription } from '../server/serverStatus.js';
 import { analyzeImpact, explainSearchHits } from './impact.js';
 
 /** Every object type the indexer stores, for tools that accept any indexed type. */
@@ -55,6 +56,10 @@ export const INDEXED_OBJECT_TYPES = [
 export interface MetadataToolOptions {
   /** False when the deployed index has no corresponding source tree on this host. */
   sourceFilesAvailable?: boolean;
+  /** The server's own application version setting, reported by `get_index_stats` when the index records none. */
+  configuredApplicationVersion?: string | null;
+  /** The bundle a hosted server was activated from; `get_index_stats` reports it, and leaves it out when absent. */
+  artifact?: ArtifactDescription | null;
 }
 
 export function registerMetadataTools(server: McpServer, db: Database, options: MetadataToolOptions = {}) {
@@ -409,8 +414,9 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
     {},
     READ_ONLY_TOOL,
     async () => {
-      const stats = getIndexStats(db);
-      return { content: [{ type: 'text', text: JSON.stringify(stats) }] };
+      const stats = getIndexStats(db, { configuredApplicationVersion: options.configuredApplicationVersion });
+      const body = options.artifact ? { ...stats, artifact: options.artifact } : stats;
+      return { content: [{ type: 'text', text: JSON.stringify(body) }] };
     }
   );
 }

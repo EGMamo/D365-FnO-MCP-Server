@@ -33,6 +33,12 @@ const TOKEN_FILE_NAME = 'gateway-token';
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]', '::1']);
 const MCP_PATH = '/mcp';
 /**
+ * What the key may contain. This is the rule `UpstreamSession` applies to the key when the gateway connects
+ * (HEADER_TOKEN in upstream.ts); checking it here too means a key cannot pass the configuration and fail only then.
+ * tests/gatewayConfig.test.ts compares the two.
+ */
+const HOSTED_KEY_CHARACTERS = /^[\x21-\x7e]+$/;
+/**
  * What a private prefix may look like. The router splits every argument into identifiers (merge.ts,
  * containsPrivateName) and compares a prefix with the start of each, so a prefix with any other character,
  * or one starting with a digit, would match nothing and silently filter nothing.
@@ -130,8 +136,8 @@ function resolveHostedApiKey(env: GatewayEnv, issue: ReportIssue): string {
       return '';
     }
   }
-  if (/[\u0000-\u001f\u007f]/.test(key)) {
-    issue(name, 'the key must be a single line without control characters');
+  if (!HOSTED_KEY_CHARACTERS.test(key)) {
+    issue(name, 'the key must be printable ASCII without spaces or line breaks');
     return '';
   }
   return key;
@@ -150,6 +156,48 @@ function resolveCustomMetadataDir(env: GatewayEnv, issue: ReportIssue): string {
     issue(name, isMissing(err) ? `directory does not exist: ${path.resolve(configured)}` : errorMessage(err));
     return '';
   }
+}
+
+/** One setting checked on its own: the value the gateway would use, or the first problem it would report for it. */
+export type FieldCheck<T> = { ok: true; value: T } | { ok: false; variable: string; message: string };
+
+/**
+ * Runs one of the validators above on just the given fields. The input goes through `gatewayEnvSchema` like the real
+ * environment (same trimming and defaults) and nothing else is read, so the outcome does not depend on `process.env`,
+ * and a problem is worded exactly as `loadGatewayConfig` words it. Each validator reports at most one problem.
+ */
+function checkField<T>(
+  input: Partial<z.input<typeof gatewayEnvSchema>>,
+  run: (env: GatewayEnv, issue: ReportIssue) => T
+): FieldCheck<T> {
+  const problems: Array<{ variable: string; message: string }> = [];
+  const value = run(gatewayEnvSchema.parse(input), (variable, message) => {
+    problems.push({ variable, message });
+  });
+  const [first] = problems;
+  return first ? { ok: false, ...first } : { ok: true, value };
+}
+
+/** For a hosted URL typed on its own. `value` is the normalised URL (`/mcp` added when it has no path). */
+export function validateHostedUrl(raw: string): FieldCheck<string> {
+  return checkField({ D365_HOSTED_MCP_URL: raw }, (env, issue) => parseHostedUrl(env.D365_HOSTED_MCP_URL, issue));
+}
+
+/**
+ * For a hosted key given inline or as a key file path. `value` is the SECRET key, also when it was read from a file:
+ * a caller that keeps only the file path must discard it. A failure never quotes the key or the path. A relative key
+ * file path is read from the process working directory, so a caller with another base directory resolves it first.
+ */
+export function validateHostedApiKey(source: { key?: string; keyFile?: string }): FieldCheck<string> {
+  return checkField({ D365_HOSTED_API_KEY: source.key, D365_HOSTED_API_KEY_FILE: source.keyFile }, resolveHostedApiKey);
+}
+
+/**
+ * For a custom models folder typed on its own. `value` is the canonical directory (symlinks resolved); a caller that
+ * writes the path down keeps what the user typed. A relative path is taken from the process working directory.
+ */
+export function validateCustomMetadataDir(raw: string): FieldCheck<string> {
+  return checkField({ D365_CUSTOM_METADATA_DIR: raw }, resolveCustomMetadataDir);
 }
 
 /** Absolute form of a DB path, following symlinks of the file or its parent directory when they exist. */

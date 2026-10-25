@@ -13,6 +13,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { ZodError } from 'zod';
 import { startHttpServer, type RunningHttpServer, type SessionContext } from '../server/httpTransport.js';
+import { CLIENT_ENTRY_NAME, buildClientEntry, printClientEntry as printSharedClientEntry } from '../utils/clientEntry.js';
 import { logger } from '../utils/logger.js';
 import { VERSION } from '../version.js';
 import { GatewayConfigError, loadGatewayConfig } from './config.js';
@@ -72,9 +73,6 @@ const UNAVAILABLE_PREFIX = '[hosted unavailable] ';
 
 /** The input id the printed client entry asks the token under; the VS Code form of a secret prompt. */
 const TOKEN_INPUT_ID = 'd365-gateway-token';
-
-/** Name agents and the prebuilt agent definitions expect for the D365 server entry. */
-const CLIENT_ENTRY_NAME = 'd365-fno';
 
 const HYBRID_NOTE = [
   'This server is a local gateway in front of the hosted D365 Finance and Operations MCP server.',
@@ -626,21 +624,16 @@ function describeToken(config: GatewayConfig, env: NodeJS.ProcessEnv): string {
 
 /** Prints a client entry that points at the gateway, ready to paste. */
 function printClientEntry(gateway: RunningGateway, env: NodeJS.ProcessEnv): void {
-  const entry = {
-    inputs: [{ id: TOKEN_INPUT_ID, type: 'promptString', description: 'D365 gateway token', password: true }],
-    servers: {
-      [CLIENT_ENTRY_NAME]: {
-        type: 'http',
-        url: gateway.url,
-        headers: { Authorization: 'Bearer ${input:' + TOKEN_INPUT_ID + '}' },
-      },
-    },
-  };
-  console.log(`D365 gateway listening on ${gateway.url} (hosted server: ${new URL(gateway.config.hostedUrl).host})\n`);
-  console.log(`Register it in place of the hosted ${CLIENT_ENTRY_NAME} entry: .vscode/mcp.json for VS Code, .mcp.json for Visual Studio.`);
-  console.log(JSON.stringify(entry, null, 2));
-  console.log(`\n${describeToken(gateway.config, env)}`);
-  console.log('Other clients send the same URL with an "Authorization: Bearer <token>" header.');
+  printSharedClientEntry({
+    heading: `D365 gateway listening on ${gateway.url} (hosted server: ${new URL(gateway.config.hostedUrl).host})`,
+    instruction: `Register it in place of the hosted ${CLIENT_ENTRY_NAME} entry: .vscode/mcp.json for VS Code, .mcp.json for Visual Studio.`,
+    entry: buildClientEntry({
+      url: gateway.url,
+      inputId: TOKEN_INPUT_ID,
+      inputDescription: 'D365 gateway token',
+    }),
+    notes: [describeToken(gateway.config, env), 'Other clients send the same URL with an "Authorization: Bearer <token>" header.'],
+  });
 }
 
 /**

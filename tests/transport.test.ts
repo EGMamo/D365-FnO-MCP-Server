@@ -7,6 +7,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import express, { type Request, type Response, type Router } from 'express';
 import { createHttpApp, startHttpServer, type ConnectableServer } from '../src/server/httpTransport.js';
 import { logger } from '../src/utils/logger.js';
+import type { ServerStatus, StatusProvider } from '../src/server/serverStatus.js';
 
 const API_KEY = 'test-api-key-1234567890-abcdefghijklmnop';
 const SECOND_KEY = 'second-api-key-0987654321-zyxwvutsrqpon';
@@ -157,6 +158,297 @@ describe('readiness gate', () => {
     expect((await fetch(`${url}/health`)).status).toBe(200);
     expect((await initialize()).status).toBe(200);
     expect(factory).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('status endpoint and index version header', () => {
+  type DescribeInput = Parameters<StatusProvider['describe']>[0];
+
+  const document = (input: DescribeInput): ServerStatus => ({
+    status: input.ready ? 'ok' : 'starting',
+    you: { keyName: input.keyName },
+    server: { version: '0.1.0', startedAt: '2026-10-25T08:00:00.000Z', uptimeSeconds: 5 },
+    index: input.ready
+      ? {
+          applicationVersion: '10.0.2428.63',
+          applicationVersionSource: 'packages-dir',
+          builtAt: '2026-10-24T22:10:00.000Z',
+          schemaVersion: 3,
+          objects: 7,
+          labels: 2,
+        }
+      : null,
+    artifact: null,
+    sessions: input.sessions,
+  });
+
+  /** A provider that records what the transport asks it, so the tests do not depend on the real one. */
+  function stub(overrides: Partial<StatusProvider> = {}) {
+    const asked: DescribeInput[] = [];
+    const provider: StatusProvider = {
+      indexVersion: () => '10.0.2428.63',
+      describe: (input) => {
+        asked.push(input);
+        return document(input);
+      },
+      ...overrides,
+    };
+    return { provider, asked };
+  }
+
+  const initialize = (url: string) =>
+    fetch(`${url}/mcp`, {
+      method: 'POST',
+      headers: { 'X-API-Key': API_KEY, 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 't', version: '0' } },
+      }),
+    });
+
+  describe('GET /status', () => {
+    it('needs a key', async () => {
+      const url = await listen(makeApp(undefined, { status: stub().provider }).app);
+
+      const missing = await fetch(`${url}/status`);
+      expect(missing.status).toBe(401);
+      expect(await missing.json()).toEqual({ error: 'Unauthorized: invalid or missing API key' });
+      expect((await fetch(`${url}/status`, { headers: { 'X-API-Key': 'wrong-key-wrong-key-wrong-key-wrong' } })).status).toBe(401);
+    });
+
+    it('answers a key in either header, naming the key that was used and no other', async () => {
+      const { provider, asked } = stub();
+      const url = await listen(makeApp(undefined, { status: provider }).app);
+
+      const viaHeader = await fetch(`${url}/status`, { headers: { 'X-API-Key': API_KEY } });
+      expect(viaHeader.status).toBe(200);
+      expect(await viaHeader.json()).toEqual(document({ ready: true, keyName: 'test', sessions: asked[0].sessions }));
+
+      const viaBearer = await fetch(`${url}/status`, { headers: { Authorization: `Bearer ${SECOND_KEY}` } });
+      const text = await viaBearer.text();
+      expect((JSON.parse(text) as ServerStatus).you).toEqual({ keyName: 'second' });
+      expect(text).not.toContain(API_KEY);
+      expect(text).not.toContain(SECOND_KEY);
+      expect(text).not.toContain('"test"');
+    });
+
+    it('is not cached by anything on the way', async () => {
+      const url = await listen(makeApp(undefined, { status: stub().provider }).app);
+
+      const res = await fetch(`${url}/status`, { headers: { 'X-API-Key': API_KEY } });
+
+      expect(res.headers.get('cache-control')).toBe('no-store');
+      expect(res.headers.get('content-type')).toMatch(/^application\/json/);
+    });
+
+    it('answers HEAD with no body', async () => {
+      const url = await listen(makeApp(undefined, { status: stub().provider }).app);
+
+      const res = await fetch(`${url}/status`, { method: 'HEAD', headers: { 'X-API-Key': API_KEY } });
+
+      expect(res.status).toBe(200);
+      expect(await res.text()).toBe('');
+    });
+
+    it("hands the provider the transport's own session numbers and readiness", async () => {
+      const { provider, asked } = stub();
+      const url = await listen(makeApp(undefined, { status: provider, maxConcurrentSessions: 7, maxSessionsPerApiKey: 2 }).app);
+
+      await fetch(`${url}/status`, { headers: { 'X-API-Key': API_KEY } });
+      expect((await initialize(url)).status).toBe(200);
+      await fetch(`${url}/status`, { headers: { 'X-API-Key': SECOND_KEY } });
+
+      expect(asked[0]).toEqual({ ready: true, keyName: 'test', sessions: { active: 0, max: 7, maxPerKey: 2 } });
+      expect(asked[1]).toEqual({ ready: true, keyName: 'second', sessions: { active: 1, max: 7, maxPerKey: 2 } });
+    });
+
+    it('answers 500 with a fixed body when the provider fails, logs it, and keeps serving', async () => {
+      const error = vi.spyOn(logger, 'error').mockImplementation(() => {});
+      const { provider } = stub({
+        describe: () => {
+          throw new Error('database is not open: /srv/secret/path');
+        },
+      });
+      const url = await listen(makeApp(undefined, { status: provider }).app);
+
+      const res = await fetch(`${url}/status`, { headers: { 'X-API-Key': API_KEY } });
+
+      expect(res.status).toBe(500);
+      expect(await res.json()).toEqual({ error: 'status unavailable' });
+      expect(error).toHaveBeenCalledTimes(1);
+      // The reason is in the log, under a key the logger does not overwrite (`message` is its own field).
+      expect(error).toHaveBeenCalledWith('Status unavailable', { error: expect.stringContaining('database is not open') });
+      expect((await fetch(`${url}/nope`, { headers: { 'X-API-Key': API_KEY } })).status).toBe(404);
+      expect((await fetch(`${url}/health`)).status).toBe(200);
+      error.mockRestore();
+    });
+
+    it('spends the same rate-limit budget as the other authenticated routes', async () => {
+      const url = await listen(makeApp(undefined, { status: stub().provider, rateLimitMaxRequests: 3 }).app);
+      const get = () => fetch(`${url}/status`, { headers: { 'X-API-Key': API_KEY } });
+
+      expect([(await get()).status, (await get()).status, (await get()).status]).toEqual([200, 200, 200]);
+      const limited = await get();
+      expect(limited.status).toBe(429);
+      expect(((await limited.json()) as { error: { code: number } }).error.code).toBe(-32029);
+    });
+
+    it('is not there without a provider, which is how the gateway runs', async () => {
+      const url = await listen(makeApp().app);
+
+      const res = await fetch(`${url}/status`, { headers: { 'X-API-Key': API_KEY } });
+
+      expect(res.status).toBe(404);
+      expect(await res.json()).toEqual({ error: 'Not Found. MCP endpoint is at /mcp' });
+      expect(res.headers.get('x-d365-index-version')).toBeNull();
+    });
+  });
+
+  describe('while the server is starting', () => {
+    it('answers /status with the starting document while everything else stays unavailable', async () => {
+      let ready = false;
+      const { provider, asked } = stub();
+      const factory = vi.fn(() => new McpServer({ name: 'test', version: '0.0.0' }));
+      const url = await listen(makeApp(factory, { status: provider, readiness: { isReady: () => ready } }).app);
+      const status = () => fetch(`${url}/status`, { headers: { 'X-API-Key': API_KEY } });
+
+      expect((await fetch(`${url}/health`)).status).toBe(503);
+      expect((await fetch(`${url}/status`)).status).toBe(401);
+      const starting = await status();
+      expect(starting.status).toBe(200);
+      expect(await starting.json()).toMatchObject({ status: 'starting', index: null, artifact: null });
+      expect(asked.at(-1)?.ready).toBe(false);
+      expect((await fetch(`${url}/nope`, { headers: { 'X-API-Key': API_KEY } })).status).toBe(503);
+      expect((await initialize(url)).status).toBe(503);
+      expect(factory).not.toHaveBeenCalled();
+
+      ready = true;
+      expect(await (await status()).json()).toMatchObject({ status: 'ok' });
+      expect(asked.at(-1)?.ready).toBe(true);
+    });
+  });
+
+  describe('x-d365-index-version', () => {
+    const header = (res: { headers: Headers }) => res.headers.get('x-d365-index-version');
+
+    it('is sent with the indexed application version on /status and on the MCP handshake', async () => {
+      const url = await listen(makeApp(undefined, { status: stub().provider }).app);
+
+      const status = await fetch(`${url}/status`, { headers: { 'X-API-Key': API_KEY } });
+      expect(header(status)).toBe('10.0.2428.63');
+
+      const handshake = await initialize(url);
+      expect(handshake.status).toBe(200);
+      expect(header(handshake)).toBe('10.0.2428.63');
+      await handshake.text();
+    });
+
+    it('is sent on an authenticated answer that is not a success, such as an unknown path', async () => {
+      const url = await listen(makeApp(undefined, { status: stub().provider }).app);
+
+      const res = await fetch(`${url}/nope`, { headers: { 'X-API-Key': API_KEY } });
+
+      expect(res.status).toBe(404);
+      expect(header(res)).toBe('10.0.2428.63');
+    });
+
+    it('is never sent to a caller without a valid key', async () => {
+      const url = await listen(makeApp(undefined, { status: stub().provider }).app);
+
+      expect(header(await fetch(`${url}/status`))).toBeNull();
+      expect(header(await fetch(`${url}/mcp`, { method: 'POST' }))).toBeNull();
+      expect(header(await fetch(`${url}/status`, { headers: { 'X-API-Key': 'wrong-key-wrong-key-wrong-key-wrong' } }))).toBeNull();
+    });
+
+    it('is not sent on /health or /live', async () => {
+      const url = await listen(makeApp(undefined, { status: stub().provider }).app);
+
+      expect(header(await fetch(`${url}/health`, { headers: { 'X-API-Key': API_KEY } }))).toBeNull();
+      expect(header(await fetch(`${url}/live`, { headers: { 'X-API-Key': API_KEY } }))).toBeNull();
+    });
+
+    it('is left out when the version is unknown', async () => {
+      const url = await listen(makeApp(undefined, { status: stub({ indexVersion: () => null }).provider }).app);
+
+      const res = await fetch(`${url}/status`, { headers: { 'X-API-Key': API_KEY } });
+
+      expect(res.status).toBe(200);
+      expect(header(res)).toBeNull();
+    });
+
+    it('is left out until the server is ready, even if the provider would answer', async () => {
+      const indexVersion = vi.fn(() => '10.0.2428.63');
+      const url = await listen(makeApp(undefined, { status: stub({ indexVersion }).provider, readiness: { isReady: () => false } }).app);
+
+      const res = await fetch(`${url}/status`, { headers: { 'X-API-Key': API_KEY } });
+
+      expect(res.status).toBe(200);
+      expect(header(res)).toBeNull();
+      expect(indexVersion).not.toHaveBeenCalled();
+    });
+
+    it('never turns a request into an error when the provider fails', async () => {
+      const url = await listen(
+        makeApp(undefined, {
+          status: stub({
+            indexVersion: () => {
+              throw new Error('The index is not open yet.');
+            },
+          }).provider,
+        }).app
+      );
+
+      const res = await fetch(`${url}/status`, { headers: { 'X-API-Key': API_KEY } });
+
+      expect(res.status).toBe(200);
+      expect(header(res)).toBeNull();
+      const handshake = await initialize(url);
+      expect(handshake.status).toBe(200);
+      await handshake.text();
+    });
+
+    it.each([
+      ['a line break', '10.0.2428.63\r\nX-Evil: 1'],
+      ['a character outside Latin-1', '10.0.2428.63 €'],
+      ['free text', 'latest build'],
+      ['three parts', '10.0.39'],
+      ['an empty string', ''],
+      ['20,000 characters', '1'.repeat(20_000)],
+    ])('is left out, and nothing breaks, for a value with %s', async (_label, value) => {
+      const url = await listen(makeApp(undefined, { status: stub({ indexVersion: () => value }).provider }).app);
+
+      const res = await fetch(`${url}/status`, { headers: { 'X-API-Key': API_KEY } });
+
+      expect(res.status).toBe(200);
+      expect(header(res)).toBeNull();
+      expect(res.headers.get('x-evil')).toBeNull();
+      const handshake = await initialize(url);
+      expect(handshake.status).toBe(200);
+      await handshake.text();
+    });
+  });
+
+  describe('/health and /live are untouched', () => {
+    it.each([
+      ['without a status provider', false],
+      ['with a status provider', true],
+    ])('keep their exact answers %s', async (_label, withStatus) => {
+      let ready = true;
+      const overrides = { readiness: { isReady: () => ready }, ...(withStatus ? { status: stub().provider } : {}) };
+      const url = await listen(makeApp(undefined, overrides).app);
+
+      expect(await (await fetch(`${url}/health`)).text()).toBe('{"status":"ok","version":"0.1.0"}');
+      expect(await (await fetch(`${url}/live`)).text()).toBe('{"status":"alive","version":"0.1.0"}');
+
+      ready = false;
+      const starting = await fetch(`${url}/health`);
+      expect(starting.status).toBe(503);
+      expect(starting.headers.get('retry-after')).toBe('10');
+      expect(await starting.text()).toBe('{"status":"starting","version":"0.1.0"}');
+      expect(await (await fetch(`${url}/live`)).text()).toBe('{"status":"alive","version":"0.1.0"}');
+    });
   });
 });
 

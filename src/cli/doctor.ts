@@ -1,19 +1,17 @@
 import fs from 'fs';
 import path from 'path';
-import { glob } from 'glob';
 import { discoverVisualStudioWorkspace, selectVisualStudioProject } from '../workspace/visualStudio.js';
 import { resolveModelTarget } from '../workspace/models.js';
 import { metadataProvenance, workspaceCapabilities } from '../workspace/capabilities.js';
 import { canonicalRoot, contained, errorMessage } from '../workspace/safety.js';
 import { describeApiKeys, parseApiKeys } from '../server/apiKeys.js';
+import { z } from 'zod';
 import { gatewayConfigSchema } from '../gateway/config.js';
+import { classifySdkDrift } from '../indexer/appVersion.js';
 import { VERSION } from '../version.js';
+import { checkCustomMetadataDir, checkPackagesDir, type CheckResult } from './checks.js';
 
-export interface CheckResult {
-  name: string;
-  status: 'pass' | 'warn' | 'fail';
-  message: string;
-}
+export type { CheckResult } from './checks.js';
 
 const MIN_NODE_MAJOR = 24;
 
@@ -37,74 +35,6 @@ function checkDirWritable(dirPath: string): boolean {
   } catch {
     return false;
   }
-}
-
-async function checkPackagesDir(packagesDir: string | undefined): Promise<CheckResult[]> {
-  if (!packagesDir) {
-    return [
-      {
-        name: 'packages-dir',
-        status: 'fail',
-        message: 'D365_PACKAGES_DIR is not set. Run `d365-fno-mcp-server setup` or set it in .env.',
-      },
-    ];
-  }
-
-  if (!fs.existsSync(packagesDir) || !fs.statSync(packagesDir).isDirectory()) {
-    return [
-      {
-        name: 'packages-dir',
-        status: 'fail',
-        message: `D365_PACKAGES_DIR "${packagesDir}" does not exist or is not a directory.`,
-      },
-    ];
-  }
-
-  const results: CheckResult[] = [
-    { name: 'packages-dir', status: 'pass', message: `Found ${packagesDir}` },
-  ];
-
-  // cwd, not a pattern prefix: glob syntax in the folder name ([x], {a,b}) must not be read as a pattern.
-  const matches = await glob('**/Ax{Table,Class,Enum,Form,Query,DataEntityView,Edt}/*.xml', {
-    cwd: packagesDir,
-    absolute: true,
-    windowsPathsNoEscape: true,
-  });
-
-  if (matches.length === 0) {
-    results.push({
-      name: 'metadata-files',
-      status: 'fail',
-      message: `No D365 metadata XML found under "${packagesDir}". Point D365_PACKAGES_DIR at PackagesLocalDirectory.`,
-    });
-    return results;
-  }
-
-  results.push({
-    name: 'metadata-files',
-    status: 'pass',
-    message: `${matches.length} metadata XML file(s) found`,
-  });
-
-  try {
-    const sample = matches[0];
-    const content = fs.readFileSync(sample, 'utf-8');
-    const { XMLParser } = await import('fast-xml-parser');
-    new XMLParser({ ignoreAttributes: false }).parse(content);
-    results.push({
-      name: 'sample-parse',
-      status: 'pass',
-      message: `Parsed ${path.basename(sample)}`,
-    });
-  } catch (err) {
-    results.push({
-      name: 'sample-parse',
-      status: 'warn',
-      message: `Sample metadata file could not be parsed: ${String(err)}`,
-    });
-  }
-
-  return results;
 }
 
 function checkDb(dbPath: string): CheckResult[] {
@@ -159,37 +89,50 @@ async function checkDbOpen(dbPath: string): Promise<CheckResult[]> {
 }
 
 export function checkVisualStudioIntegration(env: NodeJS.ProcessEnv): CheckResult[] {
-  const capabilities = workspaceCapabilities();
   const provenance = metadataProvenance(env.D365_CUSTOM_METADATA_DIR, env.D365_PROJECT_DIR);
-  const results: CheckResult[] = [
-    {
-      name: 'workspace-capabilities', status: 'warn',
-      message: JSON.stringify({ ...capabilities, provenance }),
-    },
-  ];
   const metadataDir = env.D365_CUSTOM_METADATA_DIR || env.D365_PROJECT_DIR;
   const workspaceDir = env.D365_VISUAL_STUDIO_WORKSPACE_DIR;
+  // Capabilities matter once write tools or a workspace are in play. A custom metadata folder alone, which every
+  // gateway machine has, is neither, so a healthy machine is not left with standing warnings.
+  const writeTools = env.D365_ENABLE_WRITE_TOOLS === '1';
+  const results: CheckResult[] = [];
+  if (writeTools || workspaceDir) {
+    results.push({
+      name: 'workspace-capabilities', status: 'warn',
+      message: JSON.stringify({ ...workspaceCapabilities(), provenance }),
+    });
+  }
+  let customRoot: string | null = null;
   try {
-    const customRoot = metadataDir ? canonicalRoot(metadataDir) : null;
+    customRoot = metadataDir ? canonicalRoot(metadataDir) : null;
+  } catch (error) {
+    // Its own name, so a mistyped custom folder is not blamed on the Visual Studio workspace.
+    results.push({ name: 'custom-metadata-dir', status: 'fail', message: `${provenance.source}: ${metadataDir} cannot be used: ${errorMessage(error)}` });
+    return results;
+  }
+  try {
     if (customRoot) {
       results.push({
         name: 'custom-metadata-dir', status: 'pass',
         message: `${provenance.source}: ${metadataDir}; canonical root: ${customRoot}. No write probe performed.`,
       });
-    } else if (env.D365_ENABLE_WRITE_TOOLS === '1') {
+    } else if (writeTools) {
       throw new Error('D365_CUSTOM_METADATA_DIR (or legacy D365_PROJECT_DIR) is required for write tools.');
     }
     const workspace = workspaceDir
       ? discoverVisualStudioWorkspace(workspaceDir, env.D365_TARGET_SOLUTION)
       : null;
     const selected = workspace ? selectVisualStudioProject(workspace, undefined, env.D365_TARGET_PROJECT) : null;
-    results.push({
-      name: 'visual-studio-workspace',
-      status: !workspace || (workspace.projects.length > 1 && !selected) ? 'warn' : selected ? 'pass' : 'fail',
-      message: workspace
-        ? `D365_VISUAL_STUDIO_WORKSPACE_DIR: ${workspaceDir}; canonical root: ${workspace.root}; membership: ${workspace.membershipSource}; solution: ${workspace.selectedSolution ?? 'none'}; project: ${selected?.path ?? 'selection required'}.`
-        : 'D365_VISUAL_STUDIO_WORKSPACE_DIR is not configured; only metadata-only offline writes can be previewed.',
-    });
+    // Without write tools an unset workspace is not a problem, so it is not reported.
+    if (workspace || writeTools) {
+      results.push({
+        name: 'visual-studio-workspace',
+        status: !workspace || (workspace.projects.length > 1 && !selected) ? 'warn' : selected ? 'pass' : 'fail',
+        message: workspace
+          ? `D365_VISUAL_STUDIO_WORKSPACE_DIR: ${workspaceDir}; canonical root: ${workspace.root}; membership: ${workspace.membershipSource}; solution: ${workspace.selectedSolution ?? 'none'}; project: ${selected?.path ?? 'selection required'}.`
+          : 'D365_VISUAL_STUDIO_WORKSPACE_DIR is not configured; only metadata-only offline writes can be previewed.',
+      });
+    }
     if (env.D365_TARGET_PROJECT && !selected) throw new Error('Configured target project was not found.');
     if (env.D365_TARGET_SOLUTION && !workspace) throw new Error('Configured target solution requires a workspace.');
     if (selected?.inspection === 'unsupported') {
@@ -267,31 +210,6 @@ const CONNECTION_SETTINGS: Readonly<Record<string, string>> = {
   apiKey: 'D365_HOSTED_API_KEY',
 };
 
-async function checkCustomMetadataDir(dir: string): Promise<CheckResult> {
-  const name = 'gateway-custom-dir';
-  try {
-    fs.accessSync(dir, fs.constants.R_OK | fs.constants.X_OK);
-    fs.readdirSync(dir);
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code ?? 'unknown error';
-    return { name, status: 'fail', message: `Custom metadata directory "${dir}" is not readable (${code}).` };
-  }
-  // The same walk the local index makes; the first hit is enough to show the layout is right.
-  const { scanPackagesDir } = await import('../indexer/scanner.js');
-  for await (const file of scanPackagesDir(dir)) {
-    return {
-      name,
-      status: 'pass',
-      message: `Readable: ${dir}; found ${file.type} ${file.name} in ${file.package}/${file.model}`,
-    };
-  }
-  return {
-    name,
-    status: 'warn',
-    message: `No D365 metadata XML found under "${dir}" (expected <Package>/<Model>/Ax<Type>/*.xml); the local index would be empty.`,
-  };
-}
-
 function checkLocalIndexPath(dbPath: string): CheckResult {
   const name = 'gateway-local-index';
   if (dbPath === ':memory:') {
@@ -329,6 +247,14 @@ function describeNetworkError(error: unknown, timeoutMs: number): string {
   return typeof code === 'string' && /^[A-Z][A-Z0-9_]{2,40}$/.test(code) ? `is unreachable (${code})` : 'is unreachable';
 }
 
+/**
+ * A server version fit to print. The server it came from may be hostile, so a value that is not a plain identifier
+ * (a control character could forge a result line) or is longer than a real version is left out, never cut.
+ */
+function plainVersion(value: unknown): string | null {
+  return typeof value === 'string' && /^[A-Za-z0-9._+-]{1,64}$/.test(value) ? value : null;
+}
+
 /** The unauthenticated /health of the hosted origin. `reachable` is false when no authenticated call can work either. */
 async function checkHostedHealth(origin: string, timeoutMs: number): Promise<{ result: CheckResult; reachable: boolean }> {
   const name = 'gateway-hosted-health';
@@ -344,7 +270,8 @@ async function checkHostedHealth(origin: string, timeoutMs: number): Promise<{ r
       return { result: { name, status: 'fail', message: `Hosted server at ${origin} answered /health with HTTP ${response.status}.` }, reachable: true };
     }
     const body = (await response.json().catch(() => null)) as { version?: unknown } | null;
-    const version = typeof body?.version === 'string' ? ` (version ${body.version.slice(0, 64)})` : '';
+    const shown = plainVersion(body?.version);
+    const version = shown === null ? '' : ` (version ${shown})`;
     return { result: { name, status: 'pass', message: `Hosted server at ${origin} is healthy${version}` }, reachable: true };
   } catch (error) {
     return {
@@ -381,10 +308,13 @@ async function checkHostedKey(
     const hostedVersion = session.serverVersion;
     if (hostedVersion !== null) {
       const { skew, message } = compareVersions(VERSION, hostedVersion);
+      const shown = plainVersion(hostedVersion);
       results.push({
         name: 'gateway-version',
         status: skew ? 'warn' : 'pass',
-        message: skew ? (message ?? 'Gateway and hosted server versions differ.') : `Gateway ${VERSION} matches hosted ${hostedVersion.slice(0, 64)} (major.minor)`,
+        message: skew
+          ? (message ?? 'Gateway and hosted server versions differ.')
+          : `Gateway ${VERSION} matches ${shown === null ? 'the hosted server' : `hosted ${shown}`} (major.minor)`,
       });
     }
     return results;
@@ -393,6 +323,151 @@ async function checkHostedKey(
     return [{ name, status: 'fail', message: error instanceof Error ? error.message : 'The hosted server could not be used.' }];
   } finally {
     await session.close();
+  }
+}
+
+/** The most of a hosted /status answer that is read: a real document is under 1 KiB. */
+const STATUS_MAX_BYTES = 64 * 1024;
+/** How long /status may take, whatever time the rest of the hosted checks are given: it is a courtesy check. */
+const STATUS_MAX_WAIT_MS = 5_000;
+
+/**
+ * A text field of a hosted /status answer. The server it came from may be old, new or hostile, so a value
+ * that is too long or is not a plain identifier counts as absent. It is never cut: a cut key would escape redaction.
+ */
+const statusText = (max: number) => z.string().max(max).regex(/^[A-Za-z0-9._:+-]+$/).nullish().catch(null);
+const statusTimestamp = z.string().max(40).regex(/^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/).nullish().catch(null);
+
+/** Only what `doctor` shows. Unknown fields are ignored, so a newer server can add to the document. */
+const hostedStatusSchema = z.object({
+  status: statusText(16),
+  server: z.object({ version: statusText(64) }).nullish().catch(null),
+  index: z.object({ applicationVersion: statusText(64), builtAt: statusTimestamp }).nullish().catch(null),
+  artifact: z.object({ bundleId: statusText(128) }).nullish().catch(null),
+});
+
+/** Reads at most `maxBytes` of a response body (decoded, so a compressed bomb counts too); null when there is more. */
+async function readCapped(response: Response, maxBytes: number): Promise<string | null> {
+  if (!response.body) return '';
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let received = 0;
+  let text = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) return text + decoder.decode();
+    received += value.byteLength;
+    if (received > maxBytes) {
+      await reader.cancel();
+      return null;
+    }
+    text += decoder.decode(value, { stream: true });
+  }
+}
+
+/**
+ * Where the hosted server's `/status` is, from the MCP URL the gateway was given: beside it, so `https://h/mcp`
+ * gives `https://h/status` and `https://h/d365/mcp` gives `https://h/d365/status`. Null when the path does not end
+ * in `/mcp`: nothing says where the server's other routes are, and the API key must go only where the user pointed
+ * the gateway, never to a root path that another application behind the same proxy may own.
+ */
+function hostedStatusUrl(hostedUrl: string): URL | null {
+  const url = new URL(hostedUrl);
+  const segments = url.pathname.replace(/\/$/, '').split('/');
+  if (segments.at(-1) !== 'mcp') return null;
+  segments[segments.length - 1] = 'status';
+  url.pathname = segments.join('/');
+  url.search = '';
+  url.hash = '';
+  return url;
+}
+
+/**
+ * Asks the hosted server which index it serves (`GET /status`, with the key that was just accepted) and compares
+ * its application version with `D365_APP_VERSION` when that is set. This check never fails: an older server
+ * without the route adds no result at all, and everything else that goes wrong is a warning with fixed wording.
+ * Redirects are not followed, which would carry the key to another host.
+ */
+async function checkHostedIndex(
+  settings: { hostedUrl: string; hostedApiKey: string; appVersion: string; upstreamTimeoutMs: number }
+): Promise<CheckResult[]> {
+  const name = 'gateway-hosted-index';
+  const statusUrl = hostedStatusUrl(settings.hostedUrl);
+  if (statusUrl === null) return [];
+  const origin = statusUrl.origin;
+  const warn = (message: string): CheckResult[] => [{ name, status: 'warn', message }];
+  const budget = Math.min(settings.upstreamTimeoutMs, STATUS_MAX_WAIT_MS);
+  try {
+    const response = await fetch(statusUrl, {
+      headers: { 'X-API-Key': settings.hostedApiKey, Accept: 'application/json' },
+      signal: AbortSignal.timeout(budget),
+      redirect: 'manual',
+    });
+    const status = response.status;
+    if (status === 404) {
+      await response.body?.cancel();
+      return [];
+    }
+    if (status >= 300 && status < 400) {
+      await response.body?.cancel();
+      return warn(`Hosted server at ${origin} answered /status with a redirect (HTTP ${status}); redirects are not followed.`);
+    }
+    if (status === 401 || status === 403) {
+      await response.body?.cancel();
+      return warn(`Hosted server at ${origin} answered /status with HTTP ${status} although the API key was accepted for /mcp.`);
+    }
+    if (!response.ok) {
+      await response.body?.cancel();
+      return warn(`Hosted server at ${origin} answered /status with HTTP ${status}; its index version is unknown.`);
+    }
+
+    const unreadable = `Hosted server at ${origin} answered /status with an unreadable document (not JSON, or larger than ${STATUS_MAX_BYTES} bytes); its index version is unknown.`;
+    if (!/^application\/json/i.test(response.headers.get('content-type') ?? '')) {
+      await response.body?.cancel();
+      return warn(unreadable);
+    }
+    const text = await readCapped(response, STATUS_MAX_BYTES);
+    if (text === null) return warn(unreadable);
+    let body: unknown;
+    try {
+      body = JSON.parse(text);
+    } catch {
+      return warn(unreadable);
+    }
+    const parsed = hostedStatusSchema.safeParse(body);
+    if (!parsed.success) return warn(unreadable);
+
+    const { status: reported, server, index, artifact } = parsed.data;
+    if (reported === 'starting') {
+      return warn(`Hosted server at ${origin} reports it is still starting; its index version is not known yet.`);
+    }
+    if (!index) {
+      return warn(`Hosted server at ${origin} answered /status without a readable index description; its index version is unknown.`);
+    }
+    const version = index.applicationVersion ?? null;
+    const facts =
+      `Hosted index: application version ${version ?? 'unknown'}, built ${index.builtAt ?? 'unknown'}; ` +
+      `${artifact?.bundleId ? `bundle ${artifact.bundleId}` : 'no artifact bundle'}; server ${server?.version ?? 'unknown'}`;
+    if (settings.appVersion === '') return [{ name, status: 'pass', message: facts }];
+
+    // The same classification the server uses for the session instructions: the declared version first, the index second.
+    const drift = classifySdkDrift(settings.appVersion, version);
+    switch (drift.code) {
+      case 'match':
+        return [{ name, status: 'pass', message: `${facts}. D365_APP_VERSION matches.` }];
+      case 'older-build':
+        return warn(`${facts}. D365_APP_VERSION ${drift.clientVersion} is an older release than the hosted index (${drift.indexVersion}); objects the hosted tools return may not exist in your environment.`);
+      case 'older-revision':
+        return warn(`${facts}. D365_APP_VERSION ${drift.clientVersion} is an older hotfix than the hosted index (${drift.indexVersion}); differences are usually small.`);
+      case 'client-newer':
+        return warn(`${facts}. D365_APP_VERSION ${drift.clientVersion} is newer than the hosted index (${drift.indexVersion}); elements added after the indexed version are not covered.`);
+      case 'client-unknown':
+        return [{ name, status: 'pass', message: `${facts}. D365_APP_VERSION is not a four-part version, so it was not compared.` }];
+      case 'index-unknown':
+        return [{ name, status: 'pass', message: `${facts}. The hosted index records no four-part application version, so D365_APP_VERSION was not compared.` }];
+    }
+  } catch (error) {
+    return warn(`Hosted server at ${origin} ${describeNetworkError(error, budget)} while reading /status.`);
   }
 }
 
@@ -427,7 +502,12 @@ export async function checkGateway(env: NodeJS.ProcessEnv): Promise<CheckResult[
   const health = await checkHostedHealth(origin, settings.upstreamTimeoutMs);
   results.push(health.result);
   if (health.reachable) {
-    results.push(...(await checkHostedKey(settings)));
+    const keyResults = await checkHostedKey(settings);
+    results.push(...keyResults);
+    // Only once the key is accepted: a server that refused it has nothing to tell, and the key was just proven good.
+    if (keyResults[0]?.name === 'gateway-hosted-key' && keyResults[0].status === 'pass') {
+      results.push(...(await checkHostedIndex(settings)));
+    }
   } else {
     results.push({ name: 'gateway-hosted-key', status: 'warn', message: 'Not checked: the hosted server is not ready.' });
   }
@@ -465,9 +545,53 @@ export async function runChecks(
   return results;
 }
 
-/** Runs all environment checks, prints a report, and returns the process exit code. */
+/**
+ * What to run next, judged from the results; the first rule that applies wins.
+ * Serve rules key on `packages-dir` and gateway rules on `gateway-config`, because a gateway-only machine
+ * gets a `serve-checks` pass in place of the serve checks. A warning blocks only when it names a missing
+ * index or a hosted server that is still starting.
+ */
+export function nextStep(
+  results: readonly CheckResult[],
+  env: NodeJS.ProcessEnv,
+  options: { envFileExists?: boolean } = {}
+): string | null {
+  const has = (name: string): boolean => results.some((r) => r.name === name);
+  const warned = (name: string): boolean => results.some((r) => r.name === name && r.status === 'warn');
+
+  if (!env.D365_PACKAGES_DIR?.trim() && !env.D365_HOSTED_MCP_URL?.trim()) {
+    // `setup` refuses to replace a .env, so it is no way forward for a folder that already has one.
+    return options.envFileExists
+      ? 'Next: set D365_PACKAGES_DIR in your .env file, or run `d365-fno-mcp-server setup --force` to write a new .env (it replaces the current one).'
+      : 'Next: run `d365-fno-mcp-server setup`.';
+  }
+  const failed = [...new Set(results.filter((r) => r.status === 'fail').map((r) => r.name))];
+  if (failed.length > 0) {
+    return `Next: fix the failed checks above (${failed.join(', ')}), then run \`d365-fno-mcp-server doctor\` again.`;
+  }
+  if (warned('gateway-hosted-health')) {
+    return 'Next: the hosted server is still starting; run `d365-fno-mcp-server doctor` again in a moment.';
+  }
+  if (warned('db-objects')) {
+    const gateway = has('gateway-config') ? ' The gateway needs no index and can start now.' : '';
+    return `Next: run \`d365-fno-mcp-server index\`, then \`d365-fno-mcp-server serve\`.${gateway}`;
+  }
+  if (has('packages-dir') && has('gateway-config')) {
+    return 'Next: run `d365-fno-mcp-server serve` (local index) or `d365-fno-mcp-server gateway` (hosted + custom models).';
+  }
+  if (has('packages-dir')) return 'Next: run `d365-fno-mcp-server serve`.';
+  if (has('gateway-config')) return 'Next: run `d365-fno-mcp-server gateway`.';
+  return null;
+}
+
+/**
+ * Runs all environment checks, prints a report, and returns the process exit code. It ends with a `Next:` line
+ * unless `showNext` is false, for a caller that prints its own closing step. `envFileExists` says whether the
+ * working folder already has a `.env` (looked up when not given), which changes the advice for an unconfigured machine.
+ */
 export async function doctorCommand(
-  env: NodeJS.ProcessEnv = process.env
+  env: NodeJS.ProcessEnv = process.env,
+  options: { showNext?: boolean; envFileExists?: boolean } = {}
 ): Promise<number> {
   const results = await runChecks(env);
   const icon = { pass: 'PASS', warn: 'WARN', fail: 'FAIL' } as const;
@@ -482,6 +606,11 @@ export async function doctorCommand(
   console.log(
     `\n${results.length} checks, ${failures.length} failed, ${warnings.length} warning(s).`
   );
+
+  if (options.showNext !== false) {
+    const next = nextStep(results, env, { envFileExists: options.envFileExists ?? fs.existsSync(path.resolve('.env')) });
+    if (next !== null) console.log(`\n${next}`);
+  }
 
   return failures.length > 0 ? 1 : 0;
 }

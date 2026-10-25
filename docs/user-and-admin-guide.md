@@ -68,6 +68,9 @@ the indexed design. Generators return previews; they do not write files.
 The [MCP tool catalog](../README.md#mcp-tools) lists the remaining tools.
 
 Check `get_index_stats` and `get_index_staleness` before relying on results.
+`get_index_stats` also reports the application version the index describes and, on a hosted
+server, the bundle it serves; operators can read the same with `GET /status` (see
+[Transport](../README.md#transport)).
 `find_usages` needs an imported compiler cross-reference snapshot:
 `get_usage_snapshot_status` distinguishes no snapshot from no matches.
 `find_references` is a structural alternative, not a compiler call graph.
@@ -132,9 +135,10 @@ are in [hosted deployment](hosted-deployment.md#operations).
 | --- | --- |
 | Client tools missing or unauthorized | Client MCP configuration and `X-API-Key`; Visual Studio may require enabling tools in Agent mode. |
 | Object or usage result missing | `get_index_stats`, `get_index_staleness`, `get_usage_snapshot_status`, then `index-status` or `index-xref`. |
+| Results do not match my SDK | `get_index_stats` or `GET /status` for the indexed application version, compared with your local SDK; the server compares the version you declare in `X-D365-Client-Sdk-Version`. |
 | Write tool missing or target rejected | `D365_ENABLE_WRITE_TOOLS`, model descriptor and `D365_WRITABLE_MODELS`; run `doctor`. |
 | Hosted server will not start | Verify the active database exists and passes candidate validation; inspect worker and API health logs. |
-| Hosted index stale or unavailable | Check the active pointer and bundle integrity with `artifact status --verify`, then server startup logs. |
+| Hosted index stale or unavailable | Check the active pointer and bundle integrity with `artifact status --verify`, `GET /status` for what a replica activated, then server startup logs. |
 | Too many sessions or requests | `MAX_CONCURRENT_SESSIONS`, `MAX_SESSIONS_PER_API_KEY`, `RATE_LIMIT_MAX_REQUESTS`, `RATE_LIMIT_WINDOW_MS`, and proxy settings. |
 
 See the [Visual Studio connection model](visual-studio-extension.md#connection-model)

@@ -25,7 +25,8 @@ A Model Context Protocol (MCP) server that gives AI coding assistants first-clas
 ## Prerequisites
 
 - Node.js **24 or higher**
-- A local D365 FnO `PackagesLocalDirectory` (or a copy of it)
+- A local D365 FnO `PackagesLocalDirectory` (or a copy of it), **or** a hosted server plus the folder
+  with your custom models (see [Hybrid gateway](docs/hybrid-gateway.md))
 
 ## Installation
 
@@ -48,20 +49,55 @@ The package is not published to npm yet, so `npx d365-fno-mcp-server` is not ava
 ## Quick start
 
 ```bash
-d365-fno-mcp-server setup     # interactively creates a .env file (generates an API key; --force replaces an existing one)
-d365-fno-mcp-server doctor    # validates config, packages dir, and DB access
-d365-fno-mcp-server index     # builds the SQLite index (first run takes a while)
-d365-fno-mcp-server serve     # starts the MCP server
+d365-fno-mcp-server setup
 ```
 
-Non-interactive setup, for scripts and CI:
+`setup` asks how you will use the server, checks each answer as you give it (and asks again when one is
+wrong), writes a `.env` file, and offers to run the next steps. The file gets owner-only permissions on macOS
+and Linux; on Windows it keeps the folder's access rules, so keep the project folder private, because the file
+holds your keys:
+
+1. **Build the index here from your `PackagesLocalDirectory`** (local). It asks for the packages
+   folder, an API key (leave blank to generate one), the index path, and whether to bind to this machine
+   only (`127.0.0.1`, the default), then offers to build the index and run the checks. Start the server
+   with `d365-fno-mcp-server serve`; it prints the MCP URL and a client entry to paste into your MCP
+   client. The key itself is never printed: it is in the `.env` file, and when `setup` generated it
+   `setup` says so.
+2. **Use a hosted server and index only your custom models** (hosted). It asks for the hosted MCP URL,
+   the hosted API key (typed, or read from a file) and the folder with your custom models, then offers
+   to run the checks. Start it with `d365-fno-mcp-server gateway` (see [Hybrid gateway](docs/hybrid-gateway.md)).
+
+Nothing is written if the input ends or you press Ctrl-C, and `setup` refuses to replace an existing
+`.env` unless you pass `--force`. You can run the steps it offers yourself at any time:
+
+```bash
+d365-fno-mcp-server doctor    # validates config, packages dir, and DB access, then says what to run next
+d365-fno-mcp-server index     # builds the SQLite index (first run takes a while; shows a live count in a terminal)
+d365-fno-mcp-server serve     # starts the MCP server and prints how to connect to it
+```
+
+Non-interactive setup, for scripts and CI (local):
 
 ```bash
 d365-fno-mcp-server setup --non-interactive \
   --packages-dir "K:/AosService/PackagesLocalDirectory" \
   --api-key "$(openssl rand -hex 32)" \
   --db-path ./d365_index.db \
+  --host 127.0.0.1 \
   --transport http
+```
+
+Without `--host` the server binds every interface; the interactive default is `127.0.0.1`, which keeps
+a local server off the network.
+
+Non-interactive setup for a hosted server with your custom models (prefer the key file: a key on the
+command line is visible in the process list):
+
+```bash
+d365-fno-mcp-server setup --non-interactive --mode hosted \
+  --hosted-url "https://<your-app>.azurewebsites.net/mcp" \
+  --hosted-api-key-file "$HOME/.d365/hosted-api-key" \
+  --custom-dir "/path/to/custom/metadata"
 ```
 
 ## Configuration
@@ -143,7 +179,8 @@ conditions and verifies each upload, so retries are safe and incomplete uploads 
 With `D365_ARTIFACT_SOURCE=azure-blob`, every API replica materializes the active bundle itself:
 
 1. The HTTP listener starts unready: `GET /health` answers `503 {"status":"starting"}` and MCP
-   requests get `503` until the index is open. `GET /live` answers `200` throughout.
+   requests get `503` until the index is open. `GET /live` answers `200` throughout, and an
+   authenticated `GET /status` answers `200` with `"status":"starting"` (see [Transport](#transport)).
 2. The replica reads `deployment-pointers.json` with its managed identity (grant it only
    **Storage Blob Data Reader** on the container) and pins that pointer revision and ETag.
 3. It removes interrupted downloads and superseded bundles from `D365_ARTIFACT_STORE_PATH`, checks
@@ -248,11 +285,21 @@ Commands:
       --dir <dir>            Models directory (default models/ at the package root)
   knowledge-check           Validate topic headers and cache topic vectors for the knowledge filter
       --kb-dir <dir>         Override the knowledge base resources directory
-  setup [--non-interactive] Create a .env configuration file
-      --packages-dir <dir>  D365 PackagesLocalDirectory path
-      --api-key <key>       MCP API key (>= 32 chars; generated when omitted)
-      --db-path <path>      SQLite index path (default ./d365_index.db)
-      --transport <mode>    http only (default http)
+  setup [--non-interactive] Create a .env configuration file. Interactive setup asks how you will use the
+                            server, checks each answer as you give it, and offers to build the index and run
+                            doctor. --mode and --force also apply to interactive setup and --db-path sets its
+                            default; the other flags below are read only with --non-interactive.
+      --mode <local|hosted> local (default): build the index here from PackagesLocalDirectory.
+                            hosted: use a hosted server and index only your custom models (run gateway)
+      --packages-dir <dir>  D365 PackagesLocalDirectory path (local)
+      --api-key <key>       MCP API key (>= 32 chars; generated when omitted) (local)
+      --db-path <path>      SQLite index path (default ./d365_index.db) (local)
+      --transport <mode>    http only (default http) (local)
+      --host <address>      Interface the server binds, for example 127.0.0.1 (local; default every interface)
+      --hosted-url <url>    Hosted MCP endpoint, https:// unless loopback (hosted)
+      --hosted-api-key-file <file>  File holding the hosted API key (hosted; preferred)
+      --hosted-api-key <key>        Hosted API key (hosted; visible in the process list, so prefer the file)
+      --custom-dir <dir>    Folder with your custom models (hosted)
       --force               Replace an existing .env
   artifact publish         Validate and idempotently upload a local bundle
       --bundle-dir <dir>   Validated local artifact bundle directory
@@ -447,6 +494,10 @@ production component allowed to build or promote an index. See
 [`docs/hosted-deployment.md`](docs/hosted-deployment.md) and the guided
 [`Azure resource plan`](docs/azure-resource-guide.md).
 
+A running server says what it is serving: ask `GET /status` with an API key, or call the
+`get_index_stats` tool. Both name the application version and build time of the index and, on a hosted
+server, the bundle it activated; see [Transport](#transport).
+
 ## Hybrid gateway (hosted standard index plus your custom code)
 
 The hosted server knows only standard Microsoft and ISV metadata, and uploads are removed, so an
@@ -502,7 +553,41 @@ Health check (no auth): `GET http://localhost:3000/health` → `{ "status": "ok"
 | --- | --- | --- |
 | `GET /health` | none | Readiness and server version: `503 {"status":"starting"}` while a hosted replica is still activating its artifact bundle, then `200`. |
 | `GET /live` | none | Liveness: `200` whenever the process is serving HTTP. |
+| `GET /status` | API key | What this server is serving: the index's application version and build time, the bundle a hosted server activated, the server version and the session counts. Answers `200` while a hosted replica is still starting. |
 | `POST`, `GET`, `DELETE /mcp` | API key | MCP Streamable HTTP endpoint. |
+
+`GET /status` tells an authenticated caller which index it is talking to:
+
+```bash
+curl -H "X-API-Key: your-api-key" http://localhost:3000/status
+```
+
+```json
+{
+  "status": "ok",
+  "you": { "keyName": "alice" },
+  "server": { "version": "0.1.0", "startedAt": "2026-10-25T08:00:00.000Z", "uptimeSeconds": 3600 },
+  "index": {
+    "applicationVersion": "10.0.2428.63", "applicationVersionSource": "packages-dir",
+    "builtAt": "2026-10-24T22:10:00.000Z", "schemaVersion": 3, "objects": 312044, "labels": 88120
+  },
+  "artifact": {
+    "source": "azure-blob", "bundleId": "sha256:…", "pointerRevision": 12,
+    "createdAt": "2026-10-24T21:40:00.000Z", "applicationVersion": "10.0.2428.63"
+  },
+  "sessions": { "active": 3, "max": 100, "maxPerKey": 0 }
+}
+```
+
+- `status` is `ok`, or `starting` while a hosted replica activates its bundle; `index` and `artifact` are then `null`.
+- `index.applicationVersion` is the version the session instructions state, written as four numbers, or `null` when it is unknown. `applicationVersionSource` says where it came from: the source recorded with the index (`packages-dir`), `configured` when the index records no version and this server's own `D365_APP_VERSION` supplied it, or `null`.
+- `artifact` is what a hosted server activated *at startup*, and `null` on a local server. A promote or rollback in the artifact store changes it only after the replica restarts.
+- `sessions.active` counts open and opening sessions, the number `MAX_CONCURRENT_SESSIONS` limits; `maxPerKey` is `0` when only that global limit applies.
+- The description of the index (version, build time and counts) is cached for 60 seconds, so `/status` and the response header can trail a change to the index by up to a minute; `get_index_stats` reads the index each time. Nothing in the document names a path, an environment variable or a secret, and `you.keyName` is the name of the key that asked, never the key.
+- `/status` spends the same per-IP rate-limit budget as `/mcp`. Probes belong on `/live` (liveness) and `/health` (readiness), which are not rate limited; ask `/status` only when you need the facts.
+- A server older than this feature answers `/status` with `404`.
+
+Once the server is ready, responses to authenticated requests also carry the indexed version in the `x-d365-index-version` header, when it is known. `/health`, `/live`, `/status` while starting and refused requests (`401`, `429`) carry none.
 
 ## Indexing
 
@@ -518,7 +603,7 @@ Health check (no auth): `GET http://localhost:3000/health` → `{ "status": "ok"
 - **Pruning** — entries whose source files no longer exist (deleted or renamed objects) are removed at the end of a full pass, along with their cross-references and labels.
 - **Collisions** — when two files declare the same object name, the collision is counted and reported so duplicate/overlayed metadata is visible rather than silently overwritten.
 
-Index statistics are also available at runtime through the `get_index_stats` tool.
+Index statistics are also available at runtime through the `get_index_stats` tool, which also reports the application version the index describes and, on a hosted server, the bundle it activated.
 
 ## SDK version warnings
 
@@ -550,6 +635,12 @@ The result is sent as the MCP `instructions` at session start:
 Nothing is ever blocked: exploring newer metadata while planning an upgrade is a legitimate use.
 Versions must be four-part (`major.minor.build.revision`); a three-part marketing version such as
 `10.0.39` is reported as undeclared rather than guessed at.
+
+Once it is ready, the server also tells authenticated callers which version its index describes in
+the `x-d365-index-version` response header: four numbers, left out when the version is unknown, and
+never sent to a caller without a valid key. `GET /status` and `get_index_stats` report the same
+version (`/status` and the header can trail a change to the index by up to a minute); see
+[Transport](#transport).
 
 ## MCP tools
 
@@ -874,6 +965,7 @@ database. Set `D365_RUN_SQL_INTEGRATION=1` and `D365_XREF_CONNECTION_STRING`, th
 | `index` logs `Pruning skipped` and deleted objects stay in the index | The scan overlapped less than half of the objects already indexed, usually a wrong or partly mounted `D365_PACKAGES_DIR`. Fix the path; set `D365_BYPASS_PRUNE_GUARD=1` only for an intended large deletion. |
 | `index-xref` says the `mssql` or `msnodesqlv8` driver is missing | Install it where the CLI is installed: `npm install mssql`, and for Windows sign-in also `npm install msnodesqlv8` plus ODBC Driver 17 or 18. |
 | `get_element_xml` cannot read the source file | The index was built with `D365_INDEX_STORE_RAW_XML=0` and the file has moved, or the index is served from an artifact bundle. Rebuild with raw XML stored. |
+| Not sure which index a server is serving | Call `GET /status` or the `get_index_stats` tool: application version, build time and, on a hosted server, the bundle. A server older than this feature answers `/status` with `404`. |
 | Anything else | Run `d365-fno-mcp-server doctor`; it checks configuration, paths and index access. |
 
 ## License

@@ -176,16 +176,13 @@ export async function run(argv: string[]): Promise<CliResult> {
       return { code: await knowledgeCheckCommand({ kbDir: flagString(flags, 'kb-dir') }) };
     }
     case 'setup': {
-      const { setupCommand } = await import('./cli/setup.js');
-      const code = await setupCommand({
-        nonInteractive: flags['non-interactive'] === true || flags['non-interactive'] === 'true',
-        packagesDir: flagString(flags, 'packages-dir'),
-        apiKey: flagString(flags, 'api-key'),
-        dbPath: flagString(flags, 'db-path'),
-        transport: flagString(flags, 'transport'),
-        force: flagBool(flags, 'force'),
-      });
-      return { code };
+      const { parseSetupFlags, setupCommand } = await import('./cli/setup.js');
+      const parsed = parseSetupFlags(flags);
+      if ('error' in parsed) {
+        console.error(parsed.error);
+        return { code: 1 };
+      }
+      return { code: await setupCommand(parsed.options) };
     }
     case 'artifact': {
       const { artifactCommand } = await import('./cli/artifact-command.js');

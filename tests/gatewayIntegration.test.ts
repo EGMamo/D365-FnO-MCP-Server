@@ -14,6 +14,7 @@ import { LOCAL_ONLY_TOOL_NAMES } from '../src/gateway/router.js';
 import { gatewayHostHeaders, launchGateway, type RunningGateway } from '../src/gateway/server.js';
 import type { Database } from '../src/indexer/db.js';
 import { createHttpApp } from '../src/server/httpTransport.js';
+import type { ArtifactDescription } from '../src/server/serverStatus.js';
 import { registerCodeQualityTools } from '../src/tools/codeQuality.js';
 import { registerEntityTools } from '../src/tools/entities.js';
 import { registerGeneratorTools } from '../src/tools/generators.js';
@@ -188,10 +189,19 @@ function writeCustomFile(customDir: string, relative: string, content: string): 
 // The hosted stand-in.
 // ---------------------------------------------------------------------------------------------------
 
+/** The bundle the hosted stand-in says it was activated from, as a hosted server reports it in get_index_stats. */
+const HOSTED_ARTIFACT: ArtifactDescription = {
+  source: 'azure-blob',
+  bundleId: `sha256:${'cd'.repeat(32)}`,
+  pointerRevision: 3,
+  createdAt: '2026-10-24T21:40:00.000Z',
+  applicationVersion: '10.0.2428.63',
+};
+
 /** The real tools, registered against the standard index like the hosted server does. */
 function createHostedServer(db: Database): McpServer {
   const server = new McpServer({ name: 'd365-fno-mcp', version: VERSION }, { instructions: HOSTED_INSTRUCTIONS });
-  registerMetadataTools(server, db);
+  registerMetadataTools(server, db, { configuredApplicationVersion: '10.0.2428.63', artifact: HOSTED_ARTIFACT });
   registerLabelsTools(server, db);
   registerSecurityTools(server, db);
   registerEntityTools(server, db);
@@ -667,6 +677,27 @@ describe('gateway with the hosted server up', () => {
       body: TOOLS_LIST_BODY,
     });
     expect(authenticated.status).toBe(400);
+    expect(hosted.requests.length).toBe(mark);
+  }, TEST_TIMEOUT_MS);
+
+  it('forwards get_index_stats as the hosted server answers it, with the application version and the bundle', async () => {
+    const { call } = stack();
+
+    const stats = payloadOf<Record<string, unknown>>(await call('get_index_stats'));
+
+    expect(stats).toMatchObject({ applicationVersion: '10.0.2428.63', applicationVersionSource: 'configured', artifact: HOSTED_ARTIFACT });
+  }, TEST_TIMEOUT_MS);
+
+  it('has no /status of its own: the hosted server describes the hosted index, local_index_status the custom one', async () => {
+    const { gateway, hosted } = stack();
+    const mark = hosted.requests.length;
+    const { port } = new URL(gateway.url);
+
+    const authenticated = await rawRequest(`http://127.0.0.1:${port}/status`, { headers: { Authorization: `Bearer ${GATEWAY_TOKEN}` } });
+    const anonymous = await rawRequest(`http://127.0.0.1:${port}/status`);
+
+    expect(authenticated.status).toBe(404);
+    expect(anonymous.status).toBe(401);
     expect(hosted.requests.length).toBe(mark);
   }, TEST_TIMEOUT_MS);
 

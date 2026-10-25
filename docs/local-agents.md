@@ -161,8 +161,8 @@ If your Visual Studio version doesn't support custom agent files yet, paste the 
   latest trace". Claude Code can also pick it from the description. `/agents` lists the agents,
   and `claude --agent xpp-developer` starts a whole session as that agent.
 
-Check the connection first: ask for `get_index_stats`. It should report your object counts and
-build time. Through the gateway that is the hosted index's report; ask for `local_index_status` to
+Check the connection first: ask for `get_index_stats`. It should report your object counts, build
+time and the application version the index describes (compare it with your local SDK). Through the gateway that is the hosted index's report; ask for `local_index_status` to
 see the custom index and the hosted connection.
 
 ## Customize
