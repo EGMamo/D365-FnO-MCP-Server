@@ -439,22 +439,31 @@ describe('openLocalIndex', () => {
   });
 
   describe('watcher', () => {
-    it('marks the index dirty when an AOT file changes', async () => {
+    it('marks the index dirty when an AOT watcher event arrives', async () => {
       writeTable('CustTable');
       const index = await open();
       expect(index.status().dirty).toBe(false);
 
+      const fake = Object.assign(new EventEmitter(), { close: vi.fn(), unref: vi.fn() });
+      let onChange: fs.WatchListener<string> | undefined;
+      const watch = (
+        _filename: fs.PathLike,
+        _options: fs.WatchOptions,
+        listener: fs.WatchListener<string>,
+      ): fs.FSWatcher => {
+        onChange = listener;
+        return fake as unknown as fs.FSWatcher;
+      };
+      vi.spyOn(fs, 'watch').mockImplementation(watch as typeof fs.watch);
       index.startWatcher();
       expect(index.status().watcher).toBe('active');
 
-      // Give the OS watcher a brief moment to arm before the write.
-      await new Promise((resolve) => setTimeout(resolve, 50));
-
       writeTable('WatchedTable');
-      await vi.waitFor(() => expect(index.status().dirty).toBe(true), { timeout: 10_000 });
+      onChange?.('rename', 'WatchedTable.xml');
+      expect(index.status().dirty).toBe(true);
       await index.ensureFresh();
       expect(hasTable(index, 'WatchedTable')).toBe(true);
-    }, 15_000);
+    });
 
     it('falls back to the TTL when the watcher cannot start', async () => {
       writeTable('CustTable');
