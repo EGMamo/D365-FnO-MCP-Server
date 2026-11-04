@@ -1,6 +1,6 @@
 # Production readiness and implementation evidence
 
-Updated: 2026-10-10. The goal remains an operationally reliable, feature-complete, grounded
+Updated: 2026-10-30. The goal remains an operationally reliable, feature-complete, grounded
 D365 FnO code-intelligence server. **The full goal is not yet verified or complete.**
 The feature and performance scope remains [Phases 8–13](plan-performance-features-intelligence.md);
 the completed changes below do not replace that scope.
@@ -12,9 +12,10 @@ Linux/Windows CI, Azure deployment, container, or Visual Studio extension were t
 
 | Gate | Current evidence |
 |---|---|
-| Full validation | `npm run check` on macOS, Node 26.8.1, with local port binding enabled: typecheck, lint, build, knowledge headers (26 topics) and tests passed; 680 tests passed, 4 skipped, 46 passing test files and 1 skipped file (2026-10-10, after the changes listed below); a later run with the embedding model installed: 683 passed, 1 skipped (the opt-in DynamicsXrefDB test). Re-run 2026-10-17 on Linux, Node 24.22.0, without the embedding model: 1,155 passed, 5 skipped, 58 passing test files and 1 skipped file |
+| Full validation | Most recent: `npm run check` on macOS, Node 24.22.1, with local port binding enabled (2026-10-30): typecheck, lint, build, knowledge headers and tests passed; 1,234 tests passed, 1 skipped, 62 test files passed and 1 skipped. Earlier runs: 680 passed, 4 skipped on 2026-10-10; 683 passed, 1 skipped with the embedding model installed; 1,155 passed, 5 skipped on Linux, Node 24.22.0, on 2026-10-17 |
+| Dependency audit | `npm ci`, `npm audit`, and `npm audit --omit=dev` on 2026-10-30: 0 vulnerabilities reported by each audit |
 | Compiled protocol | `npm run check` includes the compiled-server tests in `tests/mcpIntegration.test.ts` (real child processes and SDK clients over HTTP, occupied-port startup failure, hosted-mode startup); they passed in this run |
-| Knowledge headers | All 26 topic headers valid; embedding model absent, so runtime guidance uses topic rules |
+| Knowledge headers | All 26 topic headers valid; topic vectors generated from the installed embedding model during the latest check |
 | Startup failure | An occupied TCP port returns exit code 1 in both local and hosted modes, without logging successful listening/readiness |
 | Metadata grounding | Differently cased names return table references, derived classes, method signatures, and compiler usage locations in local indexes, current read-only snapshots, and read-only snapshots lacking the new indexes |
 | Security grounding | Role extensions, cycles, privileges, entry points, and segregation-of-duties rules retain their meaning across input/reference casing differences |
@@ -155,7 +156,7 @@ it does not establish full-SDK, disk-backed, concurrent, or end-to-end tool late
 
 | Requirement | What remains |
 |---|---|
-| Dependency security | Resolved 2026-10-17: `tedious` 20.3.7 (via `mssql`/`@types/mssql`) no longer depends on `sprintf-js` (GHSA-hp3w-g68c-fv3c); `npm audit` reports 0 vulnerabilities. CI keeps gating runtime dependencies on high/critical, and Dependabot covers new advisories. |
+| Dependency security | The 2026-10-30 lockfile refresh resolved the current transitive advisories: `@azure/identity` 4.14.1 / `@azure/msal-node` 7.1.2 (GHSA-xcx6-jx8p-x3h5), `body-parser` 2.4.0 (GHSA-27r3-jxmh-p828), `@hono/node-server` 2.1.5 (GHSA-rmxm-3fg6-px4f), `fast-uri` 3.1.9 (GHSA-w74x-v6f9-j3xg, GHSA-xhq7-xmqj-769h, GHSA-wjr9-j795-jxcr, GHSA-333x-w4r6-6crp), `ip-address` 10.7.5 (GHSA-rxp7-6hxx-x8q5), and `qs` 6.17.1 (GHSA-6pq8-jhm2-2vcw). Both full and production-only npm audits report 0 vulnerabilities. The earlier `tedious` 20.3.7 fix for GHSA-hp3w-g68c-fv3c remains in place. CI keeps gating runtime dependencies on high/critical, and Dependabot covers new advisories. |
 | Deployment | Run Linux/Windows Node 24 CI, container smoke tests, infrastructure checks, and staged hosted startup/rollback under the actual deployment identity. |
 | Live integrations | Run the opt-in read-only DynamicsXrefDB contract against an authorized development database; validate generated X++ through the Finance Operations compiler. |
 | Semantic guidance | Install the configured embedding model and run the three skipped semantic tests plus a representative relevance evaluation. Header validation alone is insufficient. |
