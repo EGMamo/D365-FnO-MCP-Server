@@ -52,29 +52,29 @@
     "bench": "npm run build && node scripts/bench.mjs"
   },
   "dependencies": {
-    "@azure/identity": "^4.14.0",
+    "@azure/identity": "^4.14.1",
     "@azure/storage-blob": "^12.34.0",
     "@huggingface/tokenizers": "^0.2.0",
-    "@modelcontextprotocol/sdk": "^1.32.1",
-    "dotenv": "^18.0.8",
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "dotenv": "^18.0.9",
     "express": "^5.3.0",
-    "express-rate-limit": "^8.7.1",
+    "express-rate-limit": "^8.7.2",
     "fast-xml-parser": "^5.11.2",
     "glob": "^13.0.6",
-    "onnxruntime-web": "^1.30.0",
+    "onnxruntime-web": "^1.31.1",
     "yaml": "^2.9.1",
     "zod": "^4.6.7"
   },
   "optionalDependencies": {
-    "mssql": "^12.7.10"
+    "mssql": "^12.7.13"
   },
   "devDependencies": {
     "@types/express": "^5.0.6",
     "@types/mssql": "^12.3.0",
-    "@types/node": "^26.6.5",
-    "@typescript-eslint/eslint-plugin": "^8.71.2",
+    "@types/node": "^26.6.6",
+    "@typescript-eslint/eslint-plugin": "^8.72.1",
     "@typescript-eslint/parser": "^8.71.0",
-    "eslint": "^10.13.0",
+    "eslint": "^10.14.0",
     "tsx": "^4.23.15",
     "typescript": "^5.5.0",
     "vitest": "^5.0.5"
