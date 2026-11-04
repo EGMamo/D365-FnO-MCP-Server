@@ -109,7 +109,11 @@ extracted SDK per version under `F:\worker\cache\<version>\PackagesLocalDirector
 unchanged version downloads nothing, and writes `sources.json` with each file's size and SHA-256.
 `prepare-bundle` indexes that SDK and writes the bundle options with that provenance. Nothing needs
 PAC, RDP or a signed-in user. The cross-reference backup is recorded but not imported: restoring it
-needs a SQL Server the worker does not have, so bundles carry no XRef usages yet.
+needs a SQL Server the worker does not have, so hosted bundles carry no XRef usages. This is an
+intentional deployment boundary: the worker does not provision a SQL Server or restore the backup.
+The hosted `get_usage_snapshot_status` tool therefore reports `not-imported`; an empty
+`find_usages` result does not prove that an object is unused. Local operators can still restore the
+backup to a SQL Server and run `index-xref` against it when they build their own index.
 
 `PrepareWorker -LogLevel <level>` (or `-Verbose`, `-Debug`) adds `-LogLevel <level>` to the acquire
 step's `args` and an `env` with the matching `MCP_LOG_LEVEL` (`ERROR`, `WARN`, `INFO`, or `DEBUG` for

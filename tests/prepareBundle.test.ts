@@ -14,6 +14,7 @@ import {
 } from '../src/indexer/acquisitionWorker.js';
 import { DEFAULT_REQUIRED_CAPABILITIES } from '../src/indexer/capabilityCoverage.js';
 import { INDEX_SCHEMA_VERSION, openDbReadOnly } from '../src/indexer/db.js';
+import { getUsageSnapshotStatus } from '../src/indexer/xrefUsage.js';
 import { prepareArtifactBackedIndex } from '../src/server/artifactStartup.js';
 import { VERSION } from '../src/version.js';
 
@@ -157,6 +158,7 @@ describe('prepare-bundle', () => {
     const paths = bundled.prepare('SELECT file_path FROM ax_objects').all() as { file_path: string }[];
     const labels = bundled.prepare('SELECT label_id, source_file FROM ax_labels').all() as { source_file: string }[];
     const labelSources = bundled.prepare('SELECT source_file FROM ax_label_sources').all() as { source_file: string }[];
+    const usageStatus = getUsageSnapshotStatus(bundled);
     const labelPathIndex = bundled.prepare(`SELECT 1 FROM sqlite_master WHERE name = 'idx_ax_labels_source_file'`).get();
     const journalMode = bundled.prepare('PRAGMA journal_mode').get() as { journal_mode: string };
     bundled.close();
@@ -164,6 +166,7 @@ describe('prepare-bundle', () => {
     // Label rows drop their build-only file path; the per-file sources keep a relative one.
     expect(labels).toHaveLength(2);
     expect(labels.every((row) => row.source_file === '')).toBe(true);
+    expect(usageStatus).toMatchObject({ status: 'not-imported' });
     expect(labelPathIndex).toBeUndefined();
     expect(labelSources.length).toBeGreaterThan(0);
     expect(labelSources.every((row) => row.source_file.startsWith(`TestPackage${path.sep}`))).toBe(true);

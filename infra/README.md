@@ -301,8 +301,10 @@ Two things only you can do, before `PrepareWorker`:
   Application users). Give it Basic User; if `PrepareWorker` reports a missing privilege, add it
   through a custom role. Avoid System Administrator, because code on the worker can read this
   secret.
-- Decide how to import the cross-reference (XRef) data. The worker downloads and hashes the
-  backup for provenance, but restoring it needs a SQL Server, so bundles have no XRef usages yet.
+- Hosted XRef import is not currently provisioned. The worker downloads and hashes the backup for
+  provenance, but does not provision SQL Server to restore it, so hosted bundles have no compiler
+  usage data; the hosted usage-status tool reports `not-imported`. This does not affect local
+  `index-xref` imports from a SQL Server where the backup has been restored.
 
 ## Validation
 
