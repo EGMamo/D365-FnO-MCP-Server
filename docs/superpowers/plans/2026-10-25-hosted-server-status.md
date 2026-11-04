@@ -178,5 +178,12 @@ Considered and left: a failing index read is not cached, so each authenticated r
 throws at once, and the index is read-only after activation); `builtAt` and `applicationVersionSource` are served as the
 index records them, and the bundle checksum vouches for the index.
 
-Not verifiable here: the Azure Blob activation path (its mapping is unit-tested; it cannot be spawned), a real hosted
-deployment, and Windows.
+Verified later against real Azure (2026-11-02, a throwaway storage account, deleted afterwards): the Azure Blob
+activation path. A bundle published and promoted with the `artifact` commands was activated by `serve` with
+`D365_ARTIFACT_SOURCE=azure-blob`; `/status` and `get_index_stats` reported `source: "azure-blob"`, the bundle id and
+the pointer revision; the header carried the application version; the gateway `doctor` read it and warned on an older
+`D365_APP_VERSION`. A second promotion changed nothing on the running server until it restarted (the documented
+behaviour), a stale promotion was refused, and a rollback took effect on the next restart.
+
+Not verified: an App Service deployment (managed identity, Key Vault references, private endpoints, the worker), and
+Windows.
