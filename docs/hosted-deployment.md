@@ -188,6 +188,26 @@ The answer names the application version and build time of the index, the bundle
 revision and creation time of the bundle this replica activated at startup, and the server version.
 It answers while a replica is still starting. See [Transport](../README.md#transport) for the fields.
 
+## Deploy from setup
+
+`d365-fno-mcp-server setup`, answered **Hosted**, then **No: deploy one now** (or
+`setup --mode hosted --deploy`), walks through a first deployment from a clone of this repository:
+
+1. It checks the Azure CLI, PowerShell 7 and the GitHub CLI, and that you are signed in to Azure and GitHub. It
+   never signs in for you.
+2. It asks for the subscription, region, environment name, resource group, cost profile (`cheapest` about $290 a
+   month, `standard` about $470, the worker VM included), an alert email, the Dataverse URL of the environment linked
+   to Finance and Operations, the worker app registration's application ID, the GitHub repository, and the name of
+   your own developer key.
+3. It shows all of it and deploys only after you confirm. Then it runs `scripts/azure-deploy.ps1` and
+   `scripts/azure-post-deploy.ps1 -SmokeKeyOnly`; PowerShell asks for the worker VM password and the worker app
+   secret itself. The worker pulls the sources from Dataverse and builds the standard index: nothing is indexed
+   from a local `PackagesLocalDirectory`.
+4. It waits for `/health`, gives you Storage Blob Data Contributor on the `d365-keys` container, makes the admin key
+   (shown once) and your developer key, and writes your `.env` as for an already deployed server.
+
+A failed step stops the walkthrough and prints the script command to resume from it.
+
 ## Developer keys
 
 Developers never create keys. The operator does, on the server itself, with the **admin key**; there is no

@@ -22,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A deploy walkthrough: `setup`, answered Hosted and "deploy one now" (`--mode hosted --deploy`), checks the tools
+  and sign-ins, asks what to deploy, and after one confirmation runs `azure-deploy.ps1` and
+  `azure-post-deploy.ps1 -SmokeKeyOnly` (new: only the deploy smoke key goes into the vault), waits for the
+  server, makes the admin key and the deployer's developer key, and writes the `.env`. Operator package only.
 - Developer keys managed on the server, with no Microsoft sign-in: an admin key (`adm_…`, made with
   `keys reset-admin`) creates and revokes developer keys through `https://<server>/admin` or
   `d365-fno-mcp-server keys new|list|revoke --server <url>`. The key registry (`MCP_KEY_REGISTRY=file` or

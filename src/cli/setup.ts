@@ -389,7 +389,13 @@ async function collectHostedInteractive(
   const deployed = options.deploy ? false : options.hostedUrl !== undefined ? true : await askDeployed(prompt, output);
   if (!deployed) {
     if (!edition.deploy) fail(deployNeedsOperatorMessage());
-    const plan = await edition.deploy.ask(prompt, output);
+    let plan: DeployPlan | null;
+    try {
+      plan = await edition.deploy.ask(prompt, output);
+    } catch (error) {
+      if (error instanceof PromptEndedError) throw error;
+      fail(error instanceof Error ? error.message : String(error));
+    }
     if (plan === null) return null;
     const customDir = await askCustomDir(prompt, cwd);
     const runChecks = await askYesNo(prompt, 'Run the checks once it is deployed?', true);

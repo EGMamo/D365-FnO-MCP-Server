@@ -290,7 +290,11 @@ Commands:
       --hosted-url <url>    Hosted MCP endpoint, https:// unless loopback (hosted, already deployed)
       --hosted-api-key-file <file>  File holding your developer key (hosted; preferred)
       --hosted-api-key <key>        Your developer key (hosted; visible in the process list, so prefer the file)
-      --deploy              Deploy a new hosted server on Azure first (hosted)
+      --deploy              Deploy a new hosted server on Azure first (hosted; run from a clone of the repository,
+                            with the Azure CLI, PowerShell 7 and the GitHub CLI signed in). With --non-interactive
+                            it needs --yes, --environment-name, --dataverse-url and --worker-application-id, and
+                            takes --subscription-id, --location, --resource-group, --cost-profile, --alert-email,
+                            --repository and --developer-name
       --force               Replace an existing .env
   keys new <name>           Create a developer key on a hosted server, shown once, and print the command the
                             developer runs. Uses the server's admin key (D365_MCP_ADMIN_KEY or --admin-key-file)

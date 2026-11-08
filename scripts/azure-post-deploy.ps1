@@ -12,7 +12,8 @@
     Steps, in the order -Step All runs them:
       PauseScheduler    Disable the Logic App so no scheduled run fires on an unprepared worker
                         (new environments are created with it disabled).
-      SeedApiKeys       Generate two API keys and store MCP_API_KEYS in the API vault.
+      SeedApiKeys       Generate two API keys and store MCP_API_KEYS in the API vault (with -SmokeKeyOnly,
+                        only the deploy smoke key: developer keys then come from the key registry).
       SeedWorkerSecret  Store the Power Platform client secret in the worker vault (prompted).
       SetupWorker       Start the VM; data disk, Node.js 24, AzCopy, worker build, helpers.
       PrepareWorker     Prove the worker can reach Dataverse and the X++ SDK downloads, then write
@@ -107,6 +108,10 @@ param(
     # Name of the client entry in MCP_API_KEYS (the deploy smoke test gets 'ci-smoke').
     [ValidatePattern('^[A-Za-z0-9._-]+$')]
     [string]$ClientKeyName = 'vs-client',
+
+    # SeedApiKeys stores only the deploy smoke key (ci-smoke). Developer keys are then created on the server
+    # with its admin key (d365-fno-mcp-server keys new), never as fixed keys in the vault.
+    [switch]$SmokeKeyOnly,
 
     # GitHub repository the worker build comes from and the Deploy workflow runs in. Defaults to the
     # GitHub repository of this clone's 'origin' remote.
@@ -427,8 +432,15 @@ function Step-SeedApiKeys {
     Write-Debug "Existing '$ApiKeysSecretName' count: '$exists' (az exit $LASTEXITCODE; empty when you cannot list the vault yet)."
     if ($exists -eq '1') { Confirm-Continue "'$ApiKeysSecretName' already exists. Replace it with new keys?" }
 
-    $clientKey = New-ApiKey
     $script:SmokeKey = New-ApiKey
+    if ($SmokeKeyOnly) {
+        Write-Info 'Storing only the deploy smoke key; developer keys come from the key registry (keys new).'
+        Invoke-WithVaultAccess $ApiVault {
+            Set-VaultSecret $ApiVault $ApiKeysSecretName "ci-smoke=$($script:SmokeKey)"
+        }
+        return
+    }
+    $clientKey = New-ApiKey
     Set-ClipboardForSaving "$ClientKeyName (client)" $clientKey
     Set-ClipboardForSaving 'ci-smoke (deploy smoke test)' $script:SmokeKey
 
@@ -824,7 +836,8 @@ function Step-Deploy {
     Write-Verbose "gh run watch $runId --repo $Repository --exit-status"
     & gh run watch $runId --repo $Repository --exit-status
     if ($LASTEXITCODE -ne 0) { throw 'The Deploy workflow failed; see the run log on GitHub.' }
-    Write-Info "Deployed. Connect clients to https://$WebAppHost/mcp with the $ClientKeyName key."
+    if ($SmokeKeyOnly) { Write-Info "Deployed. Create developer keys with: d365-fno-mcp-server keys new <name> --server https://$WebAppHost" }
+    else { Write-Info "Deployed. Connect clients to https://$WebAppHost/mcp with the $ClientKeyName key." }
 }
 
 # -- Main ---------------------------------------------------------------------------------------

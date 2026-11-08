@@ -181,7 +181,8 @@ export async function run(argv: string[]): Promise<CliResult> {
         console.error(parsed.error);
         return { code: 1 };
       }
-      return { code: await setupCommand({ ...parsed.options, edition: { bin: 'd365-fno-mcp-server' } }) };
+      const { createDeployRunner } = await import('./cli/deploy.js');
+      return { code: await setupCommand({ ...parsed.options, edition: { bin: 'd365-fno-mcp-server', deploy: createDeployRunner() } }) };
     }
     case 'keys': {
       const { keysCommand } = await import('./cli/keys.js');
