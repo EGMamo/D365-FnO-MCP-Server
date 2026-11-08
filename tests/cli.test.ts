@@ -84,12 +84,12 @@ describe('CLI', () => {
     expect(res.code).toBe(0);
   }, 120_000);
 
-  it('doctor says to build the index when nothing is indexed yet', async () => {
+  it('doctor says where an index for serve comes from when nothing is indexed yet', async () => {
     // Its own database, so the answer does not depend on which other tests have run.
     const res = await runCli(['doctor'], { ...baseEnv, D365_INDEX_DB_PATH: path.join(workDir, 'unindexed.db') }, workDir);
     expect(res.code).toBe(0);
     expect(res.stdout).toContain('[WARN] db-objects');
-    expect(res.stdout).toContain('Next: run `d365-fno-mcp-server index`');
+    expect(res.stdout).toContain('Next: point D365_INDEX_DB_PATH at an index built by the hosted worker');
   }, 120_000);
 
   it('doctor points a machine with nothing configured at setup', async () => {
@@ -136,108 +136,55 @@ describe('CLI', () => {
     expect(res.stdout).toContain('[PASS] api-keys: 2 API key(s) configured: alice, bob');
   }, 120_000);
 
-  it('index --force reparses objects without deleting compiler usage data', async () => {
-    const { openDb } = await import('../src/indexer/db.js');
-    const { findUsageRefs } = await import('../src/indexer/xrefUsage.js');
-    const { seedLegacyUsageRefs } = await import('./helpers/usageRefs.js');
-    const seeded = openDb(dbPath);
-    seedLegacyUsageRefs(seeded, [{
-      sourceType: 'Class', sourceName: 'Caller', targetName: 'Target',
-      referenceKind: 'Call', sourceTable: 'References', raw: {},
-    }]);
-    seeded.close();
-    const res = await runCli(['index', '--force'], baseEnv, workDir);
-    expect(res.code).toBe(0);
-    expect(res.stdout).toContain('Indexing complete');
-    // stdout is a pipe here, so no progress counter (carriage returns, escape codes) is drawn.
-    expect(res.stdout).not.toMatch(/[\r\x1b]/);
-    expect(fs.existsSync(dbPath)).toBe(true);
-
-    const db = openDb(dbPath);
-    const count = db.prepare('SELECT COUNT(*) as c FROM ax_objects').get() as { c: number };
-    expect(findUsageRefs(db, 'Target')).toHaveLength(1);
-    db.close();
-    expect(count.c).toBeGreaterThanOrEqual(3);
+  it('index refuses: full local indexes are no longer supported', async () => {
+    const untouched = path.join(workDir, 'never-built.db');
+    const res = await runCli(['index', '--force'], { ...baseEnv, D365_INDEX_DB_PATH: untouched }, workDir);
+    expect(res.code).toBe(1);
+    expect(res.stderr).toContain('Full local indexes are no longer supported. Local mode indexes only your custom models (setup --mode local)');
+    expect(fs.existsSync(untouched)).toBe(false);
   }, 120_000);
 
   it('doctor on a healthy, indexed machine has no warnings and says to serve', async () => {
-    const healthyEnv = { ...baseEnv, D365_INDEX_DB_PATH: path.join(workDir, 'healthy.db') };
-    expect((await runCli(['index'], healthyEnv, workDir)).code).toBe(0);
-    const res = await runCli(['doctor'], healthyEnv, workDir);
+    const healthy = path.join(workDir, 'healthy.db');
+    const { runIndexPass } = await import('../src/cli/index-command.js');
+    await runIndexPass(packagesDir, healthy, false);
+    const res = await runCli(['doctor'], { ...baseEnv, D365_INDEX_DB_PATH: healthy }, workDir);
     expect(res.code).toBe(0);
     expect(res.stdout).toContain('0 failed, 0 warning(s)');
     expect(res.stdout).toContain('Next: run `d365-fno-mcp-server serve`');
     expect(res.stdout).not.toContain('workspace-capabilities');
   }, 120_000);
 
-  it('does not delete a damaged DB even with --force', async () => {
-    const damaged = path.join(workDir, 'damaged.db');
-    fs.writeFileSync(damaged, 'not-a-database');
-    const res = await runCli(['index', '--force'], { ...baseEnv, D365_INDEX_DB_PATH: damaged }, workDir);
-    expect(res.code).toBe(1);
-    expect(res.stderr).toContain('--force never deletes');
-    expect(fs.readFileSync(damaged, 'utf8')).toBe('not-a-database');
-  });
-
-  it('index fails without D365_PACKAGES_DIR', async () => {
-    const res = await runCli(
-      ['index'],
-      { D365_INDEX_DB_PATH: dbPath, DOTENV_CONFIG_PATH: baseEnv.DOTENV_CONFIG_PATH },
-      workDir
-    );
-    expect(res.code).toBe(1);
-    expect(res.stderr).toContain('D365_PACKAGES_DIR is not set');
-  }, 120_000);
-
-  it('setup --non-interactive writes .env', async () => {
+  it('setup --non-interactive --mode local writes the custom models folder, and keeps an existing .env without --force', async () => {
     const setupDir = fs.mkdtempSync(path.join(testDir, '.tmp-cli-setup-'));
-    const apiKey = 'k'.repeat(40);
-    const res = await runCli(
-      [
-        'setup',
-        '--non-interactive',
-        '--packages-dir',
-        packagesDir,
-        '--api-key',
-        apiKey,
-        '--db-path',
-        './data/index.db',
-      ],
-      { DOTENV_CONFIG_PATH: path.join(setupDir, '.env.absent') },
-      setupDir
-    );
+    const env = { DOTENV_CONFIG_PATH: path.join(setupDir, '.env.absent') };
+    const args = ['setup', '--non-interactive', '--mode', 'local', '--custom-dir', packagesDir];
+    const res = await runCli(args, env, setupDir);
 
     expect(res.code).toBe(0);
     const envFile = fs.readFileSync(path.join(setupDir, '.env'), 'utf-8');
-    expect(envFile).toContain(`MCP_API_KEY=${apiKey}`);
-    expect(envFile).toContain(`D365_PACKAGES_DIR=${packagesDir}`);
-    expect(envFile).toContain('D365_INDEX_DB_PATH=./data/index.db');
-    expect(fs.existsSync(path.join(setupDir, 'data'))).toBe(true);
+    expect(parse(envFile)).toEqual({ D365_CUSTOM_METADATA_DIR: packagesDir });
+    expect(res.stdout).toContain('Next: run `d365-fno-mcp-server doctor`, then `d365-fno-mcp-server gateway`.');
 
-    // A second run leaves the existing file alone unless --force is given.
-    const args = ['setup', '--non-interactive', '--packages-dir', packagesDir, '--api-key', 'n'.repeat(40)];
-    const env = { DOTENV_CONFIG_PATH: path.join(setupDir, '.env.absent') };
     const again = await runCli(args, env, setupDir);
     expect(again.code).toBe(1);
     expect(again.stderr).toContain('--force');
     expect(fs.readFileSync(path.join(setupDir, '.env'), 'utf-8')).toBe(envFile);
     fs.chmodSync(path.join(setupDir, '.env'), 0o644);
     expect((await runCli([...args, '--force'], env, setupDir)).code).toBe(0);
-    expect(fs.readFileSync(path.join(setupDir, '.env'), 'utf-8')).toContain(`MCP_API_KEY=${'n'.repeat(40)}`);
-    // The replaced file holds a new key, so it must not stay readable by others.
     if (process.platform !== 'win32') expect(fs.statSync(path.join(setupDir, '.env')).mode & 0o777).toBe(0o600);
-
     fs.rmSync(setupDir, { recursive: true, force: true });
   }, 120_000);
 
-  it('setup --non-interactive rejects a short api key', async () => {
+  it('setup refuses the flags of the removed full-local-index mode by name', async () => {
     const setupDir = fs.mkdtempSync(path.join(testDir, '.tmp-cli-setup-'));
     const res = await runCli(
-      ['setup', '--non-interactive', '--packages-dir', packagesDir, '--api-key', 'short'],
+      ['setup', '--non-interactive', '--packages-dir', packagesDir, '--api-key', 'k'.repeat(40)],
       { DOTENV_CONFIG_PATH: path.join(setupDir, '.env.absent') },
       setupDir
     );
     expect(res.code).toBe(1);
+    expect(res.stderr).toContain('--packages-dir is no longer supported: setup no longer builds a full local index.');
     expect(fs.existsSync(path.join(setupDir, '.env'))).toBe(false);
     fs.rmSync(setupDir, { recursive: true, force: true });
   }, 120_000);
@@ -274,20 +221,6 @@ describe('CLI', () => {
     fs.rmSync(setupDir, { recursive: true, force: true });
   }, 120_000);
 
-  it('setup --non-interactive writes MCP_HOST only when --host is given', async () => {
-    const withHost = fs.mkdtempSync(path.join(testDir, '.tmp-cli-setup-'));
-    const without = fs.mkdtempSync(path.join(testDir, '.tmp-cli-setup-'));
-    const args = ['setup', '--non-interactive', '--packages-dir', packagesDir, '--api-key', 'h'.repeat(40)];
-
-    expect((await runCli([...args, '--host', '127.0.0.1'], { DOTENV_CONFIG_PATH: path.join(withHost, '.env.absent') }, withHost)).code).toBe(0);
-    expect((await runCli(args, { DOTENV_CONFIG_PATH: path.join(without, '.env.absent') }, without)).code).toBe(0);
-
-    expect(parse(fs.readFileSync(path.join(withHost, '.env'), 'utf-8')).MCP_HOST).toBe('127.0.0.1');
-    expect(parse(fs.readFileSync(path.join(without, '.env'), 'utf-8'))).not.toHaveProperty('MCP_HOST');
-    fs.rmSync(withHost, { recursive: true, force: true });
-    fs.rmSync(without, { recursive: true, force: true });
-  }, 120_000);
-
   it('setup rejects a bare --mode and a value swallowed by --non-interactive, writing nothing', async () => {
     const setupDir = fs.mkdtempSync(path.join(testDir, '.tmp-cli-setup-'));
     const env = { DOTENV_CONFIG_PATH: path.join(setupDir, '.env.absent') };
@@ -308,35 +241,15 @@ describe('CLI', () => {
     fs.rmSync(setupDir, { recursive: true, force: true });
   }, 120_000);
 
-  it('setup runs the index and the checks it is asked for, then says to serve', async () => {
+  it('setup asks its questions on a pipe, reads every answer sent at once, and runs the real checks', async () => {
     const setupDir = fs.mkdtempSync(path.join(testDir, '.tmp-cli-setup-'));
-    const answers = ['1', packagesDir, '', './own.db', 'y', 'y', 'y'].join('\n') + '\n';
+    const answers = ['1', packagesDir, '', 'y'].join('\n') + '\n';
     const res = await runCli(['setup'], { DOTENV_CONFIG_PATH: path.join(setupDir, '.env.absent') }, setupDir, answers);
 
     expect(res.code).toBe(0);
-    // The real follow-ups ran, on the answers just given: the index first, then the checks that see it.
-    expect(res.stdout).toContain('Indexing complete');
-    expect(res.stdout).toContain('objects in db : 3');
-    expect(res.stdout).toContain('[PASS] db-objects: 3 objects indexed');
-    expect(res.stdout).toContain('0 failed, 0 warning(s)');
-    expect(res.stdout).toContain('Next: run `d365-fno-mcp-server serve`.');
-    expect(res.stdout).not.toMatch(/Next: run .*doctor/);
-    expect(fs.existsSync(path.join(setupDir, 'own.db'))).toBe(true);
-    fs.rmSync(setupDir, { recursive: true, force: true });
-  }, 120_000);
-
-  it('setup asks its questions on a pipe and reads every answer sent at once', async () => {
-    const setupDir = fs.mkdtempSync(path.join(testDir, '.tmp-cli-setup-'));
-    const answers = ['1', packagesDir, '', '', 'y', 'n', 'n'].join('\n') + '\n';
-    const res = await runCli(['setup'], { DOTENV_CONFIG_PATH: path.join(setupDir, '.env.absent') }, setupDir, answers);
-
-    expect(res.code).toBe(0);
-    const written = parse(fs.readFileSync(path.join(setupDir, '.env'), 'utf-8'));
-    expect(written.MCP_HOST).toBe('127.0.0.1');
-    expect(written.D365_PACKAGES_DIR).toBe(packagesDir);
-    expect(written.MCP_API_KEY).toMatch(/^[0-9a-f]{64}$/);
-    expect(res.stdout).toContain('Next: run `d365-fno-mcp-server doctor`, then `d365-fno-mcp-server index`, then `d365-fno-mcp-server serve`.');
-    expect(res.stdout).not.toContain(written.MCP_API_KEY);
+    expect(parse(fs.readFileSync(path.join(setupDir, '.env'), 'utf-8'))).toEqual({ D365_CUSTOM_METADATA_DIR: packagesDir });
+    expect(res.stdout).toContain('[PASS] gateway-hosted: local mode, no hosted server configured');
+    expect(res.stdout).toContain('Next: run `d365-fno-mcp-server gateway`.');
     fs.rmSync(setupDir, { recursive: true, force: true });
   }, 120_000);
 
@@ -451,7 +364,7 @@ describe('CLI', () => {
   });
 
   it('documents the setup modes and their flags in help', () => {
-    for (const flag of ['--mode', '--host', '--hosted-url', '--hosted-api-key', '--hosted-api-key-file', '--custom-dir']) {
+    for (const flag of ['--mode', '--index-path', '--deploy', '--hosted-url', '--hosted-api-key', '--hosted-api-key-file', '--custom-dir']) {
       expect(HELP_TEXT).toContain(flag);
     }
   });

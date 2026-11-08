@@ -81,6 +81,21 @@ const HYBRID_NOTE = [
   'Call local_index_status to see the local index and the hosted connection.',
 ].join(' ');
 
+const LOCAL_MODE_NOTE = [
+  'This server is a local gateway in local mode: it answers from the custom models on this machine only, indexed here; there is no hosted server.',
+  'Standard Microsoft and ISV objects are not indexed, so a lookup of one finds nothing; the tools that need the hosted index are not offered.',
+  'Call local_index_status to see the local index.',
+].join(' ');
+
+/** Stands in for the hosted server in local mode: nothing is configured, so nothing is ever sent anywhere. */
+export const NO_UPSTREAM: UpstreamPort = {
+  configured: false,
+  isAvailable: () => false,
+  listTools: () => Promise.resolve([]),
+  callTool: () => Promise.reject(new Error('local mode: no hosted server is configured')),
+  serverVersion: null,
+};
+
 const HOSTED_INSTRUCTIONS_MISSING = "The hosted server's own instructions were not available when this gateway started.";
 
 /** Environment variable behind each UpstreamSession option, for problems found while building one. */
@@ -98,6 +113,9 @@ function declarableVersion(value: string | null | undefined): string | null {
 
 /** Builds a hosted connection, turning the options the connection rejects into config problems that name no values. */
 function connectTo(config: GatewayConfig, clientSdkVersion: string | null): UpstreamSession {
+  if (config.hostedUrl === null || config.hostedApiKey === null) {
+    throw new Error('local mode: no hosted server is configured');
+  }
   try {
     return new UpstreamSession({
       url: config.hostedUrl,
@@ -299,9 +317,10 @@ export function createGatewayRuntime(
     return { reachable: catalog.failure === null, lastError: catalog.failure };
   };
 
+  const localMode = config.hostedUrl === null;
   local.setStatusExtras(() => ({
     gateway: { version: VERSION },
-    hosted: { ...hosted(), version: catalog.version, versionNote: catalog.versionNote },
+    hosted: localMode ? { configured: false } : { configured: true, ...hosted(), version: catalog.version, versionNote: catalog.versionNote },
     standardIndex: layered?.index.status() ?? null,
     skewedTools: [...catalog.skewedTools].sort(),
   }));
@@ -412,6 +431,7 @@ async function relay<T>(request: () => Promise<T>): Promise<T> {
  * `initialize`; closing the session closes its hosted connection.
  */
 export function createGatewayServer(runtime: GatewayRuntime, context?: SessionContext): Server {
+  if (runtime.config.hostedUrl === null) return createLocalModeServer(runtime);
   const server = new Server(
     { name: SERVER_NAME, version: VERSION },
     { capabilities: { tools: { listChanged: true }, resources: {}, prompts: {} }, instructions: instructionsFor(runtime.catalog) }
@@ -464,6 +484,49 @@ export function createGatewayServer(runtime: GatewayRuntime, context?: SessionCo
     relay(() => upstream().getPrompt({ name: request.params.name, arguments: request.params.arguments }))
   );
 
+  return server;
+}
+
+/** The tools local mode offers: the ones the custom index (and a standard index file, if any) can answer alone. */
+function localModeTools({ local, layered }: GatewayRuntime): Tool[] {
+  const answerable = new Set([
+    ...LOCAL_ONLY_TOOL_NAMES,
+    ...MERGE_TOOL_NAMES,
+    ...OWNER_ROUTED_TOOL_NAMES,
+    ...(layered ? layerableToolNames(layered) : []),
+  ]);
+  return local.definitions().filter((definition) => answerable.has(definition.name)).map((definition) => asTool(definition, false));
+}
+
+/** The MCP server of one session in local mode: no hosted connection, no hosted resources or prompts. */
+function createLocalModeServer(runtime: GatewayRuntime): Server {
+  const server = new Server(
+    { name: SERVER_NAME, version: VERSION },
+    { capabilities: { tools: {}, resources: {}, prompts: {} }, instructions: LOCAL_MODE_NOTE }
+  );
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: localModeTools(runtime) }));
+  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    const context: RouteContext = {
+      local: runtime.local,
+      localIndex: runtime.localIndex,
+      upstream: NO_UPSTREAM,
+      hostedTools: new Map(),
+      privatePrefixes: runtime.config.privatePrefixes,
+      skewedTools: new Set(),
+      layered: runtime.layered,
+    };
+    const result = await executeToolCall(request.params.name, request.params.arguments, context);
+    return addFileTargets(result, runtime.config.workspace);
+  });
+  server.setRequestHandler(ListResourcesRequestSchema, async () => ({ resources: [] }));
+  server.setRequestHandler(ListResourceTemplatesRequestSchema, async () => ({ resourceTemplates: [] }));
+  server.setRequestHandler(ReadResourceRequestSchema, async () => {
+    throw new McpError(ErrorCode.InvalidParams, 'This gateway runs in local mode and has no resources.');
+  });
+  server.setRequestHandler(ListPromptsRequestSchema, async () => ({ prompts: [] }));
+  server.setRequestHandler(GetPromptRequestSchema, async () => {
+    throw new McpError(ErrorCode.InvalidParams, 'This gateway runs in local mode and has no prompts.');
+  });
   return server;
 }
 
@@ -529,10 +592,16 @@ async function settleWithin(work: Promise<unknown>, ms: number): Promise<void> {
  * that. `config.port` must be the port to bind, not 0, because the Host header allowlist needs it.
  */
 export async function launchGateway(config: GatewayConfig): Promise<RunningGateway> {
-  logger.info('Starting D365 FnO MCP gateway', { version: VERSION, hostedHost: new URL(config.hostedUrl).host, port: config.port });
+  const localMode = config.hostedUrl === null;
+  logger.info('Starting D365 FnO MCP gateway', {
+    version: VERSION,
+    hostedHost: config.hostedUrl === null ? null : new URL(config.hostedUrl).host,
+    mode: localMode ? 'local' : 'hosted',
+    port: config.port,
+  });
   // Built first so that settings the connection rejects fail before anything is opened.
-  connectTo(config, declarableVersion(config.appVersion));
-  if (config.appVersion && declarableVersion(config.appVersion) === null) {
+  if (!localMode) connectTo(config, declarableVersion(config.appVersion));
+  if (!localMode && config.appVersion && declarableVersion(config.appVersion) === null) {
     logger.warn('D365_APP_VERSION cannot be sent as a client version; the hosted server will not be told your SDK version');
   }
 
@@ -595,7 +664,7 @@ export async function launchGateway(config: GatewayConfig): Promise<RunningGatew
 
   try {
     await http.listening;
-    await warmCatalog(config, runtime);
+    if (!localMode) await warmCatalog(config, runtime);
     ready = true;
   } catch (error) {
     await stop();
@@ -625,7 +694,10 @@ function describeToken(config: GatewayConfig, env: NodeJS.ProcessEnv): string {
 /** Prints a client entry that points at the gateway, ready to paste. */
 function printClientEntry(gateway: RunningGateway, env: NodeJS.ProcessEnv): void {
   printSharedClientEntry({
-    heading: `D365 gateway listening on ${gateway.url} (hosted server: ${new URL(gateway.config.hostedUrl).host})`,
+    heading:
+      gateway.config.hostedUrl === null
+        ? `D365 gateway listening on ${gateway.url} (local mode: custom models only, no hosted server)`
+        : `D365 gateway listening on ${gateway.url} (hosted server: ${new URL(gateway.config.hostedUrl).host})`,
     instruction: `Register it in place of the hosted ${CLIENT_ENTRY_NAME} entry: .vscode/mcp.json for VS Code, .mcp.json for Visual Studio.`,
     entry: buildClientEntry({
       url: gateway.url,

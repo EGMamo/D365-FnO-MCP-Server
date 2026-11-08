@@ -7,6 +7,11 @@ function flagBool(flags: Record<string, string | boolean>, name: string): boolea
   return flags[name] === true || flags[name] === 'true';
 }
 
+/** Why `index` no longer runs: the standard application is indexed only by the hosted worker, in Azure. */
+export const FULL_LOCAL_INDEX_REMOVED =
+  'Full local indexes are no longer supported. Local mode indexes only your custom models (setup --mode local); ' +
+  'the standard application comes from a hosted server, whose worker builds the index in Azure.';
+
 export interface CliResult {
   code: number;
   /** True when the command owns the process lifecycle (the server keeps running). */
@@ -40,14 +45,8 @@ export async function run(argv: string[]): Promise<CliResult> {
       return { code: await startGateway(process.env), keepAlive: true };
     }
     case 'index': {
-      const { indexCommand } = await import('./cli/index-command.js');
-      return {
-        code: await indexCommand({
-          force: flags.force === true || flags.force === 'true',
-          packagesDir: flagString(flags, 'packages-dir'),
-          dbPath: flagString(flags, 'db-path'),
-        }),
-      };
+      console.error(FULL_LOCAL_INDEX_REMOVED);
+      return { code: 1 };
     }
     case 'acquire': {
       const { acquireCommand } = await import('./cli/acquire-command.js');
@@ -141,7 +140,7 @@ export async function run(argv: string[]): Promise<CliResult> {
     }
     case 'doctor': {
       const { doctorCommand } = await import('./cli/doctor.js');
-      return { code: await doctorCommand(process.env) };
+      return { code: await doctorCommand(process.env, { bin: 'd365-fno-mcp-server', edition: 'operator' }) };
     }
     case 'index-status': {
       const { indexStatusCommand } = await import('./cli/index-status-command.js');
@@ -182,7 +181,7 @@ export async function run(argv: string[]): Promise<CliResult> {
         console.error(parsed.error);
         return { code: 1 };
       }
-      return { code: await setupCommand(parsed.options) };
+      return { code: await setupCommand({ ...parsed.options, edition: { bin: 'd365-fno-mcp-server' } }) };
     }
     case 'artifact': {
       const { artifactCommand } = await import('./cli/artifact-command.js');

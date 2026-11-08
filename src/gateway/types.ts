@@ -18,9 +18,10 @@ export interface GatewayWorkspaceConfig {
 
 /** Validated gateway settings (src/gateway/config.ts). */
 export interface GatewayConfig {
-  /** Hosted MCP endpoint, always ending in a path (normally /mcp). */
-  hostedUrl: string;
-  hostedApiKey: string;
+  /** Hosted MCP endpoint, always ending in a path (normally /mcp); null in local mode (the custom models alone). */
+  hostedUrl: string | null;
+  /** Null exactly when `hostedUrl` is. */
+  hostedApiKey: string | null;
   customMetadataDir: string;
   /** Absolute path of the custom-models SQLite index (never the main index). */
   localIndexDbPath: string;
@@ -100,6 +101,8 @@ export interface LocalTools {
 
 /** The hosted server as the router sees it. */
 export interface UpstreamPort {
+  /** False in local mode, where no hosted server exists; absent means a hosted server is configured. */
+  readonly configured?: boolean;
   /** False for a short pause after a failed call, so a dead hosted server is not asked on every call; true otherwise. */
   isAvailable(): boolean;
   listTools(): Promise<Tool[]>;

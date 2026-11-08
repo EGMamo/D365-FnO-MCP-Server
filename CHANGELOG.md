@@ -7,7 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Full local indexes are no longer supported.** `setup` asks "Local only" (your custom models, indexed by the
+  gateway itself, no hosted server) or "Hosted" (a hosted server plus your custom models), and for hosted
+  whether the server is already deployed. `--mode local` now means custom models only; the old local-mode flags
+  (`--packages-dir`, `--api-key`, `--db-path`, `--transport`, `--host`) are refused by name, and
+  non-interactive setup needs `--mode`. `index` exits 1 and says why: the standard application is indexed
+  only by the hosted worker in Azure.
+- The gateway runs without `D365_HOSTED_MCP_URL` (local mode): local tools only, no `[hosted unavailable]`
+  prefixes or warnings, a fixed error for tools that need the hosted server, and a hint on a standard object
+  it cannot know. `local_index_status` reports `hosted: { "configured": false }` and `doctor` one
+  `gateway-hosted` row. A hosted key without a URL is a configuration error.
+
 ### Added
+
+- A developer package, `d365-fno-mcp-client` (command `d365-fno-mcp`): `setup`, `gateway`, `doctor`, `help`
+  and `version` only, without the server, the Azure libraries, the embedding model or key management.
+  `npm run pack:client` builds it; `tests/packageBoundary.test.ts` keeps operator code out of it.
 
 - `MAX_SESSIONS_PER_API_KEY` caps how many simultaneous sessions one API key may hold. A key at its
   cap gets HTTP 429 on `initialize`, while other keys can still open sessions. `0` (the default)

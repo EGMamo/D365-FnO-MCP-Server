@@ -333,9 +333,16 @@ export const gatewayConfigSchema = gatewayEnvSchema.transform((env, ctx): Valida
 
   const customMetadataDir = resolveCustomMetadataDir(env, issue);
   const localIndexDbPath = resolveLocalIndexDbPath(env, issue);
+  // No hosted URL is local mode: the custom models alone. A key without a URL is a half-written hosted setup.
+  const localMode = !env.D365_HOSTED_MCP_URL;
+  if (localMode) {
+    for (const name of ['D365_HOSTED_API_KEY', 'D365_HOSTED_API_KEY_FILE'] as const) {
+      if (env[name]) issue(name, `${name} is set but D365_HOSTED_MCP_URL is empty`);
+    }
+  }
   const settings: ValidatedGatewayEnv = {
-    hostedUrl: parseHostedUrl(env.D365_HOSTED_MCP_URL, issue),
-    hostedApiKey: resolveHostedApiKey(env, issue),
+    hostedUrl: localMode ? null : parseHostedUrl(env.D365_HOSTED_MCP_URL, issue),
+    hostedApiKey: localMode ? null : resolveHostedApiKey(env, issue),
     customMetadataDir,
     localIndexDbPath,
     standardIndexDbPath: resolveStandardIndexDbPath(env, localIndexDbPath, issue),

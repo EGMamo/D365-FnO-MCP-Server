@@ -268,13 +268,13 @@ describe('doctor next step', () => {
     ['another doctor run while the hosted server starts', [check('gateway-config'), check('gateway-hosted-health', 'warn'), check('gateway-hosted-key', 'warn'), check('db-objects', 'warn'), check('packages-dir')], { ...local, ...hosted },
       'Next: the hosted server is still starting; run `d365-fno-mcp-server doctor` again in a moment.'],
     // (3) no index yet.
-    ['index then serve when nothing is indexed', [check('packages-dir'), check('db-open'), check('db-objects', 'warn')], local,
-      'Next: run `d365-fno-mcp-server index`, then `d365-fno-mcp-server serve`.'],
-    ['index then serve, noting the gateway needs no index', [check('packages-dir'), check('db-objects', 'warn'), check('gateway-config')], { ...local, ...hosted },
-      'Next: run `d365-fno-mcp-server index`, then `d365-fno-mcp-server serve`. The gateway needs no index and can start now.'],
+    ['a worker-built index for serve when nothing is indexed', [check('packages-dir'), check('db-open'), check('db-objects', 'warn')], local,
+      'Next: point D365_INDEX_DB_PATH at an index built by the hosted worker before running `d365-fno-mcp-server serve`.'],
+    ['a worker-built index for serve, noting the gateway needs no index', [check('packages-dir'), check('db-objects', 'warn'), check('gateway-config')], { ...local, ...hosted },
+      'Next: point D365_INDEX_DB_PATH at an index built by the hosted worker before running `d365-fno-mcp-server serve`. The gateway needs no index and can start now.'],
     // (4)-(6) everything clear.
     ['serve or gateway when both are set up', [check('packages-dir'), check('db-objects'), check('gateway-config')], { ...local, ...hosted },
-      'Next: run `d365-fno-mcp-server serve` (local index) or `d365-fno-mcp-server gateway` (hosted + custom models).'],
+      'Next: run `d365-fno-mcp-server serve` (server) or `d365-fno-mcp-server gateway` (custom models, with or without a hosted server).'],
     ['serve when only the local index is set up', [check('node'), check('packages-dir'), check('metadata-files'), check('db-objects'), check('api-keys')], local,
       'Next: run `d365-fno-mcp-server serve`.'],
     ['gateway on a gateway-only machine', [check('node'), check('serve-checks'), check('gateway-config'), check('gateway-hosted-health'), check('gateway-hosted-key')], hosted,
@@ -286,10 +286,17 @@ describe('doctor next step', () => {
       'Next: run `d365-fno-mcp-server gateway`.'],
     ['gateway despite a warning about the hosted index', [check('serve-checks'), check('gateway-config'), check('gateway-hosted-key'), check('gateway-hosted-index', 'warn')], hosted,
       'Next: run `d365-fno-mcp-server gateway`.'],
+    ['gateway in local mode, with only a custom models folder', [check('node'), check('serve-checks'), check('gateway-config'), check('gateway-hosted')], { D365_CUSTOM_METADATA_DIR: '/custom' },
+      'Next: run `d365-fno-mcp-server gateway`.'],
     // (7) nothing to say.
     ['nothing when no check names a command', [check('node')], local, null],
   ])('suggests %s', (_label, results, env, expected) => {
     expect(nextStep(results, env)).toBe(expected);
+  });
+
+  it('names the command of the package that runs doctor', () => {
+    expect(nextStep([check('node')], {}, { bin: 'd365-fno-mcp' })).toBe('Next: run `d365-fno-mcp setup`.');
+    expect(nextStep([check('gateway-config')], { D365_CUSTOM_METADATA_DIR: '/c' }, { bin: 'd365-fno-mcp' })).toBe('Next: run `d365-fno-mcp gateway`.');
   });
 
   it.each([
@@ -297,7 +304,7 @@ describe('doctor next step', () => {
     [
       'with a .env file that setup would refuse to replace',
       true,
-      'Next: set D365_PACKAGES_DIR in your .env file, or run `d365-fno-mcp-server setup --force` to write a new .env (it replaces the current one).',
+      'Next: run `d365-fno-mcp-server setup --force` to write a new .env (it replaces the current one).',
     ],
   ])('points an unconfigured machine at setup %s', (_label, envFileExists, expected) => {
     expect(nextStep([check('node')], {}, { envFileExists })).toBe(expected);
@@ -328,6 +335,19 @@ describe('doctor next step', () => {
       expect(lines.some((line) => line.includes('Next:'))).toBe(false);
     }, DOCTOR_TIMEOUT_MS);
 
+    it('runs only the gateway checks in local mode, with one local-mode row, and no serve checks for the developer package', async () => {
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const env = {
+        D365_CUSTOM_METADATA_DIR: fixture.metadataDir,
+        D365_LOCAL_INDEX_DB_PATH: path.join(fixture.root, 'local-mode', 'custom_index.db'),
+      };
+      await doctorCommand(env, { envFileExists: true, bin: 'd365-fno-mcp', edition: 'developer' });
+      const lines = printed(log).join('\n');
+      expect(lines).toContain('[PASS] gateway-hosted: local mode, no hosted server configured');
+      expect(lines).toContain('[PASS] serve-checks: Skipped the packages-dir, index and api-keys checks: this package runs the gateway only.');
+      expect(lines).not.toMatch(/\[[A-Z]+\] (gateway-hosted-(health|key|index)|packages-dir|api-keys):/);
+    }, DOCTOR_TIMEOUT_MS);
+
     it('points a machine with nothing configured at setup', async () => {
       const log = vi.spyOn(console, 'log').mockImplementation(() => {});
       // Told explicitly: a developer who ran setup in their clone has a .env in the folder the tests run from.
@@ -341,7 +361,7 @@ describe('doctor next step', () => {
       const env = { D365_INDEX_DB_PATH: path.join(fixture.root, 'doctor-env-file.db') };
       expect(await doctorCommand(env, { envFileExists: true })).toBe(1);
       expect(printed(log).at(-1)).toBe(
-        '\nNext: set D365_PACKAGES_DIR in your .env file, or run `d365-fno-mcp-server setup --force` to write a new .env (it replaces the current one).'
+        '\nNext: run `d365-fno-mcp-server setup --force` to write a new .env (it replaces the current one).'
       );
     }, DOCTOR_TIMEOUT_MS);
 
@@ -356,7 +376,7 @@ describe('doctor next step', () => {
         fs.writeFileSync(path.join(folder, '.env'), 'OTHER=1\n');
         log.mockClear();
         await doctorCommand(env);
-        expect(printed(log).at(-1)).toContain('set D365_PACKAGES_DIR in your .env file');
+        expect(printed(log).at(-1)).toContain('setup --force');
       } finally {
         cwd.mockRestore();
         fs.rmSync(folder, { recursive: true, force: true });

@@ -62,11 +62,12 @@ export const HELP_TEXT = `d365-fno-mcp-server <command> [options]
 
 Commands:
   serve                     Start the MCP server (default command)
-  gateway                   Start the local hybrid gateway: your custom models are indexed on this machine and
-                            merged with the hosted server's standard index. Listens on 127.0.0.1 only and prints
-                            an MCP client entry (the bearer token itself is never printed). Environment:
-      D365_HOSTED_MCP_URL        Hosted MCP endpoint, https:// unless loopback (required)
-      D365_HOSTED_API_KEY        Hosted API key; or D365_HOSTED_API_KEY_FILE with the key in a file (one required)
+  gateway                   Start the local gateway: your custom models are indexed on this machine and, with a
+                            hosted server, merged with its standard index (without one it runs in local mode).
+                            Listens on 127.0.0.1 only and prints an MCP client entry (the bearer token itself is
+                            never printed). Environment:
+      D365_HOSTED_MCP_URL        Hosted MCP endpoint, https:// unless loopback (empty: local mode)
+      D365_HOSTED_API_KEY        Developer key; or D365_HOSTED_API_KEY_FILE with the key in a file (hosted mode)
       D365_CUSTOM_METADATA_DIR   Folder with your custom models (legacy alias D365_PROJECT_DIR; required)
       D365_LOCAL_INDEX_DB_PATH   Custom index file (default ./.d365/custom_index.db; must differ from D365_INDEX_DB_PATH)
       D365_GATEWAY_PORT          Loopback port (default 3101)
@@ -84,9 +85,7 @@ Commands:
       --db-path <path>      New SQLite index to build (must not exist yet)
       --bundle-options <path> CreateArtifactBundleOptions JSON to write (never overwritten)
       --release-id <id>     Release identity for the manifest (default ude-<applicationVersion>)
-  index [--force]           Run a foreground indexing pass
-      --packages-dir <dir>  PackagesLocalDirectory to index (default D365_PACKAGES_DIR)
-      --db-path <path>      SQLite index path (default D365_INDEX_DB_PATH or ./d365_index.db)
+  index                     No longer supported: full local indexes are built only by the hosted worker
   index-xref                 Import compiler cross-reference snapshot from SQL Server
       --connection-string    SQL Server connection string (prefer D365_XREF_CONNECTION_STRING)
       --db-path <path>       SQLite index path (default D365_INDEX_DB_PATH or ./d365_index.db)
@@ -138,21 +137,17 @@ Commands:
       --dir <dir>            Models directory (default models/ at the package root)
   knowledge-check           Validate topic headers and cache topic vectors for the knowledge filter
       --kb-dir <dir>         Override the knowledge base resources directory
-  setup [--non-interactive] Create a .env configuration file. Interactive setup asks how you will use the
-                            server, checks each answer as you give it, and offers to build the index and run
-                            doctor. --mode and --force also apply to interactive setup and --db-path sets its
-                            default; the other flags below are read only with --non-interactive.
-      --mode <local|hosted> local (default): build the index here from PackagesLocalDirectory.
-                            hosted: use a hosted server and index only your custom models (run gateway)
-      --packages-dir <dir>  D365 PackagesLocalDirectory path (local)
-      --api-key <key>       MCP API key (>= 32 chars; generated when omitted) (local)
-      --db-path <path>      SQLite index path (default ./d365_index.db) (local)
-      --transport <mode>    http only (default http) (local)
-      --host <address>      Interface the server binds, for example 127.0.0.1 (local; default every interface)
-      --hosted-url <url>    Hosted MCP endpoint, https:// unless loopback (hosted)
-      --hosted-api-key-file <file>  File holding the hosted API key (hosted; preferred)
-      --hosted-api-key <key>        Hosted API key (hosted; visible in the process list, so prefer the file)
-      --custom-dir <dir>    Folder with your custom models (hosted)
+  setup [--non-interactive] Create a .env configuration file. It asks how you will use it: local only (your
+                            custom models, no hosted server), or a hosted server plus your custom models, and
+                            then whether that server is already deployed or should be deployed now. It checks
+                            each answer as you give it and offers to run doctor.
+      --mode <local|hosted> local: index only your custom models here. hosted: use a hosted server too
+      --custom-dir <dir>    Folder with your custom models (both modes)
+      --index-path <path>   Where to keep the local index (local; default ./.d365/custom_index.db)
+      --hosted-url <url>    Hosted MCP endpoint, https:// unless loopback (hosted, already deployed)
+      --hosted-api-key-file <file>  File holding your developer key (hosted; preferred)
+      --hosted-api-key <key>        Your developer key (hosted; visible in the process list, so prefer the file)
+      --deploy              Deploy a new hosted server on Azure first (hosted)
       --force               Replace an existing .env
   artifact publish         Validate and idempotently upload a local bundle
       --bundle-dir <dir>   Validated local artifact bundle directory

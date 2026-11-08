@@ -25,8 +25,19 @@ A Model Context Protocol (MCP) server that gives AI coding assistants first-clas
 ## Prerequisites
 
 - Node.js **24 or higher**
-- A local D365 FnO `PackagesLocalDirectory` (or a copy of it), **or** a hosted server plus the folder
-  with your custom models (see [Hybrid gateway](docs/hybrid-gateway.md))
+- The folder with your custom models. For the standard application, a hosted server (see
+  [Hosted deployment](docs/hosted-deployment.md)); its worker builds the standard index in Azure.
+
+## Two packages
+
+| | Operator package | Developer package |
+| --- | --- | --- |
+| For | Whoever deploys and runs the hosted server | Developers: local only, or connecting to a hosted server |
+| Name, command | `d365-fno-mcp-server` | `d365-fno-mcp-client`, `d365-fno-mcp` |
+| Commands | everything, including `serve`, the deploy walkthrough and `keys` | `setup`, `gateway`, `doctor`, `help`, `version` |
+
+The developer package leaves out the server, the Azure libraries, the embedding model and key management.
+Build it from a clone with `npm run pack:client` (it writes a `.tgz` into `dist-client/`).
 
 ## Installation
 
@@ -44,56 +55,40 @@ Alternatively, install the local checkout globally:
 npm install -g .
 ```
 
-The package is not published to npm yet, so `npx d365-fno-mcp-server` is not available.
+The packages are not published to npm yet, so `npx d365-fno-mcp-server` is not available.
 
 ## Quick start
 
 ```bash
-d365-fno-mcp-server setup
+d365-fno-mcp-server setup     # or, with the developer package: d365-fno-mcp setup
 ```
 
-`setup` asks how you will use the server, checks each answer as you give it (and asks again when one is
-wrong), writes a `.env` file, and offers to run the next steps. The file gets owner-only permissions on macOS
-and Linux; on Windows it keeps the folder's access rules, so keep the project folder private, because the file
-holds your keys:
+`setup` asks how you will use it, checks each answer as you give it (and asks again when one is wrong),
+writes a `.env` file, and offers to run the checks. The file gets owner-only permissions on macOS and Linux; on
+Windows it keeps the folder's access rules, so keep the project folder private, because the file can hold a key:
 
-1. **Build the index here from your `PackagesLocalDirectory`** (local). It asks for the packages
-   folder, an API key (leave blank to generate one), the index path, and whether to bind to this machine
-   only (`127.0.0.1`, the default), then offers to build the index and run the checks. Start the server
-   with `d365-fno-mcp-server serve`; it prints the MCP URL and a client entry to paste into your MCP
-   client. The key itself is never printed: it is in the `.env` file, and when `setup` generated it
-   `setup` says so.
-2. **Use a hosted server and index only your custom models** (hosted). It asks for the hosted MCP URL,
-   the hosted API key (typed, or read from a file) and the folder with your custom models, then offers
-   to run the checks. Start it with `d365-fno-mcp-server gateway` (see [Hybrid gateway](docs/hybrid-gateway.md)).
+1. **Local only.** Only your custom models are indexed, on this machine, by the gateway itself. There is no
+   hosted server, no URL and no key; standard Microsoft objects are not known in this mode. It asks for the
+   folder with your custom models and, optionally, where to keep the local index.
+2. **Hosted.** A hosted server answers for the standard application, and your custom models are still indexed
+   here. It then asks whether the server is already deployed:
+   - **Yes**: the hosted MCP URL, your developer key (typed, or read from a file) and the custom models folder.
+   - **No, deploy one now**: the deploy walkthrough (operator package only; see
+     [Hosted deployment](docs/hosted-deployment.md)). It ends with the same `.env`, already connected.
+
+Either way, start it with `d365-fno-mcp-server gateway` (see [Hybrid gateway](docs/hybrid-gateway.md)); it
+prints a client entry to paste into your MCP client. Full local indexes of `PackagesLocalDirectory` are no longer
+supported: the standard application is indexed only by the hosted worker.
 
 Nothing is written if the input ends or you press Ctrl-C, and `setup` refuses to replace an existing
-`.env` unless you pass `--force`. You can run the steps it offers yourself at any time:
+`.env` unless you pass `--force`.
+
+Non-interactive setup, for scripts and CI:
 
 ```bash
-d365-fno-mcp-server doctor    # validates config, packages dir, and DB access, then says what to run next
-d365-fno-mcp-server index     # builds the SQLite index (first run takes a while; shows a live count in a terminal)
-d365-fno-mcp-server serve     # starts the MCP server and prints how to connect to it
-```
+d365-fno-mcp-server setup --non-interactive --mode local --custom-dir "/path/to/custom/metadata"
 
-Non-interactive setup, for scripts and CI (local):
-
-```bash
-d365-fno-mcp-server setup --non-interactive \
-  --packages-dir "K:/AosService/PackagesLocalDirectory" \
-  --api-key "$(openssl rand -hex 32)" \
-  --db-path ./d365_index.db \
-  --host 127.0.0.1 \
-  --transport http
-```
-
-Without `--host` the server binds every interface; the interactive default is `127.0.0.1`, which keeps
-a local server off the network.
-
-Non-interactive setup for a hosted server with your custom models (prefer the key file: a key on the
-command line is visible in the process list):
-
-```bash
+# Prefer the key file: a key on the command line is visible in the process list.
 d365-fno-mcp-server setup --non-interactive --mode hosted \
   --hosted-url "https://<your-app>.azurewebsites.net/mcp" \
   --hosted-api-key-file "$HOME/.d365/hosted-api-key" \
@@ -209,11 +204,12 @@ d365-fno-mcp-server <command> [options]
 
 Commands:
   serve                     Start the MCP server (default command)
-  gateway                   Start the local hybrid gateway: your custom models are indexed on this machine and
-                            merged with the hosted server's standard index. Listens on 127.0.0.1 only and prints
-                            an MCP client entry (the bearer token itself is never printed). Environment:
-      D365_HOSTED_MCP_URL        Hosted MCP endpoint, https:// unless loopback (required)
-      D365_HOSTED_API_KEY        Hosted API key; or D365_HOSTED_API_KEY_FILE with the key in a file (one required)
+  gateway                   Start the local gateway: your custom models are indexed on this machine and, with a
+                            hosted server, merged with its standard index (without one it runs in local mode).
+                            Listens on 127.0.0.1 only and prints an MCP client entry (the bearer token itself is
+                            never printed). Environment:
+      D365_HOSTED_MCP_URL        Hosted MCP endpoint, https:// unless loopback (empty: local mode)
+      D365_HOSTED_API_KEY        Developer key; or D365_HOSTED_API_KEY_FILE with the key in a file (hosted mode)
       D365_CUSTOM_METADATA_DIR   Folder with your custom models (legacy alias D365_PROJECT_DIR; required)
       D365_LOCAL_INDEX_DB_PATH   Custom index file (default ./.d365/custom_index.db; must differ from D365_INDEX_DB_PATH)
       D365_GATEWAY_PORT          Loopback port (default 3101)
@@ -231,9 +227,7 @@ Commands:
       --db-path <path>      New SQLite index to build (must not exist yet)
       --bundle-options <path> CreateArtifactBundleOptions JSON to write (never overwritten)
       --release-id <id>     Release identity for the manifest (default ude-<applicationVersion>)
-  index [--force]           Run a foreground indexing pass
-      --packages-dir <dir>  PackagesLocalDirectory to index (default D365_PACKAGES_DIR)
-      --db-path <path>      SQLite index path (default D365_INDEX_DB_PATH or ./d365_index.db)
+  index                     No longer supported: full local indexes are built only by the hosted worker
   index-xref                 Import compiler cross-reference snapshot from SQL Server
       --connection-string    SQL Server connection string (prefer D365_XREF_CONNECTION_STRING)
       --db-path <path>       SQLite index path (default D365_INDEX_DB_PATH or ./d365_index.db)
@@ -285,21 +279,17 @@ Commands:
       --dir <dir>            Models directory (default models/ at the package root)
   knowledge-check           Validate topic headers and cache topic vectors for the knowledge filter
       --kb-dir <dir>         Override the knowledge base resources directory
-  setup [--non-interactive] Create a .env configuration file. Interactive setup asks how you will use the
-                            server, checks each answer as you give it, and offers to build the index and run
-                            doctor. --mode and --force also apply to interactive setup and --db-path sets its
-                            default; the other flags below are read only with --non-interactive.
-      --mode <local|hosted> local (default): build the index here from PackagesLocalDirectory.
-                            hosted: use a hosted server and index only your custom models (run gateway)
-      --packages-dir <dir>  D365 PackagesLocalDirectory path (local)
-      --api-key <key>       MCP API key (>= 32 chars; generated when omitted) (local)
-      --db-path <path>      SQLite index path (default ./d365_index.db) (local)
-      --transport <mode>    http only (default http) (local)
-      --host <address>      Interface the server binds, for example 127.0.0.1 (local; default every interface)
-      --hosted-url <url>    Hosted MCP endpoint, https:// unless loopback (hosted)
-      --hosted-api-key-file <file>  File holding the hosted API key (hosted; preferred)
-      --hosted-api-key <key>        Hosted API key (hosted; visible in the process list, so prefer the file)
-      --custom-dir <dir>    Folder with your custom models (hosted)
+  setup [--non-interactive] Create a .env configuration file. It asks how you will use it: local only (your
+                            custom models, no hosted server), or a hosted server plus your custom models, and
+                            then whether that server is already deployed or should be deployed now. It checks
+                            each answer as you give it and offers to run doctor.
+      --mode <local|hosted> local: index only your custom models here. hosted: use a hosted server too
+      --custom-dir <dir>    Folder with your custom models (both modes)
+      --index-path <path>   Where to keep the local index (local; default ./.d365/custom_index.db)
+      --hosted-url <url>    Hosted MCP endpoint, https:// unless loopback (hosted, already deployed)
+      --hosted-api-key-file <file>  File holding your developer key (hosted; preferred)
+      --hosted-api-key <key>        Your developer key (hosted; visible in the process list, so prefer the file)
+      --deploy              Deploy a new hosted server on Azure first (hosted)
       --force               Replace an existing .env
   artifact publish         Validate and idempotently upload a local bundle
       --bundle-dir <dir>   Validated local artifact bundle directory
@@ -591,7 +581,8 @@ Once the server is ready, responses to authenticated requests also carry the ind
 
 ## Indexing
 
-`d365-fno-mcp-server index` scans `D365_PACKAGES_DIR` and populates the SQLite index.
+The standard application is indexed by the hosted worker in Azure (`acquire`, then `prepare-bundle`), and the
+gateway indexes your custom models itself; `d365-fno-mcp-server index` no longer runs. How an index pass behaves:
 
 - **Incremental by default** — files whose path and modification time are unchanged since the last pass are skipped, so re-indexing after a sync is fast.
 - **Label files are incremental too** — label files are read from `AxLabelFile/LabelResources/<language>/<LabelFile>.<language>.label.txt`, and their mtimes are tracked separately so unchanged files are skipped on later passes. Labels are stored under the id code uses without the `@`: `MyLabels:Greeting` for `@MyLabels:Greeting`, and `SYS1` for a legacy `@SYS1`.
@@ -599,7 +590,7 @@ Once the server is ready, responses to authenticated requests also carry the ind
 - **Search index updates** — triggers keep the FTS indexes current row by row, so an incremental run touches only the changed rows. A first build, `--force`, or a run after an interrupted one rebuilds them once at the end instead.
 - **Fixed-depth scan, batched writes** — only `<Package>/<Model>/Ax<Type>/` is read, never `bin/` or `XppMetadata/` (a folder that is not a packages root, such as a single package, falls back to a full search). Files are read ahead of parsing and written 500 per transaction.
 - **`--force`** — ignores mtimes and re-parses every file without deleting the database or its independently imported compiler usage snapshot. It is *not* required after upgrading the server. For a corrupt SQLite file, first back it up/move it explicitly; `--force` will not destroy it.
-- **Upgrading an existing index** — schema changes are additive, so an existing `d365_index.db` keeps working; just run `npm run index` again without `--force`. Unchanged AOT objects stay skipped, and any `raw_xml` already stored is preserved even if you set `D365_INDEX_STORE_RAW_XML=0` (the flag only stops writing new raw XML). The first upgraded run re-reads every label file once (indexes older than schema 3 stored labels under different ids), after which labels are skipped like every other file. `index-status` reports an index built by an older schema as out of date.
+- **Upgrading an existing index** — schema changes are additive, so an existing `d365_index.db` keeps working; the next pass without `--force` upgrades it. Unchanged AOT objects stay skipped, and any `raw_xml` already stored is preserved even if you set `D365_INDEX_STORE_RAW_XML=0` (the flag only stops writing new raw XML). The first upgraded run re-reads every label file once (indexes older than schema 3 stored labels under different ids), after which labels are skipped like every other file. `index-status` reports an index built by an older schema as out of date.
 - **Pruning** — entries whose source files no longer exist (deleted or renamed objects) are removed at the end of a full pass, along with their cross-references and labels.
 - **Collisions** — when two files declare the same object name, the collision is counted and reported so duplicate/overlayed metadata is visible rather than silently overwritten.
 

@@ -28,6 +28,8 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "build:client": "node -e \"fs.rmSync('dist-client', {recursive:true, force:true})\" && tsc -p tsconfig.client.json",
+    "pack:client": "npm run build:client && node scripts/pack-client.mjs",
     "clean": "node -e \"fs.rmSync('dist', {recursive:true, force:true})\"",
     "prebuild": "npm run clean",
     "prepack": "npm run build",
@@ -38,7 +40,6 @@
     "serve": "node dist/src/index.js serve",
     "gateway": "node dist/src/index.js gateway",
     "doctor": "node dist/src/index.js doctor",
-    "index": "node dist/src/index.js index",
     "acquire": "node dist/src/index.js acquire",
     "index-xref": "node dist/src/index.js index-xref",
     "digest": "node dist/src/index.js digest",

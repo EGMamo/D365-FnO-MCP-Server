@@ -286,9 +286,9 @@ are not registered in the gateway, and a hosted server refuses them.
 
 Forwarded tools are answered by the hosted index alone, so they cannot see custom objects: a custom
 role is missing from `find_security_path`, and `create_data_entity` does not know a custom table.
-Set `D365_GATEWAY_STANDARD_INDEX_DB_PATH` to an index of the standard application to fix that. Build
-it once with `d365-fno-mcp-server index` over your `PackagesLocalDirectory` (or reuse the file of a
-`serve` setup), and rebuild it when you move to a new application version.
+Set `D365_GATEWAY_STANDARD_INDEX_DB_PATH` to an index of the standard application to fix that: the
+database of a bundle the hosted worker built (full local indexes are no longer built on developer
+machines), replaced when you move to a new application version. `setup` does not offer this setting.
 
 The gateway opens the file read-only and lays the custom index over it through views on a second
 connection: each of `ax_objects`, `ax_fields`, `ax_methods`, `ax_enum_values`, `ax_datasources`,

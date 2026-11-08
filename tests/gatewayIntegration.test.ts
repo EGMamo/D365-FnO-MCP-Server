@@ -293,6 +293,8 @@ interface StackOptions {
   targetModel?: boolean;
   /** Writes the hosted stand-in's index to a file and sets it as D365_GATEWAY_STANDARD_INDEX_DB_PATH. */
   standardIndex?: boolean;
+  /** Local mode: no D365_HOSTED_MCP_URL and no key. The stand-in still runs, to show nothing reaches it. */
+  localMode?: boolean;
 }
 
 interface Stack {
@@ -359,8 +361,7 @@ async function startStack(options: StackOptions = {}): Promise<Stack> {
       standard.close();
     }
     gateway = await launch({
-      D365_HOSTED_MCP_URL: hosted.url,
-      D365_HOSTED_API_KEY: options.hostedKey ?? HOSTED_KEY,
+      ...(options.localMode ? {} : { D365_HOSTED_MCP_URL: hosted.url, D365_HOSTED_API_KEY: options.hostedKey ?? HOSTED_KEY }),
       D365_CUSTOM_METADATA_DIR: customDir,
       D365_LOCAL_INDEX_DB_PATH: path.join(root, 'state', 'custom_index.db'),
       D365_INDEX_DB_PATH: path.join(root, 'unused_main_index.db'),
@@ -926,6 +927,55 @@ describe('gateway when custom files change', () => {
       { name: 'get_table_schema', arguments: { tableName: 'ContosoLoyaltyCard' } },
     ]);
     expect(gateway.localIndex.status()).toMatchObject({ objects: 5, dirty: false, lastError: null });
+  }, TEST_TIMEOUT_MS);
+});
+
+describe('gateway in local mode', () => {
+  const stack = useStack({ localMode: true });
+
+  it('offers the local tools only, without [hosted unavailable], and says it runs on custom models only', async () => {
+    const client = await stack().client();
+    const { tools } = await client.listTools();
+    const names = tools.map((tool) => tool.name);
+    expect(names).toContain('local_index_status');
+    expect(names).toContain('search_symbols');
+    expect(names).not.toContain('get_index_stats');
+    expect(tools.some((tool) => (tool.description ?? '').includes('[hosted unavailable]'))).toBe(false);
+    expect(client.getInstructions()).toContain('local mode');
+    expect(stack().hosted.requests).toEqual([]);
+  }, TEST_TIMEOUT_MS);
+
+  it('answers merge and owner tools from the custom index without warnings, and sends nothing anywhere', async () => {
+    const { call, hosted } = stack();
+    const search = await call('search_symbols', { query: 'CustTable' });
+    expect(search.isError).not.toBe(true);
+    expect(warningsOf(search)).toEqual([]);
+    const custom = await call('get_method_source', { objectName: 'ContosoLoyaltyService', methodName: 'tierFor' });
+    expect(custom.isError).not.toBe(true);
+    expect(textsOf(custom).join('\n')).not.toContain('Local mode indexes only');
+    expect(hosted.requests).toEqual([]);
+  }, TEST_TIMEOUT_MS);
+
+  it('adds the local-mode hint to a standard object it cannot know', async () => {
+    const standard = await stack().call('get_method_source', { objectName: 'SalesFormLetter', methodName: 'run' });
+    expect(textsOf(standard).at(-1)).toBe(
+      'Local mode indexes only your custom models; standard objects need a hosted server (setup --mode hosted).'
+    );
+    expect(warningsOf(standard)).toEqual([]);
+  }, TEST_TIMEOUT_MS);
+
+  it('answers a hosted-only tool called anyway with the fixed local-mode error', async () => {
+    const stats = await stack().call('get_index_stats');
+    expect(stats.isError).toBe(true);
+    expect(textsOf(stats)[0]).toBe(
+      'This gateway runs in local mode (custom models only); get_index_stats needs a hosted server. Run setup --mode hosted.'
+    );
+  }, TEST_TIMEOUT_MS);
+
+  it('reports hosted as not configured in local_index_status', async () => {
+    const status = payloadOf<{ hosted: Record<string, unknown> }>(await stack().call('local_index_status'));
+    expect(status.hosted).toEqual({ configured: false });
+    expect(stack().hosted.requests).toEqual([]);
   }, TEST_TIMEOUT_MS);
 });
 

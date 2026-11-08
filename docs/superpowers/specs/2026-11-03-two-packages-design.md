@@ -126,7 +126,9 @@ zod for settings and input; no `any`; named exports; tool annotations; secrets i
   `src/index.ts`, `server/start.ts`, `server/keyRegistry*.ts`, `server/adminRoutes.ts`, `config.ts`,
   `configLoader.ts`, `cli/keys.ts`, `cli/deploy*.ts`, every `cli/*-command.ts`, `cli/digest.ts`, `knowledge/`,
   `indexer/artifact*.ts`, `indexer/azureBlobArtifactStore*.ts`; no bare import of `@azure/*`, `onnxruntime-web`,
-  `@huggingface/*`, `mssql`; every bare import is a root dependency.
+  `@huggingface/*`; every bare import is a root dependency or an optional one. (`mssql` is reached through the
+  cross-reference code as an optional, lazily loaded driver that fails with a clear message; the pack script
+  leaves optional dependencies out.)
 - **Pack.** The generated `package.json` has the bin `d365-fno-mcp` only, the root version, and dependencies equal to
   the bare imports; the built entry answers `--version` and `help` and exits 1 on `serve`, `keys`, `index`.
 - **Setup.** Both editions: the two questions, local writes no URL or key, hosted-yes as before, deploy in the

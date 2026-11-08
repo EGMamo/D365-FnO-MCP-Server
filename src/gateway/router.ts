@@ -176,8 +176,20 @@ function failureReason(error: unknown): string {
 const isRefusal = (error: unknown): boolean =>
   error instanceof McpError && error.code !== ErrorCode.RequestTimeout && error.code !== ErrorCode.ConnectionClosed;
 
+/** The answer to a tool only the hosted server can give, in local mode. */
+export const localModeToolError = (name: string): string =>
+  `This gateway runs in local mode (custom models only); ${name} needs a hosted server. Run setup --mode hosted.`;
+
+/** Added to a lookup the custom index could not answer, in local mode. */
+export const LOCAL_MODE_HINT =
+  'Local mode indexes only your custom models; standard objects need a hosted server (setup --mode hosted).';
+
+/** True in local mode: there is no hosted server at all, which is not the same as one that is down. */
+const isLocalMode = (ctx: RouteContext): boolean => ctx.upstream.configured === false;
+
 /** Sends a call to the hosted server alone. Privacy and availability are checked before anything is sent. */
 async function forwardOnly(name: string, args: Record<string, unknown>, ctx: RouteContext): Promise<CallToolResult> {
+  if (isLocalMode(ctx)) return errorResult(localModeToolError(name));
   if (containsPrivateName(args, ctx.privatePrefixes)) return errorResult(PRIVATE_NAME_ERROR);
   if (!ctx.upstream.isAvailable()) return errorResult(`hosted server unavailable: ${NOT_CONNECTED}.`);
   try {
@@ -239,6 +251,10 @@ async function runOwner(name: string, args: Record<string, unknown>, ctx: RouteC
 
   const ref = lookup(checked.parsed);
   if (ref === null || ownsLocally(ref, ctx)) return ctx.local.call(name, checked.parsed);
+  if (isLocalMode(ctx)) {
+    const local = await ctx.local.call(name, checked.parsed);
+    return { ...local, content: [...local.content, { type: 'text', text: LOCAL_MODE_HINT }] };
+  }
 
   // The hosted server owns it, unless the call cannot or must not go there: then the local answer
   // (usually "not found", with local suggestions) is all there is, and the warning says why.
@@ -317,6 +333,8 @@ async function runMerge(name: string, args: Record<string, unknown>, ctx: RouteC
   const checked = parseLocally(name, args, ctx);
   if ('rejected' in checked) return checked.rejected;
   await ctx.localIndex.ensureFresh();
+  // Local mode: the custom index is the whole answer, so there is nothing to merge and nothing to warn about.
+  if (isLocalMode(ctx)) return ctx.local.call(name, checked.parsed);
 
   const hosted = guardUpstream(args, ctx);
   try {
