@@ -22,6 +22,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Developer keys managed on the server, with no Microsoft sign-in: an admin key (`adm_…`, made with
+  `keys reset-admin`) creates and revokes developer keys through `https://<server>/admin` or
+  `d365-fno-mcp-server keys new|list|revoke --server <url>`. The key registry (`MCP_KEY_REGISTRY=file` or
+  `azure-blob`) stores SHA-256 fingerprints only; every replica re-reads it every 5 seconds, a new key works at
+  once and a revoked one gets 401 and loses its sessions without a restart. The Azure template adds a `d365-keys`
+  container the API can write and nothing else. `GET /status` reports `server.keyRegistry`.
+- Errors that say what to do: separate 401 texts for "no key sent" and "key not recognized (it may have been
+  revoked)", the seconds to wait on a rate-limit 429, `Retry-After: 30` and the idle timeout on both session caps,
+  and gateway and `doctor` messages that say whether to ask the operator or retry.
 - A developer package, `d365-fno-mcp-client` (command `d365-fno-mcp`): `setup`, `gateway`, `doctor`, `help`
   and `version` only, without the server, the Azure libraries, the embedding model or key management.
   `npm run pack:client` builds it; `tests/packageBoundary.test.ts` keeps operator code out of it.

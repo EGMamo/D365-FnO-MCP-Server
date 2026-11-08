@@ -185,17 +185,21 @@ function checkApiKeys(env: NodeJS.ProcessEnv): CheckResult {
   if (parsed.errors.length > 0) {
     return { name: 'api-keys', status: 'fail', message: parsed.errors.join(' ') };
   }
+  const registry = env.MCP_KEY_REGISTRY?.trim();
+  const registryNote = registry ? `; developer keys from the key registry (MCP_KEY_REGISTRY=${registry}), managed with keys new` : '';
   if (parsed.keys.length === 0) {
-    return {
-      name: 'api-keys',
-      status: 'fail',
-      message: 'No API key configured (MCP_API_KEYS or MCP_API_KEY). Required for the HTTP transport.',
-    };
+    return registry
+      ? { name: 'api-keys', status: 'pass', message: `No fixed API keys${registryNote}.` }
+      : {
+          name: 'api-keys',
+          status: 'fail',
+          message: 'No API key configured (MCP_API_KEYS or MCP_API_KEY, or a key registry with MCP_KEY_REGISTRY). Required for the HTTP transport.',
+        };
   }
   return {
     name: 'api-keys',
     status: 'pass',
-    message: `${parsed.keys.length} API key(s) configured: ${describeApiKeys(parsed.keys)}`,
+    message: `${parsed.keys.length} API key(s) configured: ${describeApiKeys(parsed.keys)}${registryNote}`,
   };
 }
 

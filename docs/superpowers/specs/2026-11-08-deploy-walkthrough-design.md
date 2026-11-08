@@ -52,7 +52,7 @@ that step (the existing scripts are re-runnable).
 6. **Ready.** Read the web app host from the deployment outputs (`az deployment group show`), then poll
    `https://<host>/health` until ready (up to 30 minutes, every 15 seconds, with the elapsed time shown).
 7. **Keys.** `keys reset-admin --registry azure-blob --account-url <artifactAccountUrl>` (the deployer's Azure sign-in
-   has the data role on the operations container through the template), shown once with
+   has the data role on the `d365-keys` container through the template), shown once with
    `Save this admin key now. It manages developer keys and is not shown again.` Then create the deployer's developer
    key through the admin API (name asked [the local user name]).
 8. **Connect.** Continue as hosted-yes with the URL and that key already filled in: custom-models folder, `.env`,
@@ -63,7 +63,7 @@ that step (the existing scripts are re-runnable).
 ## Template and script changes
 
 - `infra/modules/storage.bicep`: the deployer is not given a data role by the template today. `azure-deploy.ps1` gains
-  nothing; instead step 7 grants the signed-in user Storage Blob Data Contributor on the operations container
+  nothing; instead step 7 grants the signed-in user Storage Blob Data Contributor on the `d365-keys` container
   (`az role assignment create`, scoped to the container) before `reset-admin`, and says so. Role propagation can take
   minutes, so `reset-admin` retries a 403 for up to 5 minutes.
 - `scripts/azure-post-deploy.ps1`: `-SmokeKeyOnly`.

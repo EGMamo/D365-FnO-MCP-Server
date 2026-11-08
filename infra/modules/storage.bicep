@@ -10,6 +10,8 @@ param accountName string
 param artifactContainerName string
 param sourceContainerName string
 param operationsContainerName string
+@description('Container of the key registry (key-registry.json): developer-key and admin-key digests the API manages.')
+param keyRegistryContainerName string
 
 param apiPrincipalId string
 param workerPrincipalId string
@@ -98,6 +100,12 @@ resource operationsContainer 'Microsoft.Storage/storageAccounts/blobServices/con
   properties: { publicAccess: 'None' }
 }
 
+resource keyRegistryContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+  parent: blobService
+  name: keyRegistryContainerName
+  properties: { publicAccess: 'None' }
+}
+
 // No rule ever matches bundles/ or deployment-pointers.json base blobs: only the
 // worker's retention logic, which knows the active and previous bundles, deletes them.
 var baseRules = [
@@ -161,6 +169,18 @@ resource apiArtifactReader 'Microsoft.Authorization/roleAssignments@2022-04-01' 
     principalId: apiPrincipalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', blobDataReader)
+  }
+}
+
+// API: reads and writes the key registry, and nothing else it can change. Its own container, so the
+// write role reaches no bundle, source or run report.
+resource apiKeyRegistryContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: keyRegistryContainer
+  name: guid(keyRegistryContainer.id, apiPrincipalId, blobDataContributor)
+  properties: {
+    principalId: apiPrincipalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', blobDataContributor)
   }
 }
 
@@ -228,3 +248,4 @@ output blobEndpoint string = account.properties.primaryEndpoints.blob
 output artifactContainerName string = artifactContainer.name
 output sourceContainerName string = sourceContainer.name
 output operationsContainerName string = operationsContainer.name
+output keyRegistryContainerName string = keyRegistryContainer.name

@@ -38,7 +38,13 @@ export interface SessionCounts {
 export interface ServerStatus {
   status: 'ok' | 'starting';
   you: { keyName: string };
-  server: { version: string; startedAt: string; uptimeSeconds: number };
+  server: {
+    version: string;
+    startedAt: string;
+    uptimeSeconds: number;
+    /** Where the developer keys live and when they were last read; null without a key registry. No names, no counts. */
+    keyRegistry: { kind: 'file' | 'azure-blob'; loadedAt: string | null } | null;
+  };
   /** Null while the server is starting. */
   index: IndexDescription | null;
   /** Null while starting and on a server that was not started from a bundle. */
@@ -99,6 +105,8 @@ export interface StatusProviderOptions {
   configuredApplicationVersion?: string | null;
   /** The bundle this process was activated from, or null. */
   artifact: () => ArtifactDescription | null;
+  /** The key registry, or null (the default) when the server has none. */
+  keyRegistry?: () => { kind: 'file' | 'azure-blob'; loadedAt: string | null } | null;
   /** Milliseconds since the epoch; replaceable for tests. */
   now?: () => number;
   /** Seconds since the process started; replaceable for tests. */
@@ -141,7 +149,12 @@ export function createStatusProvider(options: StatusProviderOptions): StatusProv
       return {
         status: ready ? 'ok' : 'starting',
         you: { keyName },
-        server: { version: options.version, startedAt, uptimeSeconds: Math.floor(uptimeSeconds()) },
+        server: {
+          version: options.version,
+          startedAt,
+          uptimeSeconds: Math.floor(uptimeSeconds()),
+          keyRegistry: options.keyRegistry?.() ?? null,
+        },
         index: ready ? indexDescription() : null,
         artifact: ready ? options.artifact() : null,
         sessions: { active: sessions.active, max: sessions.max, maxPerKey: sessions.maxPerKey },

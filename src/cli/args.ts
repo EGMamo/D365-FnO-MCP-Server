@@ -149,6 +149,13 @@ Commands:
       --hosted-api-key <key>        Your developer key (hosted; visible in the process list, so prefer the file)
       --deploy              Deploy a new hosted server on Azure first (hosted)
       --force               Replace an existing .env
+  keys new <name>           Create a developer key on a hosted server, shown once, and print the command the
+                            developer runs. Uses the server's admin key (D365_MCP_ADMIN_KEY or --admin-key-file)
+      --server <url>        The hosted server, for example https://<your-app>.azurewebsites.net
+  keys list                 List the developer keys of a hosted server (--server)
+  keys revoke <name>        Revoke a developer key; its sessions end at once (--server)
+  keys reset-admin          Make a new admin key, shown once, keeping the developer keys; writes the registry itself
+      --registry <kind>     file (with --path <file>) or azure-blob (with --account-url <url> [--container <name>])
   artifact publish         Validate and idempotently upload a local bundle
       --bundle-dir <dir>   Validated local artifact bundle directory
   artifact status          Inspect remote deployment pointers (use --verify to validate bundles)

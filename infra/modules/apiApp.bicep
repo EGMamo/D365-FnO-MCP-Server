@@ -32,6 +32,8 @@ param apiKeysSecretName string
 
 param artifactBlobEndpoint string
 param artifactContainerName string
+@description('Container of the key registry (key-registry.json), in the same account as the artifacts.')
+param keyRegistryContainerName string
 
 @description('Client CIDR ranges allowed to reach the API. Empty allows all addresses (API keys still apply).')
 param allowedIngressCidrs array
@@ -58,7 +60,11 @@ var appSettings = [
   { name: 'MCP_TRANSPORT', value: 'http' }
   { name: 'MCP_PORT', value: '8080' }
   { name: 'TRUST_PROXY_HOPS', value: '1' }
+  // Fixed keys (the deploy smoke key). Developer keys live in the key registry below, managed with the admin key.
   { name: 'MCP_API_KEYS', value: '@Microsoft.KeyVault(VaultName=${apiKeyVaultName};SecretName=${apiKeysSecretName})' }
+  { name: 'MCP_KEY_REGISTRY', value: 'azure-blob' }
+  { name: 'MCP_KEY_REGISTRY_ACCOUNT_URL', value: artifactBlobEndpoint }
+  { name: 'MCP_KEY_REGISTRY_CONTAINER', value: keyRegistryContainerName }
   { name: 'D365_ENABLE_WRITE_TOOLS', value: '0' }
   { name: 'D365_ARTIFACT_SOURCE', value: 'azure-blob' }
   { name: 'D365_ARTIFACT_STORE_PATH', value: artifactStorePath }

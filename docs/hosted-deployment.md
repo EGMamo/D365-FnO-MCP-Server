@@ -151,7 +151,9 @@ builder are removed.
 The hosted API needs:
 
 - `MCP_TRANSPORT=http`
-- `MCP_API_KEYS=name=<32+ character key>,...`
+- `MCP_KEY_REGISTRY=azure-blob`, `MCP_KEY_REGISTRY_ACCOUNT_URL=<blob endpoint>` and
+  `MCP_KEY_REGISTRY_CONTAINER=d365-keys`: where the developer keys live (see [Developer keys](#developer-keys))
+- `MCP_API_KEYS=name=<32+ character key>,...` for fixed keys (the template keeps the deploy smoke key `ci-smoke` here)
 - `D365_INDEX_DB_PATH=<path to the promoted active database>`
 - `D365_ARTIFACT_STORE_PATH=<mounted or synchronized immutable artifact-store root>`
 - `D365_ENABLE_WRITE_TOOLS=0`
@@ -186,13 +188,39 @@ The answer names the application version and build time of the index, the bundle
 revision and creation time of the bundle this replica activated at startup, and the server version.
 It answers while a replica is still starting. See [Transport](../README.md#transport) for the fields.
 
+## Developer keys
+
+Developers never create keys. The operator does, on the server itself, with the **admin key**; there is no
+Microsoft sign-in for it. The server keeps only a SHA-256 fingerprint of each key, in `key-registry.json` in the
+`d365-keys` container, which its managed identity can read and write and nothing else of its can change.
+
+1. Make the admin key once, with your own Azure access to that container (the deploy walkthrough does this):
+
+   ```bash
+   d365-fno-mcp-server keys reset-admin --registry azure-blob --account-url https://<account>.blob.core.windows.net
+   ```
+
+   It is shown once. Keep it in your password manager. Running it again replaces it and keeps the developer keys.
+2. Create a key per developer, from the page or the command:
+   - `https://<api>/admin`: paste the admin key, then **New key**, **Revoke**.
+   - `D365_MCP_ADMIN_KEY=<admin key> d365-fno-mcp-server keys new alice --server https://<api>`
+     (also `keys list` and `keys revoke alice`). The admin key is read from `D365_MCP_ADMIN_KEY`,
+     `--admin-key-file` or a hidden prompt, never from a command-line value.
+3. Send the key to the developer over a channel you trust. They run
+   `d365-fno-mcp setup --mode hosted --hosted-url https://<api>/mcp` and paste it.
+
+A new key works at once. A revoked key gets `401` at once on the replica that revoked it and within about
+5 seconds on every other one, and the sessions it opened are closed. Admin requests are rate limited
+(20 a minute per address), served over HTTPS only, and logged with the key name and the action, never a key.
+
 ## Operations
 
 | Task | Action |
 | --- | --- |
 | Refresh | Run the scheduled worker; promotion occurs only after validation |
 | Roll back | Swap the active/previous pointer to the retained validated bundle and signal the API |
-| Rotate client access | Rotate the named API-key secret and recycle the API |
+| Issue or revoke client access | `keys new <name>` / `keys revoke <name>` with the admin key, or the `/admin` page; no restart |
+| Replace the admin key | `keys reset-admin --registry azure-blob --account-url <url>` (needs your Azure access to `d365-keys`) |
 | Rotate acquisition credentials | Add a new Key Vault secret version, update the worker, verify, then retire the old credential |
 | Check what is live | `GET /status` with a key: bundle id, pointer revision, application version and build time of what this replica activated at startup |
 | Diagnose mismatch | Read `index.applicationVersion` from `GET /status` (or `get_index_stats`) and compare it with the client's `X-D365-Client-Sdk-Version` |

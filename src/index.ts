@@ -183,6 +183,10 @@ export async function run(argv: string[]): Promise<CliResult> {
       }
       return { code: await setupCommand({ ...parsed.options, edition: { bin: 'd365-fno-mcp-server' } }) };
     }
+    case 'keys': {
+      const { keysCommand } = await import('./cli/keys.js');
+      return { code: await keysCommand({ positionals, flags }) };
+    }
     case 'artifact': {
       const { artifactCommand } = await import('./cli/artifact-command.js');
       return {

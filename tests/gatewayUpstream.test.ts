@@ -404,7 +404,7 @@ describe('UpstreamSession availability', () => {
     const error = await upstream.callTool('echo', { text: 'throttled' }).catch((caught: unknown) => caught);
 
     expect(error).toBeInstanceOf(UpstreamUnavailableError);
-    expect((error as Error).message).toContain('HTTP 429');
+    expect((error as Error).message).toContain('is limiting requests from this machine (HTTP 429); retry shortly.');
     hosted.setIntercept(null);
     await vi.waitFor(() => expect(hosted.sessions.size).toBe(0));
     expect(hosted.requests.filter((request) => request.method === 'DELETE')).toHaveLength(1);
@@ -422,7 +422,10 @@ describe('UpstreamSession availability', () => {
     const error = await upstream.callTool('echo', { text: 'hi' }).catch((caught: unknown) => caught);
 
     expect(error).toBeInstanceOf(UpstreamUnavailableError);
-    expect((error as Error).message).toContain('rejected the API key (HTTP 401)');
+    expect((error as Error).message).toContain(
+      'rejected the API key (HTTP 401). It may have been revoked: ask your operator for a new key, then run setup again.'
+    );
+    expect((error as Error).message).not.toContain('wrong-key-0123456789');
     expect(upstream.isAvailable()).toBe(false);
   });
 

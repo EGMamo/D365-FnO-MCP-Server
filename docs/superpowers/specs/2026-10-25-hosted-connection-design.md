@@ -35,7 +35,7 @@ Names follow the existing key-name rule (1 to 64 of letters, digits, `.`, `_`, `
 
 **Where it lives** (`MCP_KEY_REGISTRY`):
 
-- `azure-blob`: blob `key-registry.json` in `MCP_KEY_REGISTRY_CONTAINER` (default `d365-operations`) of
+- `azure-blob`: blob `key-registry.json` in `MCP_KEY_REGISTRY_CONTAINER` (default `d365-keys`, its own container) of
   `MCP_KEY_REGISTRY_ACCOUNT_URL`, through the server's managed identity (`DefaultAzureCredential`). Updates use the
   blob ETag (`If-Match`; `If-None-Match: *` for the first write), so two admins saving at once cannot overwrite each
   other: the loser retries on the fresh document once, then answers `409`.
@@ -99,7 +99,7 @@ d365-fno-mcp-server keys reset-admin    (registry settings, see below)
 - `new` prints the key once and the developer command:
   `d365-fno-mcp setup --mode hosted --hosted-url https://<host>/mcp` (it asks for the key; the key is never on it).
 - `reset-admin` writes the registry directly, not through the server: `--registry azure-blob --account-url <url>
-  [--container d365-operations]` (with the caller's Azure CLI sign-in) or `--registry file --path <file>`. It creates
+  [--container d365-keys]` (with the caller's Azure CLI sign-in) or `--registry file --path <file>`. It creates
   the document when missing, replaces only the admin digest, keeps the developer keys, and prints the new admin key
   once. This is the one path that needs Azure access.
 - Usage errors exit 1 with the problem named; an HTTP error prints the server's error text (it never contains a key).
@@ -130,7 +130,7 @@ capacity (HTTP 503); retry shortly.`
 
 ## Azure template
 
-`infra/modules/storage.bicep` grants the API identity Storage Blob Data Contributor on the operations container;
+`infra/modules/storage.bicep` grants the API identity Storage Blob Data Contributor on a new `d365-keys` container (not the operations container, so the API's write role reaches nothing else);
 `apiApp.bicep` sets `MCP_KEY_REGISTRY=azure-blob`, `MCP_KEY_REGISTRY_ACCOUNT_URL`, `MCP_KEY_REGISTRY_CONTAINER`.
 `MCP_API_KEYS` stays (the deploy smoke key `ci-smoke`).
 

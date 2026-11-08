@@ -377,6 +377,10 @@ describe('CLI', () => {
 
   it('omits retired index transfer commands from help', () => {
     expect(HELP_TEXT).toContain('index-status');
-    expect(HELP_TEXT).not.toMatch(/publish-index|pull-index|upload-index|D365_INDEX_URL|--server/);
+    expect(HELP_TEXT).not.toMatch(/publish-index|pull-index|upload-index|D365_INDEX_URL/);
+    // --server belongs to keys alone now; the retired index transfer commands used it too.
+    const serverLines = HELP_TEXT.split('\n').filter((line) => line.includes('--server'));
+    expect(serverLines.length).toBeGreaterThan(0);
+    for (const line of serverLines) expect(line).toMatch(/^\s+(keys |--server <url> {8}The hosted server)/);
   });
 });

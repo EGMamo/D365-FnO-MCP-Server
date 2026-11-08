@@ -363,7 +363,15 @@ export class UpstreamSession implements UpstreamPort {
     }
     if (error instanceof StreamableHTTPError && typeof error.code === 'number' && error.code > 0) {
       if (error.code === 401 || error.code === 403) {
-        return new UpstreamUnavailableError(`${where} rejected the API key (HTTP ${error.code}).`);
+        return new UpstreamUnavailableError(
+          `${where} rejected the API key (HTTP ${error.code}). It may have been revoked: ask your operator for a new key, then run setup again.`
+        );
+      }
+      if (error.code === 429) {
+        return new UpstreamUnavailableError(`${where} is limiting requests from this machine (HTTP 429); retry shortly.`);
+      }
+      if (error.code === 503) {
+        return new UpstreamUnavailableError(`${where} is starting or at capacity (HTTP 503); retry shortly.`);
       }
       return new UpstreamUnavailableError(`${where} answered with HTTP ${error.code}.`);
     }

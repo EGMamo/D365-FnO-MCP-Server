@@ -104,7 +104,8 @@ Configuration comes from environment variables (a `.env` file in the working dir
 | `MCP_TRANSPORT` | `http` | Must remain `http`; the server exposes Streamable HTTP only. |
 | `MCP_PORT` | `3000` | HTTP listen port (HTTP transport only). |
 | `MCP_HOST` | _(all interfaces)_ | Interface to bind, e.g. `127.0.0.1` to keep a local server off the network. |
-| `MCP_API_KEYS` | _(empty)_ | Named API keys for HTTP authentication: `name=key,name=key` (commas or newlines), each key **at least 32 characters**. Only the name is logged, and a session can only be used with the key that opened it. |
+| `MCP_KEY_REGISTRY` | _(empty)_ | Where developer keys live: `file` (with `MCP_KEY_REGISTRY_PATH`) or `azure-blob` (with `MCP_KEY_REGISTRY_ACCOUNT_URL` and `MCP_KEY_REGISTRY_CONTAINER`, default `d365-keys`). Keys are created and revoked with the admin key through `/admin` or `keys`, take effect without a restart, and only their SHA-256 fingerprints are stored. See [Developer keys](docs/hosted-deployment.md#developer-keys). |
+| `MCP_API_KEYS` | _(empty)_ | Fixed named API keys for HTTP authentication: `name=key,name=key` (commas or newlines), each key **at least 32 characters**. Only the name is logged, and a session can only be used with the key that opened it. |
 | `MCP_API_KEY` | _(empty)_ | Single legacy key, reported under the name `default`. At least one key is required. |
 | `D365_PACKAGES_DIR` | _(empty)_ | Path to `PackagesLocalDirectory`. Required by `index`, `index-status` and local `doctor`; the hosted API receives an Azure-built database instead. |
 | `D365_APP_VERSION` | _(empty)_ | Four-part D365 application version of this host's `PackagesLocalDirectory`, e.g. `10.0.2645.136`. Only needed when the packages path does not name the version — Unified Developer Experience paths (`…\Dynamics365\<version>\PackagesLocalDirectory`) are detected automatically. See [SDK version warnings](#sdk-version-warnings). |
@@ -291,6 +292,13 @@ Commands:
       --hosted-api-key <key>        Your developer key (hosted; visible in the process list, so prefer the file)
       --deploy              Deploy a new hosted server on Azure first (hosted)
       --force               Replace an existing .env
+  keys new <name>           Create a developer key on a hosted server, shown once, and print the command the
+                            developer runs. Uses the server's admin key (D365_MCP_ADMIN_KEY or --admin-key-file)
+      --server <url>        The hosted server, for example https://<your-app>.azurewebsites.net
+  keys list                 List the developer keys of a hosted server (--server)
+  keys revoke <name>        Revoke a developer key; its sessions end at once (--server)
+  keys reset-admin          Make a new admin key, shown once, keeping the developer keys; writes the registry itself
+      --registry <kind>     file (with --path <file>) or azure-blob (with --account-url <url> [--container <name>])
   artifact publish         Validate and idempotently upload a local bundle
       --bundle-dir <dir>   Validated local artifact bundle directory
   artifact status          Inspect remote deployment pointers (use --verify to validate bundles)
@@ -948,7 +956,9 @@ database. Set `D365_RUN_SQL_INTEGRATION=1` and `D365_XREF_CONNECTION_STRING`, th
 
 | Symptom | Cause and fix |
 | --- | --- |
-| HTTP `401 Unauthorized` | The key is missing or wrong. Send it as `X-API-Key: <key>` or `Authorization: Bearer <key>`, exactly as listed in `MCP_API_KEYS`. |
+| HTTP `401 Unauthorized` | The answer says which: no key was sent (send it as `X-API-Key: <key>` or `Authorization: Bearer <key>`), or the key was not recognized: it may have been revoked, so ask your operator for a new one (`keys new`). |
+| HTTP `429 Too Many Requests` | Too many requests from your address (the answer says how many seconds to wait), or your key holds its maximum number of sessions: close one, or wait for idle sessions to end. |
+| HTTP `503 Service Unavailable` | The server is starting, or every session slot is taken; retry after the `Retry-After` seconds. |
 | Startup fails with `key for '<name>' is N characters` | Keys need at least 32 characters. Generate one with `openssl rand -hex 32`. |
 | Startup fails with `documentation placeholder` | The key is still the sample value from an old `.env.example`. Generate a real one. |
 | HTTP `403 Session belongs to a different API key` | A client reused another key's `mcp-session-id`. Reconnect so the client starts a new session. |

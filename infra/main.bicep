@@ -44,6 +44,8 @@ param apiKeysSecretName string = 'mcp-api-keys'
 param artifactContainerName string = 'd365-artifacts'
 param sourceContainerName string = 'd365-sources'
 param operationsContainerName string = 'd365-operations'
+@description('Container of the key registry: the developer keys and the admin key the API manages, as digests.')
+param keyRegistryContainerName string = 'd365-keys'
 
 @description('Public IP addresses or CIDR ranges allowed in the storage firewall. Only takes effect when enablePrivateNetworking is false.')
 param storageAllowedIpRanges array = []
@@ -156,6 +158,7 @@ module storage 'modules/storage.bicep' = {
     artifactContainerName: artifactContainerName
     sourceContainerName: sourceContainerName
     operationsContainerName: operationsContainerName
+    keyRegistryContainerName: keyRegistryContainerName
     apiPrincipalId: identities.outputs.apiPrincipalId
     workerPrincipalId: identities.outputs.workerPrincipalId
     versionRetentionDays: versionRetentionDays
@@ -240,6 +243,7 @@ module api 'modules/apiApp.bicep' = {
     apiKeysSecretName: apiKeysSecretName
     artifactBlobEndpoint: storage.outputs.blobEndpoint
     artifactContainerName: storage.outputs.artifactContainerName
+    keyRegistryContainerName: storage.outputs.keyRegistryContainerName
     allowedIngressCidrs: allowedIngressCidrs
     enablePrivateNetworking: enablePrivateNetworking
     appSubnetId: enablePrivateNetworking ? network.outputs.appSubnetId : ''
@@ -297,6 +301,7 @@ output registryName string = registry.outputs.name
 output deployClientId string = identities.outputs.deployClientId
 output artifactAccountUrl string = storage.outputs.blobEndpoint
 output artifactContainerName string = storage.outputs.artifactContainerName
+output keyRegistryContainerName string = storage.outputs.keyRegistryContainerName
 output workerManagedIdentityClientId string = identities.outputs.workerClientId
 output apiKeyVaultName string = apiVault.outputs.name
 output workerKeyVaultName string = workerVault.outputs.name
