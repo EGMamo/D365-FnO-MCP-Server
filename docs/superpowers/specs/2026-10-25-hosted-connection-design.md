@@ -162,6 +162,15 @@ capacity (HTTP 503); retry shortly.`
 
 Per-key rate limits, key expiry, more than one admin key, an admin audit log stored in the registry.
 
-## Not verifiable here
+## Verified against real Azure (2026-11-08)
 
-The blob backend against real Azure until the Part 2c end-to-end run; Windows.
+A throwaway Standard_LRS account (shared-key access off) in northeurope: `keys reset-admin --registry azure-blob`
+with the Azure CLI sign-in, then `serve` with `MCP_KEY_REGISTRY=azure-blob` and no fixed keys. `keys new` gave a key
+that opened `/status` as `e2e-dev`, `keys list` showed it, the admin key got 401 on `/status`, the developer key got
+403 on the admin API, `keys revoke` turned it into 401, and a second `reset-admin` written straight to the blob
+reached the running server within one poll (old admin key 401, new one 200). The blob held digests only, and no key
+appeared in the server log. The resource group was deleted afterwards.
+
+## Not verified
+
+An App Service deployment with the managed identity, the deploy walkthrough end to end, and Windows.
