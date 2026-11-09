@@ -71,5 +71,6 @@ for (const folder of ['claude-code', 'github-copilot']) {
 fs.chmodSync(entry, 0o755);
 
 const packArgs = ['pack', ...(dryRun ? ['--dry-run', '--json'] : [])];
-const result = execFileSync('npm', packArgs, { cwd: out, encoding: 'utf8' });
+// npm is npm.cmd on Windows, which only a shell finds.
+const result = execFileSync('npm', packArgs, { cwd: out, encoding: 'utf8', shell: process.platform === 'win32' });
 process.stdout.write(result);

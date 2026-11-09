@@ -5,7 +5,8 @@ import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const src = path.join(root, 'src');
+/** The compiler reports file names with forward slashes on every platform. */
+const src = path.join(root, 'src').split(path.sep).join('/');
 
 /** Source files the developer package must never contain. */
 const OPERATOR_ONLY: readonly RegExp[] = [
@@ -40,8 +41,9 @@ function clientProgram(): { files: string[]; bareImports: Set<string> } {
   const files: string[] = [];
   const bareImports = new Set<string>();
   for (const sf of program.getSourceFiles()) {
-    if (!sf.fileName.startsWith(src + path.sep) && !sf.fileName.startsWith(src + '/')) continue;
-    files.push(path.relative(src, sf.fileName).split(path.sep).join('/'));
+    const fileName = sf.fileName.split(path.sep).join('/');
+    if (!fileName.toLowerCase().startsWith(`${src}/`.toLowerCase())) continue;
+    files.push(fileName.slice(src.length + 1));
     const visit = (node: ts.Node): void => {
       let spec: string | undefined;
       if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {

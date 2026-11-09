@@ -53,6 +53,8 @@ COPY d365-fno-assistant-knowledge ./d365-fno-assistant-knowledge
 # Read-only at runtime: the filter loads the model and cached topic vectors from here.
 COPY --from=build /app/models ./models
 COPY README.md LICENSE ./
+# Security updates the base image does not carry yet (for example zlib1g), without growing the layer.
+RUN apt-get update && apt-get upgrade -y --no-install-recommends && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /data && chown -R node:node /data
 USER node
 EXPOSE 8080
