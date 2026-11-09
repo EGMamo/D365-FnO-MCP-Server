@@ -4,6 +4,7 @@
  * Dependency-free on purpose: `doctor` and the runtime config both use it,
  * and neither should pull in Express or the MCP SDK to validate a key list.
  */
+import { createHash, randomBytes } from 'node:crypto';
 
 export interface ApiKeyEntry {
   /** Short label used in logs; never the key itself. */
@@ -16,7 +17,41 @@ export const MIN_API_KEY_LENGTH = 32;
 /** Name of the entry created from the legacy single `MCP_API_KEY` variable. */
 export const LEGACY_API_KEY_NAME = 'default';
 
-const NAME_PATTERN = /^[A-Za-z0-9._@-]{1,64}$/;
+/** What a key name may be, here and in the key registry. */
+export const KEY_NAME_PATTERN = /^[A-Za-z0-9._@-]{1,64}$/;
+const NAME_PATTERN = KEY_NAME_PATTERN;
+
+/** The prefix that tells an admin key apart from a developer key at a glance. */
+export const ADMIN_KEY_PREFIX = 'adm_';
+
+/** A developer key: 64 hexadecimal characters from 32 random bytes. */
+export function generateApiKey(): string {
+  return randomBytes(32).toString('hex');
+}
+
+/** An admin key: `adm_` and 64 hexadecimal characters. It manages developer keys and opens no MCP session. */
+export function generateAdminKey(): string {
+  return `${ADMIN_KEY_PREFIX}${randomBytes(32).toString('hex')}`;
+}
+
+/**
+ * The SHA-256 of a key, in hexadecimal. The registry keeps only this. A plain digest is enough: the keys are 256
+ * random bits, so there is nothing to guess and no need for a salt or a slow hash.
+ */
+export function digestKey(key: string): string {
+  return createHash('sha256').update(key, 'utf8').digest('hex');
+}
+
+/**
+ * The developer keys a key registry holds, as the HTTP transport sees them (`src/server/keyRegistry.ts` implements
+ * it in the operator build; this interface lives here so the transport never imports the registry).
+ */
+export interface RegistryKeys {
+  /** Digest to name, for every developer key; replaced as one object on each change. */
+  developerKeys(): ReadonlyMap<string, string>;
+  /** Calls `listener` after the keys changed; returns the way to stop. */
+  onChange(listener: () => void): () => void;
+}
 /** Sample values from docs and older `.env.example` files, which are long enough to pass the length check. */
 const PLACEHOLDER_KEY = /change-?me/i;
 

@@ -149,7 +149,7 @@ describe('createStatusProvider', () => {
     expect(ask(provider())).toEqual({
       status: 'ok',
       you: { keyName: 'alice' },
-      server: { version: '0.1.0', startedAt: '2026-10-25T08:00:00.000Z', uptimeSeconds: 3600 },
+      server: { version: '0.1.0', startedAt: '2026-10-25T08:00:00.000Z', uptimeSeconds: 3600, keyRegistry: null },
       index: {
         applicationVersion: '10.0.2428.63',
         applicationVersionSource: 'packages-dir',
@@ -191,13 +191,24 @@ describe('createStatusProvider', () => {
     expect(artifact).not.toHaveBeenCalled();
   });
 
+  it('reports where the keys live and when they were read, and nothing else about them', () => {
+    const provider = createStatusProvider({
+      version: '0.1.0',
+      database: () => null,
+      artifact: () => null,
+      keyRegistry: () => ({ kind: 'azure-blob', loadedAt: '2026-11-08T10:00:00.000Z' }),
+    });
+    const described = provider.describe({ ready: false, keyName: 'alice', sessions: { active: 0, max: 1, maxPerKey: 0 } });
+    expect(described.server.keyRegistry).toEqual({ kind: 'azure-blob', loadedAt: '2026-11-08T10:00:00.000Z' });
+  });
+
   it('contains only the documented keys, and no path, environment name or secret', () => {
     const text = JSON.stringify(ask(provider({ configuredApplicationVersion: '10.0.2500.1' })));
     const document = JSON.parse(text) as Record<string, Record<string, unknown>>;
 
     expect(Object.keys(document)).toEqual(['status', 'you', 'server', 'index', 'artifact', 'sessions']);
     expect(Object.keys(document.you)).toEqual(['keyName']);
-    expect(Object.keys(document.server)).toEqual(['version', 'startedAt', 'uptimeSeconds']);
+    expect(Object.keys(document.server)).toEqual(['version', 'startedAt', 'uptimeSeconds', 'keyRegistry']);
     expect(Object.keys(document.index)).toEqual([
       'applicationVersion', 'applicationVersionSource', 'builtAt', 'schemaVersion', 'objects', 'labels',
     ]);

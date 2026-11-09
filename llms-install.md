@@ -5,8 +5,10 @@ These steps are for an AI agent (Cline, Claude Code, GitHub Copilot and others) 
 ## Requirements
 
 - Node.js 24 or later (`node --version`).
-- A Dynamics 365 Finance and Operations `PackagesLocalDirectory` or a copy of it. Ask the user for the path, for example `K:/AosService/PackagesLocalDirectory`.
-- About 1–5 GB of free disk space for the SQLite index.
+- The folder with the user's custom models (`<Package>/<Model>/Ax<Type>/*.xml`). Ask the user for the path.
+- For the standard application: the URL of a hosted server and a developer key from its operator. Without one,
+  the gateway runs in local mode on the custom models alone. Full local indexes of `PackagesLocalDirectory` are no
+  longer supported.
 
 ## 1. Build from source
 
@@ -22,51 +24,24 @@ npm link
 
 After `npm link`, the `d365-fno-mcp-server` command is on the PATH.
 
-## 2. Configure and build the local index
+## 2. Local mode: custom models only
 
-Use absolute paths. Generate the API key yourself and pass it in: `setup` writes it to `.env` but never
-prints a key it generated, so you could not register it in the client otherwise. `setup` writes the
-`.env` file in the current directory (owner-only on macOS and Linux; on Windows it keeps the folder's
-access rules, so keep that folder private); run every later command from that directory.
+Ask the user which mode they want. Local mode needs no hosted server, URL or key:
 
 ```bash
-export API_KEY="$(openssl rand -hex 32)"
-d365-fno-mcp-server setup --non-interactive \
-  --packages-dir "<PackagesLocalDirectory>" \
-  --api-key "$API_KEY" \
-  --db-path "<absolute path>/d365_index.db" \
-  --host 127.0.0.1
+d365-fno-mcp-server setup --non-interactive --mode local --custom-dir "<folder with the custom models>"
 d365-fno-mcp-server doctor
-d365-fno-mcp-server index
+d365-fno-mcp-server gateway
 ```
 
-The `index` run takes several minutes on a full `PackagesLocalDirectory`. `doctor` should report `0 failed`
-and end with a `Next:` line saying what to run.
+`gateway` indexes the custom models itself and prints a client entry for its loopback endpoint; register that.
+Standard Microsoft objects are not known in this mode.
 
-## 3. Run the local HTTP server (local-data setup)
+## 3. Hosted mode
 
-Start the authenticated server from the same directory (it reads `.env`):
-
-```bash
-d365-fno-mcp-server serve
-```
-
-It prints its URL and a client entry. Register `http://127.0.0.1:3000/mcp` in the client using the key from
-step 2:
-
-```json
-{
-  "mcpServers": {
-    "d365-fno": {
-      "type": "http",
-      "url": "http://127.0.0.1:3000/mcp",
-      "headers": { "X-API-Key": "<the value of API_KEY>"}
-    }
-  }
-}
-```
-
-Use this local setup for tools that depend on local-only imports such as `index-trace`.
+The developer key comes from the operator of the hosted server (`d365-fno-mcp-server keys new <name>`); a
+developer cannot create one. Configure the gateway as shown below, under "Hosted server plus your own custom
+models".
 
 ## 4. Register a hosted HTTP server (alternative)
 
@@ -122,12 +97,10 @@ d365-fno-mcp-server gateway
 
 ## 5. Verify
 
-Restart the client and call `get_index_stats`. A local server reads the database from
-`D365_INDEX_DB_PATH`; a hosted server reads the active validated bundle configured by
-`D365_ARTIFACT_STORE_PATH`. A `401` means the key is missing or wrong. If a local server cannot
-start, run `d365-fno-mcp-server doctor` with the same environment. If a hosted server cannot start,
-ask its operator to check the artifact-store configuration and startup logs; rerunning local
-indexing does not change a hosted server.
+Restart the client and call `local_index_status` (and, in hosted mode, `get_index_stats`). A `401` means the
+key is missing or was revoked: ask the operator for a new one. If the gateway cannot start, run
+`d365-fno-mcp-server doctor` with the same environment. If a hosted server cannot start, ask its operator to
+check the artifact-store configuration and startup logs.
 
 ## Optional data
 

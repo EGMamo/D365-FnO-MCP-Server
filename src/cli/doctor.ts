@@ -83,7 +83,7 @@ async function checkDbOpen(dbPath: string): Promise<CheckResult[]> {
       : {
           name: 'db-objects',
           status: 'warn',
-          message: 'No objects indexed yet; run `d365-fno-mcp-server index`.',
+          message: 'No objects indexed yet. serve needs an index built by the hosted worker; full local indexes are no longer supported.',
         },
   ];
 }
@@ -185,17 +185,21 @@ function checkApiKeys(env: NodeJS.ProcessEnv): CheckResult {
   if (parsed.errors.length > 0) {
     return { name: 'api-keys', status: 'fail', message: parsed.errors.join(' ') };
   }
+  const registry = env.MCP_KEY_REGISTRY?.trim();
+  const registryNote = registry ? `; developer keys from the key registry (MCP_KEY_REGISTRY=${registry}), managed with keys new` : '';
   if (parsed.keys.length === 0) {
-    return {
-      name: 'api-keys',
-      status: 'fail',
-      message: 'No API key configured (MCP_API_KEYS or MCP_API_KEY). Required for the HTTP transport.',
-    };
+    return registry
+      ? { name: 'api-keys', status: 'pass', message: `No fixed API keys${registryNote}.` }
+      : {
+          name: 'api-keys',
+          status: 'fail',
+          message: 'No API key configured (MCP_API_KEYS or MCP_API_KEY, or a key registry with MCP_KEY_REGISTRY). Required for the HTTP transport.',
+        };
   }
   return {
     name: 'api-keys',
     status: 'pass',
-    message: `${parsed.keys.length} API key(s) configured: ${describeApiKeys(parsed.keys)}`,
+    message: `${parsed.keys.length} API key(s) configured: ${describeApiKeys(parsed.keys)}${registryNote}`,
   };
 }
 
@@ -487,14 +491,25 @@ export async function checkGateway(env: NodeJS.ProcessEnv): Promise<CheckResult[
     return redacted([{ name: 'gateway-config', status: 'fail', message: problems.join('; ') }]);
   }
   const settings = parsed.data;
-  secrets.push(settings.hostedApiKey, settings.token ?? '');
-  const origin = new URL(settings.hostedUrl).origin;
+  secrets.push(settings.hostedApiKey ?? '', settings.token ?? '');
+  const tokenText = settings.token === null ? 'generated on first start and kept beside the local index' : 'from D365_GATEWAY_TOKEN';
+  const { hostedUrl, hostedApiKey } = settings;
+  if (hostedUrl === null || hostedApiKey === null) {
+    return redacted([
+      { name: 'gateway-config', status: 'pass', message: `Local mode (custom models only); port ${settings.port}; token ${tokenText}` },
+      await checkCustomMetadataDir(settings.customMetadataDir),
+      checkLocalIndexPath(settings.localIndexDbPath),
+      { name: 'gateway-hosted', status: 'pass', message: 'local mode, no hosted server configured' },
+    ]);
+  }
+  const hosted = { ...settings, hostedUrl, hostedApiKey };
+  const origin = new URL(hostedUrl).origin;
 
   const results: CheckResult[] = [
     {
       name: 'gateway-config',
       status: 'pass',
-      message: `Hosted ${settings.hostedUrl}; port ${settings.port}; token ${settings.token === null ? 'generated on first start and kept beside the local index' : 'from D365_GATEWAY_TOKEN'}`,
+      message: `Hosted ${hostedUrl}; port ${settings.port}; token ${tokenText}`,
     },
     await checkCustomMetadataDir(settings.customMetadataDir),
     checkLocalIndexPath(settings.localIndexDbPath),
@@ -502,11 +517,11 @@ export async function checkGateway(env: NodeJS.ProcessEnv): Promise<CheckResult[
   const health = await checkHostedHealth(origin, settings.upstreamTimeoutMs);
   results.push(health.result);
   if (health.reachable) {
-    const keyResults = await checkHostedKey(settings);
+    const keyResults = await checkHostedKey(hosted);
     results.push(...keyResults);
     // Only once the key is accepted: a server that refused it has nothing to tell, and the key was just proven good.
     if (keyResults[0]?.name === 'gateway-hosted-key' && keyResults[0].status === 'pass') {
-      results.push(...(await checkHostedIndex(settings)));
+      results.push(...(await checkHostedIndex(hosted)));
     }
   } else {
     results.push({ name: 'gateway-hosted-key', status: 'warn', message: 'Not checked: the hosted server is not ready.' });
@@ -514,15 +529,24 @@ export async function checkGateway(env: NodeJS.ProcessEnv): Promise<CheckResult[
   return redacted(results);
 }
 
+/** Which package runs `doctor`: the developer package has no `serve`, so it never runs the serve checks. */
+export type DoctorEdition = 'operator' | 'developer';
+
+/** True when the environment sets up the gateway: a hosted URL, or local mode (a custom-models folder alone). */
+export function gatewayConfiguredIn(env: NodeJS.ProcessEnv): boolean {
+  return Boolean(env.D365_HOSTED_MCP_URL?.trim() || env.D365_CUSTOM_METADATA_DIR?.trim() || env.D365_PROJECT_DIR?.trim());
+}
+
 export async function runChecks(
-  env: NodeJS.ProcessEnv = process.env
+  env: NodeJS.ProcessEnv = process.env,
+  edition: DoctorEdition = 'operator'
 ): Promise<CheckResult[]> {
   const dbPath = env.D365_INDEX_DB_PATH ?? './d365_index.db';
   const results: CheckResult[] = [checkNode()];
 
-  // A machine with the hosted URL but no packages folder runs the gateway only; `serve` is not set up on it.
-  const gatewayConfigured = Boolean(env.D365_HOSTED_MCP_URL?.trim());
-  const serveConfigured = !gatewayConfigured || Boolean(env.D365_PACKAGES_DIR?.trim());
+  // A machine set up for the gateway but with no packages folder runs the gateway only; `serve` is not set up on it.
+  const gatewayConfigured = gatewayConfiguredIn(env);
+  const serveConfigured = edition === 'operator' && (!gatewayConfigured || Boolean(env.D365_PACKAGES_DIR?.trim()));
   if (serveConfigured) {
     results.push(...(await checkPackagesDir(env.D365_PACKAGES_DIR)));
 
@@ -537,7 +561,10 @@ export async function runChecks(
     results.push({
       name: 'serve-checks',
       status: 'pass',
-      message: 'Skipped the packages-dir, index and api-keys checks: D365_HOSTED_MCP_URL is set and D365_PACKAGES_DIR is not, so only the gateway runs here.',
+      message:
+        edition === 'developer'
+          ? 'Skipped the packages-dir, index and api-keys checks: this package runs the gateway only.'
+          : 'Skipped the packages-dir, index and api-keys checks: the gateway is set up and D365_PACKAGES_DIR is not, so only the gateway runs here.',
     });
   }
   results.push(...checkVisualStudioIntegration(env));
@@ -554,33 +581,34 @@ export async function runChecks(
 export function nextStep(
   results: readonly CheckResult[],
   env: NodeJS.ProcessEnv,
-  options: { envFileExists?: boolean } = {}
+  options: { envFileExists?: boolean; bin?: string } = {}
 ): string | null {
+  const bin = options.bin ?? 'd365-fno-mcp-server';
   const has = (name: string): boolean => results.some((r) => r.name === name);
   const warned = (name: string): boolean => results.some((r) => r.name === name && r.status === 'warn');
 
-  if (!env.D365_PACKAGES_DIR?.trim() && !env.D365_HOSTED_MCP_URL?.trim()) {
+  if (!env.D365_PACKAGES_DIR?.trim() && !gatewayConfiguredIn(env)) {
     // `setup` refuses to replace a .env, so it is no way forward for a folder that already has one.
     return options.envFileExists
-      ? 'Next: set D365_PACKAGES_DIR in your .env file, or run `d365-fno-mcp-server setup --force` to write a new .env (it replaces the current one).'
-      : 'Next: run `d365-fno-mcp-server setup`.';
+      ? `Next: run \`${bin} setup --force\` to write a new .env (it replaces the current one).`
+      : `Next: run \`${bin} setup\`.`;
   }
   const failed = [...new Set(results.filter((r) => r.status === 'fail').map((r) => r.name))];
   if (failed.length > 0) {
-    return `Next: fix the failed checks above (${failed.join(', ')}), then run \`d365-fno-mcp-server doctor\` again.`;
+    return `Next: fix the failed checks above (${failed.join(', ')}), then run \`${bin} doctor\` again.`;
   }
   if (warned('gateway-hosted-health')) {
-    return 'Next: the hosted server is still starting; run `d365-fno-mcp-server doctor` again in a moment.';
+    return `Next: the hosted server is still starting; run \`${bin} doctor\` again in a moment.`;
   }
   if (warned('db-objects')) {
     const gateway = has('gateway-config') ? ' The gateway needs no index and can start now.' : '';
-    return `Next: run \`d365-fno-mcp-server index\`, then \`d365-fno-mcp-server serve\`.${gateway}`;
+    return `Next: point D365_INDEX_DB_PATH at an index built by the hosted worker before running \`${bin} serve\`.${gateway}`;
   }
   if (has('packages-dir') && has('gateway-config')) {
-    return 'Next: run `d365-fno-mcp-server serve` (local index) or `d365-fno-mcp-server gateway` (hosted + custom models).';
+    return `Next: run \`${bin} serve\` (server) or \`${bin} gateway\` (custom models, with or without a hosted server).`;
   }
-  if (has('packages-dir')) return 'Next: run `d365-fno-mcp-server serve`.';
-  if (has('gateway-config')) return 'Next: run `d365-fno-mcp-server gateway`.';
+  if (has('packages-dir')) return `Next: run \`${bin} serve\`.`;
+  if (has('gateway-config')) return `Next: run \`${bin} gateway\`.`;
   return null;
 }
 
@@ -591,9 +619,9 @@ export function nextStep(
  */
 export async function doctorCommand(
   env: NodeJS.ProcessEnv = process.env,
-  options: { showNext?: boolean; envFileExists?: boolean } = {}
+  options: { showNext?: boolean; envFileExists?: boolean; bin?: string; edition?: DoctorEdition } = {}
 ): Promise<number> {
-  const results = await runChecks(env);
+  const results = await runChecks(env, options.edition ?? 'operator');
   const icon = { pass: 'PASS', warn: 'WARN', fail: 'FAIL' } as const;
 
   console.log('D365 FnO MCP Server — environment check\n');
@@ -608,7 +636,10 @@ export async function doctorCommand(
   );
 
   if (options.showNext !== false) {
-    const next = nextStep(results, env, { envFileExists: options.envFileExists ?? fs.existsSync(path.resolve('.env')) });
+    const next = nextStep(results, env, {
+      envFileExists: options.envFileExists ?? fs.existsSync(path.resolve('.env')),
+      ...(options.bin ? { bin: options.bin } : {}),
+    });
     if (next !== null) console.log(`\n${next}`);
   }
 

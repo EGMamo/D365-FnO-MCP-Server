@@ -1,158 +1,150 @@
-# Two packages: one for operators, one for developers
+# Two packages, and the install question: local or hosted
 
-Part 2a of "improve the hosted server experience". It comes before Part 2b
-([hosted connection](2026-10-25-hosted-connection-design.md): clear errors, key rotation, `keys new`), because `keys new`
-must be operator-only from its first commit. Part 1 (`GET /status` and friends) is committed.
+Part 2a of "improve the hosted server experience". Part 2b ([key administration](2026-10-25-hosted-connection-design.md))
+and Part 2c ([deploy walkthrough](2026-11-08-deploy-walkthrough-design.md)) build on it. Part 1 (`GET /status` and
+friends) is committed.
 
 ## What was asked, and decided
 
-The user asked for two deployment packages: a server or operator solution, and a client or developer solution, with
-`keys new` in the operator one only. Then, for the developer package, the installer asks which of two ways to work:
+In the user's words:
 
-- **A. Only custom code.** Only the developer's custom models are indexed, in the same process that answers (no hosted
-  server).
-- **B. A hosted MCP server and custom code.** The hosted server supplies the standard application; the custom models
-  are still indexed locally.
+- "There should be 2 deployment package, 1 server solution or operator solution and one for client or developer
+  solution, and the keys new command should be on the operator solution."
+- "While installing should ask if it will be only local which means it won't use an azure hosted mcp, only mcp grounded
+  in the custom code. Or hosted which means it uses custom code grounded and also an azure hosted mcp, and also ask in
+  this case if the azure server already there or want to deploy one and go through the provisioning."
+- Building the standard index locally "should never happen": "local indexing only ever covers custom code". The
+  standard index is built only by the Azure worker VM, from Dataverse.
 
-Confirmed readings of that:
+Confirmed readings:
 
-1. "Same process" means the gateway process indexes the custom models itself. There is no separate `index` step. The
-   gateway already works this way.
-2. In A, standard objects are simply unknown. Tools that need them are not offered, or say so clearly.
-3. Indexing a full `PackagesLocalDirectory` is operator-only. Anyone who wants that installs the operator package.
+1. Local means the gateway process indexes the custom models itself. There is no separate `index` step.
+2. In local mode standard objects are unknown. Tools that need them are not offered, or say so clearly.
+3. Developers never create keys (Part 2b), and only the operator package can deploy (Part 2c).
 
 ## Who installs what
 
 | | Operator package | Developer package |
 | --- | --- | --- |
-| For | Whoever runs a server: the Azure API and worker, or a person who runs one on their own machine | A developer who connects to a hosted server, or works on custom code alone |
+| For | Whoever deploys and runs the hosted server | A developer: local only, or connecting to a hosted server |
 | npm name, command | `d365-fno-mcp-server` (as today) | `d365-fno-mcp-client`, `d365-fno-mcp` |
-| Also shipped as | The Docker image of the hosted API | The Visual Studio extension drives the gateway; it keeps calling `d365-fno-mcp-server gateway` until sub-project 4 moves it |
-| Commands | everything it has today, plus `keys new` (Part 2b) | `setup`, `gateway`, `doctor`, `help`, `version` |
-| Not in it | nothing is removed | `serve`, `index`, `index-status`, `index-xref`, `index-trace`, `index-release-plans`, `index-docs`, `index-bp`, `digest`, `acquire`, `prepare-bundle`, `artifact`, `fetch-model`, `knowledge-check`, `keys` |
-| Third-party packages | as today | `@modelcontextprotocol/sdk`, `dotenv`, `express`, `express-rate-limit`, `fast-xml-parser`, `glob`, `yaml`, `zod` |
-| Left out of the developer install | | `@azure/identity`, `@azure/storage-blob` (about 67 MB), `onnxruntime-web` (about 139 MB), `@huggingface/tokenizers`, and the 87 MB embedding model that `fetch-model` downloads |
+| Also shipped as | The Docker image of the hosted API | The Visual Studio extension keeps calling `d365-fno-mcp-server gateway` until sub-project 4 |
+| Commands | everything it has today except a full local index, plus `keys` (2b) and the deploy walkthrough (2c) | `setup`, `gateway`, `doctor`, `help`, `version` |
+| Third-party packages | as today | `@modelcontextprotocol/sdk`, `dotenv`, `express`, `express-rate-limit`, `fast-xml-parser`, `glob`, `yaml`, `zod` (computed, not hand-written) |
+| Left out | | `@azure/*`, `onnxruntime-web`, `@huggingface/*`, `mssql`, the embedding model |
 
-Both packages carry the same version. The gateway and the hosted server compare major and minor versions, and that
-check does not change. The operator package stays a superset, so existing installs, the extension and every document
-that says `d365-fno-mcp-server gateway` keep working.
-
-Who may issue access is not decided by a package: a hosted server honours only the keys in its own list, and that list
-changes only for whoever can write the Key Vault secret or the keys file. The packages decide what is installed and
-visible, so a developer's install has nothing that looks like key issuing.
+Both carry the same version. The operator package stays a superset of the developer commands, so existing installs
+and every document that says `d365-fno-mcp-server gateway` keep working.
 
 ## One source tree, two entry points
 
-Nothing moves between folders and no test import changes.
+- **`src/clientIndex.ts`** is the developer entry point. It loads `.env` like `src/index.ts`, then dispatches the five
+  developer commands; any other word prints the developer help and exits 1. `src/index.ts` stays the operator entry.
+- **Help.** `HELP_TEXT` in `src/cli/args.ts` stays the operator help (the README CLI block must equal it).
+  `CLIENT_HELP_TEXT` in `src/cli/clientArgs.ts` lists the five developer commands.
+- **Editions.** `setupCommand` and `doctorCommand` take `edition: { bin: string; deploy?: DeployRunner }` from the
+  entry point. The operator entry passes `bin: 'd365-fno-mcp-server'` and the deploy walkthrough (2c); the developer
+  entry passes `bin: 'd365-fno-mcp'` and no deploy. It is passed in, never imported lazily from `setup.ts`, because
+  the compiler follows dynamic imports.
+- **Build.** `tsconfig.client.json` extends `tsconfig.build.json` with `files: ["src/clientIndex.ts"]`,
+  `outDir: "dist-client"`. `npm run build:client`.
+- **Pack.** `scripts/pack-client.mjs` (`npm run pack:client`) writes `dist-client/package.json` (name, bin, root
+  version and `engines`, `dependencies` computed from the bare imports under `dist-client` with root versions), copies
+  `LICENSE`, `agents/` and `docs/client-readme.md` as its README, and runs `npm pack`.
 
-- **`src/clientIndex.ts`** is the developer entry point (bin `d365-fno-mcp`). It loads `.env` like `src/index.ts`, then
-  dispatches `setup`, `gateway`, `doctor`, `help` and `version`. Any other word prints the developer help and exits 1.
-  `src/index.ts` stays the operator entry point.
-- **Help.** `HELP_TEXT` in `src/cli/args.ts` stays the operator help (the README's CLI block must equal it). A new
-  `CLIENT_HELP_TEXT` in `src/cli/clientArgs.ts` describes the five developer commands only.
-- **Editions.** `setupCommand` and `doctorCommand` take an edition from the entry point:
-  `{ bin: string; modes: SetupMode[]; local?: LocalSetup }`. The operator entry passes `bin: 'd365-fno-mcp-server'`,
-  all three modes and the local-mode flow; the developer entry passes `bin: 'd365-fno-mcp'`, modes `custom-only` and
-  `hosted`, and no local flow. The local-mode questions, `.env` writer and follow-ups move from `src/cli/setup.ts` into
-  `src/cli/setupLocal.ts`, which only the operator entry imports. (It must be passed in, not imported lazily from
-  `setup.ts`: the compiler follows dynamic imports too, so a lazy import would put it back in the developer build.)
-  With the developer edition `doctor` runs the gateway checks and none of the `serve` checks.
-- **Shared types stay shared.** The `ApiKeySource` interface that `httpTransport.ts` accepts (Part 2b) is declared in
-  `src/server/apiKeys.ts`; its file-reloading implementation lives in `src/server/apiKeyStore.ts`, which only the
-  operator build reaches. A type-only import still pulls a file into the program, so this matters.
-- **Build.** `tsconfig.client.json` extends `tsconfig.build.json` with `files: ["src/clientIndex.ts"]` and
-  `outDir: "dist-client"`. The compiler then emits exactly the modules that entry point reaches (62 of the 102 source
-  files today, with no server start-up, configuration loader, artifact store, Azure code or knowledge filter).
-  `npm run build:client` runs it.
-- **Pack.** `scripts/pack-client.mjs` (`npm run pack:client`) writes `dist-client/package.json`: the name and bin above,
-  the root version, `engines` copied from the root, and `dependencies` computed from the bare imports found in
-  `dist-client` with their versions taken from the root `package.json`. The list cannot be written by hand and drift.
-  It also copies `LICENSE`, `agents/` and a short developer README (`docs/client-readme.md`), then runs `npm pack`.
-  The operator package is packed as today.
+## The install question
 
-## The installer question
+`setup` asks, in both packages:
 
-`d365-fno-mcp setup` (developer package) asks how it will be used and checks each answer as it is given, as the
-operator `setup` does:
+```
+How will you use it?
+  1) Local only: index my custom models here. No hosted server.
+  2) Hosted: a hosted server for the standard application, plus my custom models indexed here.
+```
 
-1. **Only custom code** (`--mode custom-only`). It asks for the folder with the custom models (checked for AOT folders)
-   and, optionally, where to keep the local index (default: beside the folder's state). It asks for no URL, no key and no
-   port. It writes `.env` with `D365_CUSTOM_METADATA_DIR` and the index path, offers `doctor`, and ends with
-   `Start it with: d365-fno-mcp gateway`.
-2. **A hosted server and custom code** (`--mode hosted`). Exactly today's hosted flow: the MCP URL, the key (typed or
-   from a file) and the custom folder.
+- **Local** (`--mode local`). It asks for the custom-models folder (checked for AOT folders; an empty folder is
+  allowed with a note) and, optionally, the local index path. No URL, no key, no port. It writes `.env` with
+  `D365_CUSTOM_METADATA_DIR` (and the index path when given), offers `doctor`, and ends with
+  `Start it with: <bin> gateway`.
+- **Hosted** (`--mode hosted`). It then asks:
 
-The operator `setup` offers three choices: build the full index here (`local`), hosted, and custom-only. Non-interactive
-use needs `--mode` and `--custom-dir` for custom-only. A flag that belongs to another mode is refused by name, as now,
-and a local-mode flag given to the developer package says it belongs to the operator package. Generated `.env` headers
-and every printed next step use the edition's command name.
+  ```
+  Is the hosted server already deployed?
+    1) Yes: I have its URL and a developer key.
+    2) No: deploy one now.
+  ```
+
+  - **Yes** (`--hosted-url`): today's hosted flow (URL, developer key typed or from a file, custom folder).
+  - **Deploy** (`--deploy`): in the operator package, the walkthrough of Part 2c, which ends by writing the same
+    hosted `.env`. In the developer package it prints, and exits 1 non-interactively:
+    `Deploying a hosted server needs the operator package and Owner (or Contributor and User Access Administrator) on
+    the Azure subscription. Run: npx d365-fno-mcp-server setup --mode hosted --deploy`
+
+The old local mode (`D365_PACKAGES_PATH`, `D365_INDEX_DB_PATH`, the generated API key, the offer to build the index)
+is gone. Its flags (`--packages-path`, `--db-path`, `--host`, `--port`, `--api-key`) are refused with:
+`<flag> is no longer supported: setup no longer builds a full local index. Use --mode local (custom models only) or
+--mode hosted.` Non-interactive local needs `--custom-dir`. Without `--mode`, non-interactive use is an error naming
+both modes (it used to default to the old local mode).
+
+## No full local index
+
+- `index` (the full `PackagesLocalDirectory` pass) refuses with exit 1:
+  `Full local indexes are no longer supported. Local mode indexes only your custom models (setup --mode local); the
+  standard application comes from a hosted server, whose worker builds the index in Azure.`
+  `runIndexPass` stays: `prepare-bundle` on the worker uses it.
+- `npm run index` and the README sections that build a full local index are removed; the README quick start becomes
+  "Local" and "Hosted".
+- `serve` is unchanged: it serves the index it is given, which on Azure is the worker's bundle.
+- The gateway's existing `D365_GATEWAY_STANDARD_INDEX_DB_PATH` is not offered by `setup` and not documented as a
+  local option; the setting keeps working for anyone who already uses it.
 
 ## The gateway without a hosted server
 
-Custom-only is a state of the gateway, not a flag on the side:
-
-- **Configuration.** `D365_HOSTED_MCP_URL` becomes optional. Empty means custom-only. A key without a URL is an error
-  (`D365_HOSTED_API_KEY is set but D365_HOSTED_MCP_URL is empty`), so a half-written hosted setup is not mistaken for
-  custom-only. `GatewayConfig.hostedUrl` and `hostedApiKey` become `string | null`.
-- **Upstream.** A `NoUpstream` implements the existing `UpstreamPort` with `configured: false`. The router and the
-  hosted tool catalogue treat "not configured" differently from "unavailable": no outage warnings, no
-  `[hosted unavailable]` prefixes, no retries.
-- **Tools.** Merge tools answer from the custom index alone, without a warning. Tools that only the hosted server can
-  answer (`get_index_stats`, the security, best-practice and similar forward-only tools) are not offered. If one is
-  called anyway, the answer is an error that says this gateway has no hosted server and the tool needs one.
-- **Standard objects.** A lookup or generator that names an object the custom index does not hold answers "not found in
-  the custom index" plus one fixed hint: custom-only mode does not index the standard application; use a hosted server
-  (`d365-fno-mcp setup --mode hosted`). Generators still fail closed rather than emit code for objects that do not exist.
-- **Optional standard index.** `D365_GATEWAY_STANDARD_INDEX_DB_PATH` keeps working with no hosted server: an index file
-  built by an operator lets the gateway answer standard-object questions locally. It is not a setup choice.
-- **Self-description.** The session instructions say the gateway runs on custom models only. `local_index_status` reports
-  `hosted: { configured: false }`.
-- **`doctor`.** Without a hosted URL the gateway checks skip the hosted ones and show one row,
-  `gateway-hosted: custom-only, no hosted server configured` (a pass).
-
-## Components
-
-- New: `src/clientIndex.ts`, `src/cli/clientArgs.ts`, `src/cli/setupLocal.ts`, `tsconfig.client.json`,
-  `scripts/pack-client.mjs`, `docs/client-readme.md`, `tests/packageBoundary.test.ts`, `tests/clientCli.test.ts`
-  (`tests/clientEntry.test.ts` already exists for the printed client entry).
-- Changed: `src/cli/setup.ts` (editions, custom-only, local flow moved out), `src/cli/doctor.ts` (edition),
-  `src/gateway/config.ts`, `src/gateway/types.ts`, `src/gateway/server.ts`, `src/gateway/router.ts`,
-  `src/gateway/upstream.ts` (the `NoUpstream`), `src/gateway/localTools.ts` (instructions, `local_index_status`),
-  `src/index.ts` (passes the operator edition), `package.json` (scripts), README (installation and quick start per
-  audience), `llms-install.md`, `CHANGELOG.md`.
+- **Configuration.** `D365_HOSTED_MCP_URL` becomes optional; empty means local mode. A key without a URL is an error
+  (`D365_HOSTED_API_KEY is set but D365_HOSTED_MCP_URL is empty`). `GatewayConfig.hostedUrl` and `hostedApiKey`
+  become `string | null`.
+- **Upstream.** `NoUpstream` implements `UpstreamPort` with `configured: false`. "Not configured" is not "unavailable":
+  no outage warnings, no `[hosted unavailable]` prefixes, no retries.
+- **Tools.** Merge tools answer from the custom index alone, without a warning. Forward-only tools are not offered; a
+  call anyway answers `This gateway runs in local mode (custom models only); <tool> needs a hosted server. Run
+  <bin> setup --mode hosted.`
+- **Standard objects.** A lookup that misses adds the fixed hint: `Local mode indexes only your custom models; standard
+  objects need a hosted server (setup --mode hosted).` Generators still fail closed.
+- **Self-description.** The session instructions say the gateway runs on custom models only. `local_index_status`
+  reports `hosted: { configured: false }`.
+- **`doctor`.** Without a hosted URL the hosted checks are replaced by one passing row
+  `gateway-hosted: local mode, no hosted server configured`.
 
 ## Rules this keeps
 
-- Validate settings and input with zod; no `any`; named exports; tool annotations kept on every tool.
-- Secrets appear in no output; messages name the setting.
-- Write tools stay off by default and no example enables them.
-- `serverStatus.ts` and the gateway still do not import `src/config.ts`, `configLoader.ts` or `server/start.ts`.
+zod for settings and input; no `any`; named exports; tool annotations; secrets in no output; write tools off;
+`serverStatus.ts` and the gateway still do not import `src/config.ts`, `configLoader.ts` or `server/start.ts`.
 
 ## Testing
 
-- **Boundary (`tests/packageBoundary.test.ts`).** Build the program for `src/clientIndex.ts` with the TypeScript
-  compiler API and list its source files: none is on the operator-only list (`src/index.ts`, `server/start.ts`,
-  `server/apiKeyStore.ts`, `config.ts`, `configLoader.ts`, `cli/setupLocal.ts`, `cli/keys.ts`, every `cli/*-command.ts`
-  file, `cli/digest.ts`, everything under `knowledge/`, and `indexer/artifact*.ts` and `indexer/azureBlobArtifactStore*.ts`); no bare import is `@azure/*`, `onnxruntime-web`, `@huggingface/*` or `mssql`; every
-  bare import is a root dependency. A new file that reaches an operator module through any import fails the test.
-- **Pack.** Build into a temporary folder; the generated `package.json` has the bin `d365-fno-mcp` only, the same version
-  as the root, and dependencies equal to the bare imports. `npm pack --dry-run` lists no operator file. The built entry
-  point answers `--version` and `help` (only the five commands) and exits 1 on `serve`, `artifact` and `keys`.
-- **Editions.** `parseSetupFlags` and `setupCommand` with each edition: modes offered, flags refused, `.env` headers and
-  next steps use the right command name; custom-only writes the expected `.env`, never a URL or key; interactive and
-  non-interactive.
-- **Custom-only gateway** (extends the gateway integration tests with a stack that has no hosted URL): the tool list is
-  the local tools only and carries no `[hosted unavailable]`; merge tools answer without warnings; a forward-only tool is
-  absent and, if called, answers the fixed error; a standard object gives the fixed hint; `local_index_status` shows
-  `configured: false`; a key without a URL is a configuration error; the custom index still refreshes when files
-  change; with `D365_GATEWAY_STANDARD_INDEX_DB_PATH` standard objects resolve. A hosted stack behaves exactly as before.
-- **`doctor`** custom-only row and no hosted rows; the developer edition runs no `serve` check.
-- Typecheck, lint with no warnings, build, `build:client`, and the full suite pass.
+- **Boundary (`tests/packageBoundary.test.ts`).** The TypeScript program for `src/clientIndex.ts` contains none of:
+  `src/index.ts`, `server/start.ts`, `server/keyRegistry*.ts`, `server/adminRoutes.ts`, `config.ts`,
+  `configLoader.ts`, `cli/keys.ts`, `cli/deploy*.ts`, every `cli/*-command.ts`, `cli/digest.ts`, `knowledge/`,
+  `indexer/artifact*.ts`, `indexer/azureBlobArtifactStore*.ts`; no bare import of `@azure/*`, `onnxruntime-web`,
+  `@huggingface/*`; every bare import is a root dependency or an optional one. (`mssql` is reached through the
+  cross-reference code as an optional, lazily loaded driver that fails with a clear message; the pack script
+  leaves optional dependencies out.)
+- **Pack.** The generated `package.json` has the bin `d365-fno-mcp` only, the root version, and dependencies equal to
+  the bare imports; the built entry answers `--version` and `help` and exits 1 on `serve`, `keys`, `index`.
+- **Setup.** Both editions: the two questions, local writes no URL or key, hosted-yes as before, deploy in the
+  developer edition prints the operator command, old local flags refused by name, non-interactive without `--mode`
+  fails; `.env` headers and next steps use the edition's command.
+- **`index`** exits 1 with the fixed text.
+- **Local gateway.** Local tools only, no `[hosted unavailable]`, merge tools without warnings, a forward-only call
+  gets the fixed error, a standard miss gets the hint, `local_index_status.hosted.configured === false`, key without
+  URL is a configuration error, the custom index refreshes; a hosted stack behaves as before.
+- **`doctor`** local row; the developer edition runs no `serve` check.
+- Typecheck, lint, build, `build:client`, full suite.
 
 ## Out of scope
 
-A CI release workflow for the developer package (it needs a CI run to verify), publishing to npm, moving the Visual Studio
-extension to the new command (sub-project 4), the documentation rewrite (sub-project 3), a developer-package Docker image.
+Publishing to npm and a release workflow, moving the Visual Studio extension (sub-project 4), the documentation
+rewrite (sub-project 3).
 
 ## Not verifiable here
 

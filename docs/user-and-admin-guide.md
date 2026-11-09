@@ -114,10 +114,14 @@ are in [hosted deployment](hosted-deployment.md#operations).
 
 ### Control access and writes
 
-- HTTP requires an API key of at least 32 characters. Give each person or
-  automation a separate named entry in `MCP_API_KEYS`; only names are logged,
-  and an MCP session is bound to the key that opened it. Revocation or
-  rotation requires changing the server configuration and restarting it.
+- HTTP requires an API key. With a key registry (`MCP_KEY_REGISTRY`), give each
+  person their own developer key with `keys new <name>` or the `/admin` page,
+  using the admin key; developers cannot create keys. A new key works at once,
+  and `keys revoke <name>` ends its sessions within seconds, with no restart.
+  Fixed keys in `MCP_API_KEYS` (32+ characters) still work, but changing them
+  needs a configuration change and a restart. Only names are logged, and an MCP
+  session is bound to the key that opened it. See
+  [Developer keys](hosted-deployment.md#developer-keys).
 - Every valid HTTP key can use MCP tools and read index status. Rate limiting
   is by client IP, not by key. Protect the endpoint and keys accordingly;
   `TRUST_PROXY_HOPS` must reflect only trusted proxies.

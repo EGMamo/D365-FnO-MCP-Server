@@ -19,6 +19,14 @@ const configSchema = z.object({
   /** `name=key` entries separated by commas or newlines. */
   MCP_API_KEYS: z.string().default(''),
   MCP_TRANSPORT: z.literal('http').default('http'),
+  /** Where developer keys and the admin key live: empty (none, MCP_API_KEYS only), `file` or `azure-blob`. */
+  MCP_KEY_REGISTRY: z.enum(['', 'file', 'azure-blob']).default(''),
+  /** The registry file, with MCP_KEY_REGISTRY=file. */
+  MCP_KEY_REGISTRY_PATH: z.string().default(''),
+  /** The storage account, with MCP_KEY_REGISTRY=azure-blob (https://<account>.blob.core.windows.net). */
+  MCP_KEY_REGISTRY_ACCOUNT_URL: z.string().default(''),
+  /** The container of the registry blob (key-registry.json). */
+  MCP_KEY_REGISTRY_CONTAINER: z.string().default('d365-keys'),
   /** Required only for the offline `index` command. */
   D365_PACKAGES_DIR: z.string().default(''),
   /**
@@ -79,11 +87,22 @@ const configSchemaWithGuards = configSchema.superRefine((env, ctx) => {
 
   const apiKeys = parseApiKeys(env.MCP_API_KEYS, env.MCP_API_KEY);
   for (const error of apiKeys.errors) issue('MCP_API_KEYS', error);
-  if (env.MCP_TRANSPORT === 'http' && apiKeys.keys.length === 0 && apiKeys.errors.length === 0) {
+  if (env.MCP_TRANSPORT === 'http' && apiKeys.keys.length === 0 && apiKeys.errors.length === 0 && env.MCP_KEY_REGISTRY === '') {
     issue(
       'MCP_API_KEYS',
-      'The HTTP transport requires at least one API key: set MCP_API_KEYS (name=key,name=key; keys >= 32 characters) or MCP_API_KEY'
+      'The HTTP transport requires at least one API key: set MCP_API_KEYS (name=key,name=key; keys >= 32 characters) or MCP_API_KEY, or a key registry (MCP_KEY_REGISTRY)'
     );
+  }
+  if (env.MCP_KEY_REGISTRY === 'file' && env.MCP_KEY_REGISTRY_PATH.trim().length === 0) {
+    issue('MCP_KEY_REGISTRY_PATH', 'is required with MCP_KEY_REGISTRY=file: the registry file');
+  }
+  if (env.MCP_KEY_REGISTRY === 'azure-blob') {
+    if (!isHttpsOrigin(env.MCP_KEY_REGISTRY_ACCOUNT_URL.trim())) {
+      issue('MCP_KEY_REGISTRY_ACCOUNT_URL', 'must be the https:// URL of the storage account with MCP_KEY_REGISTRY=azure-blob');
+    }
+    if (!/^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])$/.test(env.MCP_KEY_REGISTRY_CONTAINER.trim())) {
+      issue('MCP_KEY_REGISTRY_CONTAINER', 'must be a storage container name (3-63 lowercase letters, digits and hyphens)');
+    }
   }
 
   if (
@@ -160,6 +179,12 @@ function buildConfig(env: ParsedEnv) {
     port: env.MCP_PORT,
     host: env.MCP_HOST.trim(),
     apiKeys,
+    keyRegistry:
+      env.MCP_KEY_REGISTRY === ''
+        ? null
+        : env.MCP_KEY_REGISTRY === 'file'
+          ? { kind: 'file' as const, path: env.MCP_KEY_REGISTRY_PATH.trim() }
+          : { kind: 'azure-blob' as const, accountUrl: env.MCP_KEY_REGISTRY_ACCOUNT_URL.trim(), container: env.MCP_KEY_REGISTRY_CONTAINER.trim() },
     transport: env.MCP_TRANSPORT,
     packagesDir: env.D365_PACKAGES_DIR,
     appVersion: env.D365_APP_VERSION.trim(),

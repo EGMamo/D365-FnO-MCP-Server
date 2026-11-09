@@ -3,8 +3,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildIndex, type IndexProgress } from '../src/indexer/buildIndex.js';
-import { createProgressLine, indexCommand, runIndexPass, type ProgressOutput } from '../src/cli/index-command.js';
+import type { IndexProgress } from '../src/indexer/buildIndex.js';
+import { createProgressLine, runIndexPass, type ProgressOutput } from '../src/cli/index-command.js';
 
 // The real implementation unless a test replaces it once, to fail a scan after the counter painted.
 vi.mock('../src/indexer/buildIndex.js', async (importOriginal) => {
@@ -76,80 +76,6 @@ afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
   fs.rmSync(root, { recursive: true, force: true });
-});
-
-describe('indexCommand progress line', () => {
-  it('counts scanned files on a terminal and finishes the line before the summary', async () => {
-    const code = await indexCommand({ force: true, packagesDir, dbPath: ':memory:' }, {}, fakeOutput(true));
-
-    expect(code).toBe(0);
-    const scanned = Number(/files scanned : (\d+)/.exec(consoleLines.join('\n'))?.[1]);
-    expect(scanned).toBe(4);
-    // The first paint comes straight away, before any file is counted.
-    expect(chunks[0]).toBe(`${CLEAR}Scanned 0 files`);
-    expect(chunks.every((chunk) => chunk.startsWith(CLEAR))).toBe(true);
-    // The silent tail after the scan says so, and ends its line so log lines cannot join it.
-    expect(chunks[chunks.length - 1]).toBe(`${CLEAR}Scanned ${scanned} files, finishing up...\n`);
-    // No counter text or escape code reaches console.log, where the summary lives.
-    expect(consoleLines.filter((line) => /Scanned \d+ files|[\r\x1b]/.test(line))).toEqual([]);
-    expect(consoleLines).toContain('\nIndexing complete:');
-    expect(consoleErrors).toEqual([]);
-    const lastWrite = timeline.map((entry) => entry.startsWith('write:')).lastIndexOf(true);
-    expect(lastWrite).toBeGreaterThanOrEqual(0);
-    expect(timeline.indexOf('log:\nIndexing complete:')).toBeGreaterThan(lastWrite);
-  });
-
-  it.each<[string, boolean | undefined, NodeJS.ProcessEnv]>([
-    ['isTTY is false', false, {}],
-    ['isTTY is not set', undefined, {}],
-    ['TERM is dumb', true, { TERM: 'dumb' }],
-  ])('draws nothing when %s', async (_name, isTTY, env) => {
-    const code = await indexCommand({ force: true, packagesDir, dbPath: ':memory:' }, env, fakeOutput(isTTY));
-
-    expect(code).toBe(0);
-    expect(chunks).toEqual([]);
-    expect(consoleLines).toContain('\nIndexing complete:');
-  });
-
-  it('does not fail the index when the terminal write throws', async () => {
-    const write = vi.fn(() => {
-      throw new Error('EPIPE: broken pipe');
-    });
-
-    const code = await indexCommand({ force: true, packagesDir, dbPath: ':memory:' }, {}, { isTTY: true, write });
-
-    expect(code).toBe(0);
-    expect(write).toHaveBeenCalledTimes(1);
-    expect(consoleLines).toContain('  objects in db : 3');
-    expect(consoleErrors).toEqual([]);
-  });
-
-  it('clears the counter before it reports a scan that fails part-way', async () => {
-    vi.mocked(buildIndex).mockImplementationOnce(async (_db, _dir, _force, options) => {
-      options?.onProgress?.({ files: 4, done: false });
-      throw new Error('scan exploded');
-    });
-
-    const code = await indexCommand({ force: true, packagesDir, dbPath: ':memory:' }, {}, fakeOutput(true));
-
-    expect(code).toBe(1);
-    const errorAt = timeline.findIndex((entry) => entry.startsWith('error:'));
-    expect(timeline[errorAt]).toBe('error:Indexing failed: Error: scan exploded');
-    expect(timeline[errorAt - 1]).toBe(`write:${CLEAR}`);
-    expect(chunks).toEqual([`${CLEAR}Scanned 4 files`, CLEAR]);
-  });
-
-  it('draws nothing when the packages directory is rejected before indexing', async () => {
-    const code = await indexCommand(
-      { force: true, packagesDir: path.join(root, 'missing'), dbPath: ':memory:' },
-      {},
-      fakeOutput(true)
-    );
-
-    expect(code).toBe(1);
-    expect(chunks).toEqual([]);
-    expect(consoleErrors).toHaveLength(1);
-  });
 });
 
 describe('runIndexPass progress', () => {

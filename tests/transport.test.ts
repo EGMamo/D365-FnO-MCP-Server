@@ -167,7 +167,7 @@ describe('status endpoint and index version header', () => {
   const document = (input: DescribeInput): ServerStatus => ({
     status: input.ready ? 'ok' : 'starting',
     you: { keyName: input.keyName },
-    server: { version: '0.1.0', startedAt: '2026-10-25T08:00:00.000Z', uptimeSeconds: 5 },
+    server: { version: '0.1.0', startedAt: '2026-10-25T08:00:00.000Z', uptimeSeconds: 5, keyRegistry: null },
     index: input.ready
       ? {
           applicationVersion: '10.0.2428.63',
@@ -214,8 +214,15 @@ describe('status endpoint and index version header', () => {
 
       const missing = await fetch(`${url}/status`);
       expect(missing.status).toBe(401);
-      expect(await missing.json()).toEqual({ error: 'Unauthorized: invalid or missing API key' });
-      expect((await fetch(`${url}/status`, { headers: { 'X-API-Key': 'wrong-key-wrong-key-wrong-key-wrong' } })).status).toBe(401);
+      expect(await missing.json()).toEqual({
+        error: 'Unauthorized: no API key was sent. Send it as the X-API-Key header or as Authorization: Bearer <key>.',
+      });
+      const wrong = await fetch(`${url}/status`, { headers: { 'X-API-Key': 'wrong-key-wrong-key-wrong-key-wrong' } });
+      expect(wrong.status).toBe(401);
+      expect(await wrong.json()).toEqual({
+        error: 'Unauthorized: the API key was not recognized. It may have been revoked; ask your operator for a new key.',
+      });
+      expect(wrong.headers.get('www-authenticate')).toBeNull();
     });
 
     it('answers a key in either header, naming the key that was used and no other', async () => {
@@ -899,7 +906,10 @@ describe('rate limiting', () => {
     expect((await post(url, body)).status).toBe(400);
     const limited = await post(url, body);
     expect(limited.status).toBe(429);
-    expect(await limited.json()).toEqual({ jsonrpc: '2.0', id: null, error: { code: -32029, message: 'Too many requests' } });
+    const limitedBody = (await limited.json()) as { error: { code: number; message: string } };
+    expect(limitedBody.error.code).toBe(-32029);
+    expect(limitedBody.error.message).toMatch(/^Too many requests from this address\. Retry in \d+ seconds\.$/);
+    expect(Number(limited.headers.get('retry-after'))).toBeGreaterThan(0);
 
     expect((await fetch(`${url}/health`)).status).toBe(200);
     expect((await fetch(`${url}/live`)).status).toBe(200);
@@ -947,21 +957,21 @@ describe('admin routes and fallbacks', () => {
     return router;
   }
 
-  it('mounts admin routes behind authentication and the readiness gate', async () => {
+  it('mounts admin routes ahead of API-key auth and the body parser, so they check their own credential', async () => {
     let ready = false;
     const { app } = makeApp(undefined, {
-      admin: { router: adminRouter({ '/whoami': (_req, res) => res.json({ key: res.locals.apiKeyName }) }) },
+      admin: {
+        router: adminRouter({ '/whoami': (req, res) => res.json({ apiKeyName: res.locals.apiKeyName ?? null, admin: req.headers['x-admin-key'] ?? null }) }),
+      },
       readiness: { isReady: () => ready },
     });
     const url = await listen(app);
 
-    expect((await fetch(`${url}/admin/whoami`)).status).toBe(401);
-    expect((await fetch(`${url}/admin/whoami`, { headers: { 'X-API-Key': API_KEY } })).status).toBe(503);
-
-    ready = true;
-    const res = await fetch(`${url}/admin/whoami`, { headers: { Authorization: `Bearer ${SECOND_KEY}` } });
+    const res = await fetch(`${url}/admin/whoami`, { headers: { 'X-Admin-Key': 'adm_x' } });
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ key: 'second' });
+    expect(await res.json()).toEqual({ apiKeyName: null, admin: 'adm_x' });
+    ready = true;
+    expect((await fetch(`${url}/mcp`)).status).toBe(401);
   });
 
   it('answers 504 when nothing is sent in time, and drops the late failure without a second response', async () => {

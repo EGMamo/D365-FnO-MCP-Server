@@ -5,7 +5,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { INDEX_SCHEMA_VERSION, META_KEYS, openDb, setMeta, upsertObject } from '../src/indexer/db.js';
@@ -388,5 +388,39 @@ describe('a hosted server tells which bundle it activated', () => {
     const document = (await (await statusOf(port, aliceKey)).json()) as { sessions: { active: number } };
 
     expect(document.sessions.active).toBe(1);
+  }, TIMEOUT_MS);
+});
+
+describe('a server with a key registry', () => {
+  it('takes keys made with keys new at once, reports the registry in /status, and refuses a revoked key', async () => {
+    const index = path.join(root, 'index.db');
+    localIndex(index, { version: '10.0.2428.63', source: 'packages-dir' });
+    const registryFile = path.join(root, 'state', 'key-registry.json');
+    const { keysCommand } = await import('../src/cli/keys.js');
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      expect(await keysCommand({ positionals: ['reset-admin'], flags: { registry: 'file', path: registryFile }, env: {} })).toBe(0);
+      const admin = /adm_[0-9a-f]{64}/.exec(log.mock.calls.map((call) => String(call[0])).join('\n'))?.[0] ?? '';
+      const serve = startServe({ D365_INDEX_DB_PATH: index, MCP_KEY_REGISTRY: 'file', MCP_KEY_REGISTRY_PATH: registryFile });
+      const port = await readyPort(serve, false);
+      const server = `http://127.0.0.1:${port}`;
+
+      log.mockClear();
+      expect(await keysCommand({ positionals: ['new', 'grace'], flags: { server }, env: { D365_MCP_ADMIN_KEY: admin } })).toBe(0);
+      const key = /\b[0-9a-f]{64}\b/.exec(log.mock.calls.map((call) => String(call[0])).join('\n'))?.[0] ?? '';
+      const client = await connect(port, key);
+      expect(await statsOf(client)).toHaveProperty('totalObjects', 1);
+
+      const status = (await (await statusOf(port, key)).json()) as { you: unknown; server: { keyRegistry: unknown } };
+      expect(status.you).toEqual({ keyName: 'grace' });
+      expect(status.server.keyRegistry).toEqual({ kind: 'file', loadedAt: expect.any(String) });
+
+      expect(await keysCommand({ positionals: ['revoke', 'grace'], flags: { server }, env: { D365_MCP_ADMIN_KEY: admin } })).toBe(0);
+      expect((await statusOf(port, key)).status).toBe(401);
+      expect(serve.stderr()).not.toContain(key);
+      expect(serve.stderr()).not.toContain(admin);
+    } finally {
+      log.mockRestore();
+    }
   }, TIMEOUT_MS);
 });

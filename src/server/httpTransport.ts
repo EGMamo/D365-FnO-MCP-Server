@@ -6,7 +6,7 @@ import { createHash, randomUUID, timingSafeEqual } from 'crypto';
 import { createServer, type Server } from 'http';
 import { logger } from '../utils/logger.js';
 import { INDEX_VERSION_HEADER, readDeclaredClientVersion } from '../indexer/appVersion.js';
-import type { ApiKeyEntry } from './apiKeys.js';
+import { digestKey, type ApiKeyEntry, type RegistryKeys } from './apiKeys.js';
 import type { StatusProvider } from './serverStatus.js';
 
 /**
@@ -33,8 +33,13 @@ export interface HttpTransportOptions {
   port: number;
   /** Interface to bind; empty or undefined binds every interface. */
   host?: string;
-  /** Accepted API keys. At least one is required. */
+  /** Accepted fixed API keys (settings). At least one is required unless `registryKeys` is given. */
   apiKeys: ApiKeyEntry[];
+  /**
+   * Developer keys from the key registry, read on every request. A session opened with one of them is closed when
+   * the key disappears from the registry (revoked here or on another replica).
+   */
+  registryKeys?: RegistryKeys;
   version: string;
   rateLimitMaxRequests: number;
   rateLimitWindowMs: number;
@@ -49,7 +54,10 @@ export interface HttpTransportOptions {
   maxSessionsPerApiKey?: number;
   sessionIdleTimeoutMs?: number;
   sessionSweepIntervalMs?: number;
-  /** Routes mounted at `/admin` after authentication. */
+  /**
+   * Routes mounted at `/admin`, before API-key authentication and the JSON body parser: they authenticate the
+   * caller themselves (the admin key) and parse their own bodies. Key administration uses it.
+   */
   admin?: AdminRoutes;
   /**
    * Readiness gate. While it reports not ready, `/health` answers 503 and
@@ -95,6 +103,8 @@ interface SessionEntry {
   initialized: boolean;
   /** Name of the API key that opened the session; other keys may not use it. */
   apiKeyName: string;
+  /** Digest of the registry key that opened the session (memory only), or null for a fixed key. */
+  registryDigest: string | null;
 }
 
 const SESSION_SWEEP_INTERVAL_MS = 60_000;
@@ -122,6 +132,15 @@ function authenticate(presented: string, keys: readonly ApiKeyEntry[]): ApiKeyEn
   return match;
 }
 
+/** What the 401 says when no key was sent at all. */
+export const NO_KEY_MESSAGE = 'Unauthorized: no API key was sent. Send it as the X-API-Key header or as Authorization: Bearer <key>.';
+/** What the 401 says for a key that is not (or no longer) accepted. */
+export const UNKNOWN_KEY_MESSAGE =
+  'Unauthorized: the API key was not recognized. It may have been revoked; ask your operator for a new key.';
+
+/** Seconds a client is asked to wait before it tries a full server again. */
+const SESSION_RETRY_AFTER_SECONDS = 30;
+
 /** Extract a presented API key from `X-API-Key` or `Authorization: Bearer ...`. */
 function extractApiKey(req: Request): string | undefined {
   const header = req.headers['x-api-key'];
@@ -140,7 +159,7 @@ function extractApiKey(req: Request): string | undefined {
  * Exported separately from `startHttpServer` so tests can drive it directly.
  */
 export function createHttpApp(createMcpServer: ServerFactory, options: HttpTransportOptions): Express {
-  if (options.apiKeys.length === 0) {
+  if (options.apiKeys.length === 0 && !options.registryKeys) {
     throw new Error('The HTTP transport requires at least one API key.');
   }
   const app = express();
@@ -150,6 +169,9 @@ export function createHttpApp(createMcpServer: ServerFactory, options: HttpTrans
   const maxSessionsPerApiKey = options.maxSessionsPerApiKey ?? 0;
   const sessionIdleTimeoutMs = options.sessionIdleTimeoutMs ?? 30 * 60 * 1000;
   const sessionSweepIntervalMs = options.sessionSweepIntervalMs ?? SESSION_SWEEP_INTERVAL_MS;
+  const idleMinutes = Math.max(1, Math.round(sessionIdleTimeoutMs / 60_000));
+  const serverBusy = `Server busy: the maximum number of concurrent sessions is open. Retry shortly; idle sessions end after ${idleMinutes} minutes.`;
+  const keyAtCap = `Too many sessions: this API key already holds its maximum number of sessions. Close one you no longer use, or wait: idle sessions end after ${idleMinutes} minutes.`;
 
   /**
    * Resolve the client IP. `req.ip` is only trustworthy when a known number of
@@ -193,10 +215,16 @@ export function createHttpApp(createMcpServer: ServerFactory, options: HttpTrans
       keyGenerator: (req: Request) => clientIp(req),
       handler: (req, res) => {
         logger.warn('Rate limit exceeded', { ip: clientIp(req), path: req.path });
-        res.status(429).json(jsonRpcError(-32029, 'Too many requests'));
+        const reset = (req as Request & { rateLimit?: { resetTime?: Date } }).rateLimit?.resetTime;
+        const seconds = Math.max(1, Math.ceil(((reset?.getTime() ?? Date.now() + options.rateLimitWindowMs) - Date.now()) / 1000));
+        res.status(429).json(jsonRpcError(-32029, `Too many requests from this address. Retry in ${seconds} seconds.`));
       },
     }),
   );
+
+  // ── Admin routes ──────────────────────────────────────────────────────────
+  // Before the JSON parser and API-key auth: they parse their own (small) bodies and check the admin key.
+  if (options.admin) app.use('/admin', options.admin.router);
 
   app.use(express.json({ limit: '1mb' }));
 
@@ -218,15 +246,26 @@ export function createHttpApp(createMcpServer: ServerFactory, options: HttpTrans
   // ── API key auth ──────────────────────────────────────────────────────────
   app.use((req: Request, res: Response, next: NextFunction) => {
     const presented = extractApiKey(req);
-    const entry = presented ? authenticate(presented, options.apiKeys) : undefined;
-    if (!entry) {
-      logger.warn('Unauthorized request', { ip: clientIp(req), method: req.method, path: req.path });
-      res.status(401).json({ error: 'Unauthorized: invalid or missing API key' });
+    let name: string | undefined;
+    let registryDigest: string | null = null;
+    if (presented) {
+      name = authenticate(presented, options.apiKeys)?.name;
+      if (name === undefined && options.registryKeys) {
+        // A lookup by digest: the digest of a 256-bit random key tells a timing observer nothing it could use.
+        const digest = digestKey(presented);
+        name = options.registryKeys.developerKeys().get(digest);
+        if (name !== undefined) registryDigest = digest;
+      }
+    }
+    if (name === undefined) {
+      logger.warn('Unauthorized request', { ip: clientIp(req), method: req.method, path: req.path, keySent: presented !== undefined });
+      res.status(401).json({ error: presented ? UNKNOWN_KEY_MESSAGE : NO_KEY_MESSAGE });
       return;
     }
     // Only the key's name is recorded anywhere; the key itself is never logged.
-    res.locals.apiKeyName = entry.name;
-    logger.info('Request', { method: req.method, path: req.path, ip: clientIp(req), apiKey: entry.name });
+    res.locals.apiKeyName = name;
+    res.locals.registryDigest = registryDigest;
+    logger.info('Request', { method: req.method, path: req.path, ip: clientIp(req), apiKey: name });
     next();
   });
 
@@ -267,9 +306,6 @@ export function createHttpApp(createMcpServer: ServerFactory, options: HttpTrans
     if (isReady()) return next();
     res.status(503).set('Retry-After', '10').json(jsonRpcError(-32000, 'Server is starting: the index is not ready'));
   });
-
-  // ── Admin routes ──────────────────────────────────────────────────────────
-  if (options.admin) app.use('/admin', options.admin.router);
 
   // ── JSON-RPC envelope validation ──────────────────────────────────────────
   app.use((req: Request, res: Response, next: NextFunction) => {
@@ -342,6 +378,17 @@ export function createHttpApp(createMcpServer: ServerFactory, options: HttpTrans
   sweep.unref?.();
   app.locals.sessionSweep = sweep;
   app.locals.sessions = sessions;
+  // ── Revocation ────────────────────────────────────────────────────────────
+  // A registry key that is gone ends every session it opened, open event stream included.
+  const stopWatchingKeys = options.registryKeys?.onChange(() => {
+    const current = options.registryKeys?.developerKeys();
+    if (!current) return;
+    for (const [sid, entry] of [...sessions]) {
+      if (entry.registryDigest !== null && !current.has(entry.registryDigest)) closeSession(sid, entry, 'key revoked');
+    }
+  });
+  app.locals.stopWatchingKeys = stopWatchingKeys;
+
   /** Closes every session; graceful shutdown uses it to end SSE streams. */
   app.locals.closeAllSessions = (): void => {
     for (const [sid, entry] of [...sessions]) closeSession(sid, entry, 'shutdown');
@@ -402,7 +449,7 @@ export function createHttpApp(createMcpServer: ServerFactory, options: HttpTrans
       // post-reservation check below still guards the tiny race window.
       if (sessions.size >= maxConcurrentSessions) {
         logger.warn('Session limit reached', { active: sessions.size, max: maxConcurrentSessions });
-        res.status(503).json(jsonRpcError(-32000, 'Server busy: maximum concurrent sessions reached'));
+        res.status(503).set('Retry-After', String(SESSION_RETRY_AFTER_SECONDS)).json(jsonRpcError(-32000, serverBusy));
         return;
       }
 
@@ -414,7 +461,7 @@ export function createHttpApp(createMcpServer: ServerFactory, options: HttpTrans
         for (const s of sessions.values()) if (s.apiKeyName === apiKeyName) held++;
         if (held >= maxSessionsPerApiKey) {
           logger.warn('Per-key session limit reached', { apiKey: apiKeyName, active: held, max: maxSessionsPerApiKey });
-          res.status(429).json(jsonRpcError(-32000, 'Too many sessions: this API key holds its maximum concurrent sessions', firstId(req.body)));
+          res.status(429).set('Retry-After', String(SESSION_RETRY_AFTER_SECONDS)).json(jsonRpcError(-32000, keyAtCap, firstId(req.body)));
           return;
         }
       }
@@ -436,6 +483,7 @@ export function createHttpApp(createMcpServer: ServerFactory, options: HttpTrans
         lastActivity: Date.now(),
         initialized: false,
         apiKeyName,
+        registryDigest: (res.locals.registryDigest as string | null | undefined) ?? null,
       };
 
       // Reserve the slot synchronously so concurrent initializations cannot all
@@ -444,7 +492,7 @@ export function createHttpApp(createMcpServer: ServerFactory, options: HttpTrans
       if (sessions.size > maxConcurrentSessions) {
         sessions.delete(newSessionId);
         logger.warn('Session limit reached', { active: sessions.size, max: maxConcurrentSessions });
-        res.status(503).json(jsonRpcError(-32000, 'Server busy: maximum concurrent sessions reached'));
+        res.status(503).set('Retry-After', String(SESSION_RETRY_AFTER_SECONDS)).json(jsonRpcError(-32000, serverBusy));
         return;
       }
 
@@ -540,10 +588,12 @@ export function startHttpServer(
       ready: options.readiness?.isReady() ?? true,
       trustProxyHops: options.trustProxyHops ?? 0,
       apiKeys: options.apiKeys.length,
+      keyRegistry: options.registryKeys !== undefined,
     });
   };
   httpServer.on('close', () => {
     clearInterval(app.locals.sessionSweep as NodeJS.Timeout);
+    (app.locals.stopWatchingKeys as (() => void) | undefined)?.();
   });
 
   httpServer.on('error', (err: Error) => {

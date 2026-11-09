@@ -114,3 +114,39 @@ describe('loadConfig', () => {
     ]);
   });
 });
+
+describe('key registry settings', () => {
+  const base = { MCP_TRANSPORT: 'http' } as NodeJS.ProcessEnv;
+  const problems = (env: NodeJS.ProcessEnv): string[] => {
+    try {
+      loadConfig(env);
+      return [];
+    } catch (error) {
+      return (error as ConfigError).issues;
+    }
+  };
+
+  it('lets a server start with a registry and no fixed keys', () => {
+    const config = loadConfig({ ...base, MCP_KEY_REGISTRY: 'file', MCP_KEY_REGISTRY_PATH: '/srv/keys.json' });
+    expect(config.apiKeys).toEqual([]);
+    expect(config.keyRegistry).toEqual({ kind: 'file', path: '/srv/keys.json' });
+    expect(loadConfig({ ...base, MCP_KEY_REGISTRY: 'azure-blob', MCP_KEY_REGISTRY_ACCOUNT_URL: 'https://acct.blob.core.windows.net' }).keyRegistry).toEqual({
+      kind: 'azure-blob',
+      accountUrl: 'https://acct.blob.core.windows.net',
+      container: 'd365-keys',
+    });
+    expect(loadConfig({ ...base, MCP_API_KEY: 'k'.repeat(40) }).keyRegistry).toBeNull();
+  });
+
+  it('names what is missing or wrong', () => {
+    expect(problems({ ...base })).toEqual([expect.stringContaining('or a key registry (MCP_KEY_REGISTRY)')]);
+    expect(problems({ ...base, MCP_KEY_REGISTRY: 'file' })).toEqual([expect.stringMatching(/^MCP_KEY_REGISTRY_PATH: is required/)]);
+    expect(problems({ ...base, MCP_KEY_REGISTRY: 'azure-blob', MCP_KEY_REGISTRY_ACCOUNT_URL: 'http://acct' })).toEqual([
+      expect.stringMatching(/^MCP_KEY_REGISTRY_ACCOUNT_URL: must be the https:\/\//),
+    ]);
+    expect(
+      problems({ ...base, MCP_KEY_REGISTRY: 'azure-blob', MCP_KEY_REGISTRY_ACCOUNT_URL: 'https://acct.blob.core.windows.net', MCP_KEY_REGISTRY_CONTAINER: 'Bad_Name' })
+    ).toEqual([expect.stringMatching(/^MCP_KEY_REGISTRY_CONTAINER: /)]);
+    expect(problems({ ...base, MCP_KEY_REGISTRY: 'vault' })).toHaveLength(1);
+  });
+});

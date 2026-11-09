@@ -8,6 +8,8 @@ import { readIndexApplicationVersion } from '../indexer/buildIndex.js';
 import { materializeAzureArtifactIndex, prepareArtifactBackedIndex } from './artifactStartup.js';
 import { setSourceFileReads } from '../indexer/sourceFiles.js';
 import { startHttpServer, type SessionContext } from './httpTransport.js';
+import { createKeyAdminRouter } from './adminRoutes.js';
+import { openKeyRegistry } from './keyRegistryOpen.js';
 import { createStatusProvider, describeArtifact, type ArtifactDescription } from './serverStatus.js';
 import { printServeClientEntry } from '../utils/clientEntry.js';
 import { logger } from '../utils/logger.js';
@@ -220,10 +222,18 @@ export async function startServer(): Promise<void> {
     });
   }
 
+  // The key registry is read before listening: a server that cannot read its keys must not start.
+  const keyRegistry = config.keyRegistry ? await openKeyRegistry(config.keyRegistry, config.artifactManagedIdentityClientId) : null;
   const http = startHttpServer(createMcpServer, {
     port: config.port,
     host: config.host || undefined,
     apiKeys: config.apiKeys,
+    ...(keyRegistry
+      ? {
+          registryKeys: keyRegistry,
+          admin: { router: createKeyAdminRouter({ registry: keyRegistry, staticKeys: config.apiKeys, trustProxyHops: config.trustProxyHops }) },
+        }
+      : {}),
     version: VERSION,
     rateLimitMaxRequests: config.rateLimitMaxRequests,
     rateLimitWindowMs: config.rateLimitWindowMs,
@@ -238,6 +248,7 @@ export async function startServer(): Promise<void> {
       database: () => db,
       configuredApplicationVersion: config.appVersion,
       artifact: () => servedArtifact,
+      keyRegistry: () => (keyRegistry ? { kind: keyRegistry.kind, loadedAt: keyRegistry.loadedAt() } : null),
     }),
   });
 
@@ -298,6 +309,7 @@ export async function startServer(): Promise<void> {
     }, SHUTDOWN_TIMEOUT_MS);
     deadline.unref();
 
+    keyRegistry?.stop();
     http.closeAllSessions();
     http.server.close(() => {
       db?.close();

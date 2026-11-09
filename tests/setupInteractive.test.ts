@@ -32,7 +32,6 @@ interface Session {
   envText: string | null;
   env: Record<string, string>;
   runDoctor: ReturnType<typeof vi.fn>;
-  runIndex: ReturnType<typeof vi.fn>;
 }
 
 /** A fake terminal: `isTTY` and a raw-mode stub, so readline takes its terminal path. */
@@ -125,7 +124,6 @@ describe('setup (interactive)', () => {
     if (end) input.end();
 
     const runDoctor = vi.fn().mockResolvedValue(0);
-    const runIndex = vi.fn().mockResolvedValue(0);
     const code = await setupCommand({
       nonInteractive: false,
       cwd,
@@ -133,7 +131,6 @@ describe('setup (interactive)', () => {
       output,
       terminal: tty,
       runDoctor,
-      runIndex,
       ...rest,
     });
     const envPath = path.join(cwd, '.env');
@@ -147,353 +144,117 @@ describe('setup (interactive)', () => {
       envText,
       env: envText === null ? {} : parse(envText),
       runDoctor,
-      runIndex,
     };
   }
 
   describe('local mode', () => {
-    it('writes a loopback-bound .env, then runs the checks and the index it was asked for', async () => {
-      const packages = stageMetadata(path.join(root, 'PackagesLocalDirectory'));
-      const session = await runSetup(['1', packages, '', '', 'y', 'y', 'y']);
+    it('asks for the custom folder and an optional index path, writes local mode, and runs the checks', async () => {
+      const custom = stageMetadata(path.join(root, 'Metadata'));
+      const session = await runSetup(['1', custom, '', 'y']);
 
       expect(session.code).toBe(0);
-      expect(session.env.MCP_TRANSPORT).toBe('http');
-      expect(session.env.MCP_PORT).toBe('3000');
-      expect(session.env.MCP_HOST).toBe('127.0.0.1');
-      expect(session.env.MCP_API_KEY).toMatch(/^[0-9a-f]{64}$/);
-      expect(session.env.D365_PACKAGES_DIR).toBe(packages);
-      expect(session.env.D365_INDEX_DB_PATH).toBe('./d365_index.db');
-      if (process.platform !== 'win32') {
-        expect(fs.statSync(path.join(session.cwd, '.env')).mode & 0o777).toBe(0o600);
-      }
-
+      expect(session.out).toContain('1) Local only: index my custom models here. No hosted server.');
+      expect(session.out).toContain('2) Hosted: a hosted server for the standard application, plus my custom models indexed here.');
+      expect(session.env).toEqual({ D365_CUSTOM_METADATA_DIR: custom });
+      const parsed = gatewayConfigSchema.safeParse({ ...session.env, D365_LOCAL_INDEX_DB_PATH: path.join(root, 's', 'i.db') });
+      expect(parsed.success && parsed.data.hostedUrl).toBeNull();
       expect(session.runDoctor).toHaveBeenCalledTimes(1);
-      const [doctorEnv] = session.runDoctor.mock.calls[0] as [NodeJS.ProcessEnv];
-      expect(doctorEnv.MCP_API_KEY).toBe(session.env.MCP_API_KEY);
-      expect(doctorEnv.D365_PACKAGES_DIR).toBe(packages);
-      expect(doctorEnv.D365_INDEX_DB_PATH).toBe(path.join(session.cwd, 'd365_index.db'));
-
-      expect(session.runIndex).toHaveBeenCalledTimes(1);
-      const [indexOptions] = session.runIndex.mock.calls[0] as [{ packagesDir: string; dbPath: string }];
-      expect(indexOptions).toEqual({ packagesDir: packages, dbPath: path.join(session.cwd, 'd365_index.db') });
-
-      expect(session.logs).toContain('Wrote ');
-      expect(session.logs).toContain('Next: run `d365-fno-mcp-server serve`.');
-      expect(session.logs).not.toContain(session.env.MCP_API_KEY);
-      expect(session.out).not.toContain(session.env.MCP_API_KEY);
+      expect(session.logs).toContain('Next: run `d365-fno-mcp-server gateway`.');
+      expect(session.out).not.toMatch(/PackagesLocalDirectory|API key|Hosted MCP URL/);
     });
 
-    it('does not bind to loopback when the developer answers no', async () => {
-      const packages = stageMetadata(path.join(root, 'PackagesLocalDirectory'));
-      const session = await runSetup(['1', packages, '', '', 'n', 'n', 'n']);
+    it('writes the index path when one is given, and re-asks one that is a folder', async () => {
+      const custom = stageMetadata(path.join(root, 'Metadata'));
+      const folder = path.join(root, 'afolder');
+      fs.mkdirSync(folder);
+      const session = await runSetup(['1', custom, folder, './state/custom.db', 'n']);
 
       expect(session.code).toBe(0);
-      expect(session.env).not.toHaveProperty('MCP_HOST');
+      expect(session.out).toContain('is a folder. Give a file name');
+      expect(session.env.D365_LOCAL_INDEX_DB_PATH).toBe('./state/custom.db');
+      expect(session.logs).toContain('Next: run `d365-fno-mcp-server doctor`, then `d365-fno-mcp-server gateway`.');
     });
 
-    it('names the steps still to run when the follow-ups are declined', async () => {
-      const packages = stageMetadata(path.join(root, 'PackagesLocalDirectory'));
-      const session = await runSetup(['1', packages, '', '', 'y', 'n', 'n']);
-
+    it('re-asks a custom folder that does not exist', async () => {
+      const custom = stageMetadata(path.join(root, 'Metadata'));
+      const session = await runSetup(['1', path.join(root, 'missing'), custom, '', 'n']);
       expect(session.code).toBe(0);
-      expect(session.runDoctor).not.toHaveBeenCalled();
-      expect(session.runIndex).not.toHaveBeenCalled();
-      expect(session.logs).toContain(
-        'Next: run `d365-fno-mcp-server doctor`, then `d365-fno-mcp-server index`, then `d365-fno-mcp-server serve`.'
-      );
-    });
-
-    it('re-asks a packages folder that fails its check, saying why', async () => {
-      const packages = stageMetadata(path.join(root, 'PackagesLocalDirectory'));
-      const missing = path.join(root, 'nowhere');
-      const session = await runSetup(['1', missing, packages, '', '', 'y', 'n', 'n']);
-
-      expect(session.code).toBe(0);
-      expect(session.out).toContain(missing);
-      expect(session.out.toLowerCase()).toContain('does not exist');
-      expect(session.env.D365_PACKAGES_DIR).toBe(packages);
-    });
-
-    it('re-asks a blank packages folder instead of asking doctor to explain it', async () => {
-      const packages = stageMetadata(path.join(root, 'PackagesLocalDirectory'));
-      const session = await runSetup(['1', '', packages, '', '', 'y', 'n', 'n']);
-
-      expect(session.code).toBe(0);
-      expect(session.out).not.toContain('Run `d365-fno-mcp-server setup`');
-      expect(session.env.D365_PACKAGES_DIR).toBe(packages);
-    });
-
-    it('re-asks a short typed key without quoting it', async () => {
-      const packages = stageMetadata(path.join(root, 'PackagesLocalDirectory'));
-      const typed = 'tooShortKey9';
-      const session = await runSetup(['1', packages, typed, '', '', 'y', 'n', 'n']);
-
-      expect(session.code).toBe(0);
-      expect(session.out).toContain('at least 32');
-      expect(session.out).not.toContain(typed);
-      expect(session.logs).not.toContain(typed);
-      expect(session.env.MCP_API_KEY).toMatch(/^[0-9a-f]{64}$/);
-    });
-
-    it('keeps a typed key of 32 or more characters', async () => {
-      const packages = stageMetadata(path.join(root, 'PackagesLocalDirectory'));
-      const key = 'k'.repeat(40);
-      const session = await runSetup(['1', packages, key, '', 'y', 'n', 'n']);
-
-      expect(session.code).toBe(0);
-      expect(session.env.MCP_API_KEY).toBe(key);
-    });
-
-    it('accepts a folder pasted with surrounding quotes and writes the unquoted path', async () => {
-      const packages = stageMetadata(path.join(root, 'PackagesLocalDirectory'));
-      const session = await runSetup(['1', `"${packages}"`, '', '', 'y', 'n', 'n']);
-
-      expect(session.code).toBe(0);
-      expect(session.env.D365_PACKAGES_DIR).toBe(packages);
-    });
-
-    it('reads a packages folder whose name holds a space and a hash back unchanged', async () => {
-      const packages = stageMetadata(path.join(root, 'Packages Local #2'));
-      const session = await runSetup(['1', packages, '', '', 'y', 'n', 'n']);
-
-      expect(session.code).toBe(0);
-      expect(session.env.D365_PACKAGES_DIR).toBe(packages);
+      expect(session.out).toContain('There is no folder at');
     });
 
     it('re-asks an answer to the first question that is neither 1 nor 2', async () => {
-      const packages = stageMetadata(path.join(root, 'PackagesLocalDirectory'));
-      const session = await runSetup(['3', '1', packages, '', '', 'y', 'n', 'n']);
-
+      const custom = stageMetadata(path.join(root, 'Metadata'));
+      const session = await runSetup(['3', '1', custom, '', 'n']);
       expect(session.code).toBe(0);
-      expect(session.env.D365_PACKAGES_DIR).toBe(packages);
+      expect(session.out).toContain('Answer 1 or 2.');
     });
 
-    it('judges the new answers, not the .env that was already loaded into process.env', async () => {
-      vi.stubEnv('D365_HOSTED_MCP_URL', 'https://stale.example.com/mcp');
-      vi.stubEnv('MCP_API_KEYS', 'old=' + 'o'.repeat(40));
-      const packages = stageMetadata(path.join(root, 'PackagesLocalDirectory'));
-      const session = await runSetup(['1', packages, '', '', 'y', 'n', 'y']);
-
-      expect(session.code).toBe(0);
-      const [doctorEnv] = session.runDoctor.mock.calls[0] as [NodeJS.ProcessEnv];
-      expect(doctorEnv.D365_HOSTED_MCP_URL).toBeUndefined();
-      expect(doctorEnv.MCP_API_KEYS).toBeUndefined();
+    it('takes the developer package command name in every printed step', async () => {
+      const custom = stageMetadata(path.join(root, 'Metadata'));
+      const session = await runSetup(['1', custom, '', 'n'], { edition: { bin: 'd365-fno-mcp' } });
+      expect(session.envText).toMatch(/^# Generated by `d365-fno-mcp setup` \(local mode/);
+      expect(session.logs).toContain('Next: run `d365-fno-mcp doctor`, then `d365-fno-mcp gateway`.');
     });
 
-    it('builds the index before it runs the checks, so the checks judge the finished setup', async () => {
-      const packages = stageMetadata(path.join(root, 'PackagesLocalDirectory'));
-      const order: string[] = [];
-      const session = await runSetup(['1', packages, '', '', 'y', 'y', 'y'], {
-        runIndex: vi.fn(async () => (order.push('index'), 0)),
-        runDoctor: vi.fn(async () => (order.push('doctor'), 0)),
-      });
-
-      expect(session.code).toBe(0);
-      expect(order).toEqual(['index', 'doctor']);
-    });
-
-    it('keeps .env and still exits 0 when a follow-up reports failures, naming the retry', async () => {
-      const packages = stageMetadata(path.join(root, 'PackagesLocalDirectory'));
-      const runDoctor = vi.fn().mockResolvedValue(1);
-      const session = await runSetup(['1', packages, '', '', 'y', 'n', 'y'], { runDoctor });
-
-      expect(session.code).toBe(0);
-      expect(session.envText).not.toBeNull();
-      expect(session.logs).toContain('`d365-fno-mcp-server doctor`');
-      expect(session.logs).toContain('`d365-fno-mcp-server index`');
-    });
-
-    it('keeps .env and still exits 0 when the index run fails', async () => {
-      const packages = stageMetadata(path.join(root, 'PackagesLocalDirectory'));
-      const runIndex = vi.fn().mockResolvedValue(1);
-      const session = await runSetup(['1', packages, '', '', 'y', 'y', 'n'], { runIndex });
-
-      expect(session.code).toBe(0);
-      expect(session.envText).not.toBeNull();
-      expect(session.logs).toContain('`d365-fno-mcp-server index`');
+    it('refuses a flag of the removed full-local-index mode before asking anything', async () => {
+      const session = await runSetup([], { removedFlags: ['packages-dir'], end: true });
+      expect(session.code).toBe(1);
+      expect(session.errors).toContain('--packages-dir is no longer supported');
+      expect(session.out).toBe('');
     });
   });
 
-  describe('local mode: index path, defaults, terminal and secrets', () => {
-    it('asks again for an index DB path that is an existing folder, and suggests a file name', async () => {
-      const packages = stageMetadata(path.join(root, 'PackagesLocalDirectory'));
-      const folder = path.join(root, 'IndexFolder');
-      fs.mkdirSync(folder);
-      const session = await runSetup(['1', packages, '', folder, '', 'y', 'n', 'n']);
-
+  describe('hosted mode: deployed or not', () => {
+    it('asks whether the server is already deployed', async () => {
+      const custom = stageMetadata(path.join(root, 'Metadata'));
+      const session = await runSetup(['2', '1', HOSTED_URL, 'k', HOSTED_KEY, custom, 'n']);
       expect(session.code).toBe(0);
-      expect(session.out).toContain(`"${folder}" is a folder. Give a file name`);
-      expect(session.out).toContain(path.join(folder, 'd365_index.db'));
-      expect(session.env.D365_INDEX_DB_PATH).toBe('./d365_index.db');
+      expect(session.out).toContain('Is the hosted server already deployed?');
+      expect(session.out).toContain('1) Yes: I have its URL and a developer key.');
+      expect(session.out).toContain('2) No: deploy one now.');
     });
 
-    it('asks again for an index DB path below a file', async () => {
-      const packages = stageMetadata(path.join(root, 'PackagesLocalDirectory'));
-      const blocker = path.join(root, 'blocker');
-      fs.writeFileSync(blocker, 'x');
-      const session = await runSetup(['1', packages, '', path.join(blocker, 'data', 'index.db'), '', 'y', 'n', 'n']);
-
-      expect(session.code).toBe(0);
-      expect(session.out).toContain('is not a folder');
-      expect(session.env.D365_INDEX_DB_PATH).toBe('./d365_index.db');
+    it('in the developer package, answering "deploy" prints the operator command and writes nothing', async () => {
+      const session = await runSetup(['2', '2'], { edition: { bin: 'd365-fno-mcp' } });
+      expect(session.code).toBe(1);
+      expect(session.errors).toContain('Run: npx d365-fno-mcp-server setup --mode hosted --deploy');
+      expect(session.envText).toBeNull();
     });
 
-    it('asks again, instead of crashing, for an index DB path on a drive that does not exist', async () => {
-      const packages = stageMetadata(path.join(root, 'PackagesLocalDirectory'));
-      const missing = path.resolve('/no-such-drive-xyz/data/index.db');
-      const missingRoot = path.parse(missing).root;
-      const real = fs.existsSync.bind(fs);
-      vi.spyOn(fs, 'existsSync').mockImplementation((target) => {
-        const text = String(target);
-        return text === missingRoot || text.startsWith(path.resolve('/no-such-drive-xyz')) ? false : real(target);
+    it('in the operator package, asks the deploy questions first and runs the plan only after the prompt closed', async () => {
+      const custom = stageMetadata(path.join(root, 'Metadata'));
+      const events: string[] = [];
+      const deploy = {
+        ask: vi.fn(async (prompt: { ask: (q: string) => Promise<string> }) => {
+          events.push(`asked ${await prompt.ask('Environment name')}`);
+          return {
+            run: async () => {
+              events.push('ran');
+              return { hostedUrl: 'https://new.example.com/mcp', key: 'b'.repeat(64) };
+            },
+          };
+        }),
+        fromFlags: vi.fn(),
+      };
+      const session = await runSetup(['2', '2', 'dev', custom, 'y'], { edition: { bin: 'd365-fno-mcp-server', deploy } });
+
+      expect(session.code).toBe(0);
+      expect(events).toEqual(['asked dev', 'ran']);
+      expect(session.env).toEqual({
+        D365_HOSTED_MCP_URL: 'https://new.example.com/mcp',
+        D365_HOSTED_API_KEY: 'b'.repeat(64),
+        D365_CUSTOM_METADATA_DIR: custom,
       });
-      const session = await runSetup(['1', packages, '', missing, '', 'y', 'n', 'n']);
-
-      expect(session.code).toBe(0);
-      expect(session.out).toContain('drive or share');
-      expect(session.env.D365_INDEX_DB_PATH).toBe('./d365_index.db');
-    });
-
-    it('says in plain words that a key is too short or a placeholder', async () => {
-      const packages = stageMetadata(path.join(root, 'PackagesLocalDirectory'));
-      const session = await runSetup(['1', packages, 'short', 'change-me-'.repeat(5), '', '', 'y', 'n', 'n']);
-
-      expect(session.code).toBe(0);
-      expect(session.out).toContain('The key is 5 characters; at least 32 are required.');
-      expect(session.out).toContain('The key is a documentation placeholder');
-      expect(session.out).not.toMatch(/MCP_API_KEY:|'default'/);
-    });
-
-    it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('asks again for an index DB path in a folder it cannot write in', async () => {
-      const packages = stageMetadata(path.join(root, 'PackagesLocalDirectory'));
-      const readOnly = path.join(root, 'read-only');
-      fs.mkdirSync(readOnly);
-      fs.chmodSync(readOnly, 0o500);
-      try {
-        const session = await runSetup(['1', packages, '', path.join(readOnly, 'data', 'index.db'), '', 'y', 'n', 'n']);
-
-        expect(session.code).toBe(0);
-        expect(session.out).toContain('you cannot write in');
-        expect(session.env.D365_INDEX_DB_PATH).toBe('./d365_index.db');
-      } finally {
-        fs.chmodSync(readOnly, 0o700);
-      }
-    });
-
-    it.skipIf(process.platform === 'win32')('asks again for a packages folder whose name a .env file cannot hold', async () => {
-      const packages = stageMetadata(path.join(root, 'PackagesLocalDirectory'));
-      const odd = stageMetadata(path.join(root, 'Packages\tTab'));
-      const session = await runSetup(['1', odd, packages, '', '', 'y', 'n', 'n']);
-
-      expect(session.code).toBe(0);
-      expect(session.out).toContain('cannot be saved in a .env file');
-      expect(session.env.D365_PACKAGES_DIR).toBe(packages);
-    });
-
-    it('asks again for a value a .env file cannot hold, instead of failing after the last question', async () => {
-      const packages = stageMetadata(path.join(root, 'PackagesLocalDirectory'));
-      const session = await runSetup(['1', packages, '', './a\tb/index.db', '', 'y', 'n', 'n']);
-
-      expect(session.code).toBe(0);
-      expect(session.out).toContain('cannot be saved in a .env file');
-      expect(session.env.D365_INDEX_DB_PATH).toBe('./d365_index.db');
-    });
-
-    it('takes the defaults when every question is answered with Enter', async () => {
-      const packages = stageMetadata(path.join(root, 'PackagesLocalDirectory'));
-      const session = await runSetup(['', packages, '', '', '', '', '']);
-
-      expect(session.code).toBe(0);
-      expect(session.env.MCP_HOST).toBe('127.0.0.1');
-      expect(session.env.D365_INDEX_DB_PATH).toBe('./d365_index.db');
-      expect(session.runIndex).toHaveBeenCalledTimes(1);
       expect(session.runDoctor).toHaveBeenCalledTimes(1);
-      expect(session.logs).toContain('Next: run `d365-fno-mcp-server serve`.');
+      expect(session.logs).not.toContain('b'.repeat(64));
     });
 
-    it('releases the terminal before the index and the checks start, so Ctrl-C can stop them', async () => {
-      const packages = stageMetadata(path.join(root, 'PackagesLocalDirectory'));
-      const rawCalls: boolean[] = [];
-      const input = Object.assign(new PassThrough(), {
-        isTTY: true,
-        setRawMode(mode: boolean) {
-          rawCalls.push(mode);
-          return this;
-        },
-      });
-      const output = new PassThrough();
-      const rawWhenRun: Array<boolean | undefined> = [];
-      typeWhenAsked(input, output, [
-        ['Choose 1 or 2', '1'],
-        ['PackagesLocalDirectory path', packages],
-        ['MCP API key', ''],
-        ['Index DB path', ''],
-        ['Bind to this machine only', 'y'],
-        ['Build the index now?', 'y'],
-        ['Run the checks now?', 'y'],
-      ]);
-      fs.mkdirSync(path.join(root, 'work'), { recursive: true });
-
-      const code = await setupCommand({
-        nonInteractive: false,
-        cwd: path.join(root, 'work'),
-        input,
-        output,
-        terminal: true,
-        runIndex: vi.fn(async () => (rawWhenRun.push(rawCalls.at(-1)), 0)),
-        runDoctor: vi.fn(async () => (rawWhenRun.push(rawCalls.at(-1)), 0)),
-      });
-
-      expect(code).toBe(0);
-      expect(rawWhenRun).toEqual([false, false]);
-    });
-
-    it('passes the terminal type on, so the index does not draw a counter on a dumb terminal', async () => {
-      vi.stubEnv('TERM', 'dumb');
-      const packages = stageMetadata(path.join(root, 'PackagesLocalDirectory'));
-      const session = await runSetup(['1', packages, '', '', 'y', 'y', 'y']);
-
-      const [, indexEnv] = session.runIndex.mock.calls[0] as [unknown, NodeJS.ProcessEnv];
-      const [doctorEnv] = session.runDoctor.mock.calls[0] as [NodeJS.ProcessEnv];
-      expect(indexEnv.TERM).toBe('dumb');
-      expect(doctorEnv.TERM).toBe('dumb');
-    });
-
-    it('says where a generated key was saved, and stays quiet when the key was typed', async () => {
-      const packages = stageMetadata(path.join(root, 'PackagesLocalDirectory'));
-      const generated = await runSetup(['1', packages, '', '', 'y', 'n', 'n']);
-      expect(generated.logs).toContain(`Generated an API key and saved it as MCP_API_KEY in ${path.join(generated.cwd, '.env')}.`);
-      expect(generated.logs).not.toContain(generated.env.MCP_API_KEY);
-
-      fs.rmSync(path.join(generated.cwd, '.env'));
-      logged.length = 0;
-      const typed = await runSetup(['1', packages, 'k'.repeat(40), '', 'y', 'n', 'n']);
-      expect(typed.code).toBe(0);
-      expect(typed.logs).not.toContain('Generated an API key');
-    });
-
-    it('never echoes the API key it is typed, when each answer is typed as its question appears', async () => {
-      const packages = stageMetadata(path.join(root, 'PackagesLocalDirectory'));
-      const key = 'localkey-0123456789-abcdefghijklmnop';
-      const session = await runSetup([], {
-        tty: true,
-        drive: (input, output) =>
-          typeWhenAsked(input, output, [
-            ['Choose 1 or 2', '1'],
-            ['PackagesLocalDirectory path', packages],
-            ['MCP API key', key],
-            ['Index DB path', ''],
-            ['Bind to this machine only', 'y'],
-            ['Build the index now?', 'n'],
-            ['Run the checks now?', 'n'],
-          ]),
-      });
-
-      expect(session.code).toBe(0);
-      expect(session.env.MCP_API_KEY).toBe(key);
-      expect(session.out).not.toContain(key);
-      expect(session.out).not.toContain('localkey');
-      expect(session.logs).not.toContain(key);
+    it('writes nothing when the deploy questions end in a no', async () => {
+      const deploy = { ask: vi.fn(async () => null), fromFlags: vi.fn() };
+      const session = await runSetup(['2', '2'], { edition: { bin: 'd365-fno-mcp-server', deploy } });
+      expect(session.code).toBe(1);
+      expect(session.logs).toContain('Nothing was deployed and nothing was written.');
+      expect(session.envText).toBeNull();
     });
   });
 
@@ -502,7 +263,7 @@ describe('setup (interactive)', () => {
       const custom = stageMetadata(path.join(root, 'Metadata'));
       const keyFile = path.join(root, 'hosted-api-key');
       fs.writeFileSync(keyFile, `${HOSTED_KEY}\n`);
-      const session = await runSetup(['2', HOSTED_URL, 'f', keyFile, custom, 'y']);
+      const session = await runSetup(['2', '1', HOSTED_URL, 'f', keyFile, custom, 'y']);
 
       expect(session.code).toBe(0);
       expect(session.env.D365_HOSTED_MCP_URL).toBe(HOSTED_URL);
@@ -513,7 +274,6 @@ describe('setup (interactive)', () => {
       expect(session.env).not.toHaveProperty('MCP_API_KEY');
       expect(gatewayConfigSchema.safeParse(session.env).success).toBe(true);
 
-      expect(session.runIndex).not.toHaveBeenCalled();
       expect(session.runDoctor).toHaveBeenCalledTimes(1);
       const [doctorEnv] = session.runDoctor.mock.calls[0] as [NodeJS.ProcessEnv];
       expect(doctorEnv.D365_HOSTED_MCP_URL).toBe(HOSTED_URL);
@@ -524,7 +284,7 @@ describe('setup (interactive)', () => {
 
     it('stores a typed hosted key in .env without echoing it anywhere else', async () => {
       const custom = stageMetadata(path.join(root, 'Metadata'));
-      const session = await runSetup(['2', HOSTED_URL, 'k', HOSTED_KEY, custom, 'n'], { tty: true });
+      const session = await runSetup(['2', '1', HOSTED_URL, 'k', HOSTED_KEY, custom, 'n'], { tty: true });
 
       expect(session.code).toBe(0);
       expect(session.env.D365_HOSTED_API_KEY).toBe(HOSTED_KEY);
@@ -537,7 +297,7 @@ describe('setup (interactive)', () => {
 
     it('normalises the hosted URL the way the gateway does', async () => {
       const custom = stageMetadata(path.join(root, 'Metadata'));
-      const session = await runSetup(['2', 'https://Hosted.Example.com', 'k', HOSTED_KEY, custom, 'n']);
+      const session = await runSetup(['2', '1', 'https://Hosted.Example.com', 'k', HOSTED_KEY, custom, 'n']);
 
       expect(session.code).toBe(0);
       expect(session.env.D365_HOSTED_MCP_URL).toBe('https://hosted.example.com/mcp');
@@ -547,7 +307,7 @@ describe('setup (interactive)', () => {
       const custom = stageMetadata(path.join(root, 'Metadata'));
       const spaced = 'has a space 0123456789';
       const session = await runSetup([
-        '2', 'http://hosted.example.com/mcp', HOSTED_URL, 'k', spaced, HOSTED_KEY, custom, 'n',
+        '2', '1', 'http://hosted.example.com/mcp', HOSTED_URL, 'k', spaced, HOSTED_KEY, custom, 'n',
       ]);
 
       expect(session.code).toBe(0);
@@ -559,7 +319,7 @@ describe('setup (interactive)', () => {
 
     it('reads a custom folder with a space and a hash back unchanged through dotenv and the gateway schema', async () => {
       const custom = stageMetadata(path.join(root, 'Models #2', 'Jo Smith'));
-      const session = await runSetup(['2', HOSTED_URL, 'k', HOSTED_KEY, custom, 'n']);
+      const session = await runSetup(['2', '1', HOSTED_URL, 'k', HOSTED_KEY, custom, 'n']);
 
       expect(session.code).toBe(0);
       expect(session.env.D365_CUSTOM_METADATA_DIR).toBe(custom);
@@ -571,7 +331,7 @@ describe('setup (interactive)', () => {
     it('accepts an empty custom folder with a notice, because a new models folder starts empty', async () => {
       const empty = path.join(root, 'EmptyModels');
       fs.mkdirSync(empty);
-      const session = await runSetup(['2', HOSTED_URL, 'k', HOSTED_KEY, empty, 'n']);
+      const session = await runSetup(['2', '1', HOSTED_URL, 'k', HOSTED_KEY, empty, 'n']);
 
       expect(session.code).toBe(0);
       expect(session.env.D365_CUSTOM_METADATA_DIR).toBe(empty);
@@ -587,9 +347,10 @@ describe('setup (interactive)', () => {
         drive: (input, output) =>
           typeWhenAsked(input, output, [
             ['Choose 1 or 2', '2'],
+            ['Choose 1 or 2', '1'],
             ['Hosted MCP URL', HOSTED_URL],
             ['read it from a file (f)', 'k'],
-            ['Hosted API key: ', HOSTED_KEY],
+            ['Developer key: ', HOSTED_KEY],
             ['Folder with your custom models', custom],
             ['Run the checks now?', 'n'],
           ]),
@@ -613,6 +374,7 @@ describe('setup (interactive)', () => {
 
       const session = await runSetup([
         '2',
+        '1',
         '', 'not a url', 'http://hosted.example.com/mcp', 'https://user:pw@hosted.example.com/mcp', HOSTED_URL,
         'f',
         '', missingKey, keyFolder, emptyKey, goodKey,
@@ -644,7 +406,7 @@ describe('setup (interactive)', () => {
       fs.writeFileSync(oddKey, HOSTED_KEY);
       const goodKey = path.join(root, 'good.key');
       fs.writeFileSync(goodKey, HOSTED_KEY);
-      const session = await runSetup(['2', HOSTED_URL, 'f', oddKey, goodKey, odd, custom, 'n']);
+      const session = await runSetup(['2', '1', HOSTED_URL, 'f', oddKey, goodKey, odd, custom, 'n']);
 
       expect(session.code).toBe(0);
       expect(session.out.match(/cannot be saved in a \.env file/g)).toHaveLength(2);
@@ -656,7 +418,7 @@ describe('setup (interactive)', () => {
       const custom = stageMetadata(path.join(root, 'Metadata'));
       const goodKey = path.join(root, 'good.key');
       fs.writeFileSync(goodKey, HOSTED_KEY);
-      const session = await runSetup(['2', HOSTED_URL, 'f', HOSTED_KEY, goodKey, custom, 'n']);
+      const session = await runSetup(['2', '1', HOSTED_URL, 'f', HOSTED_KEY, goodKey, custom, 'n']);
 
       expect(session.code).toBe(0);
       expect(session.out).toContain('There is no file at that path.');
@@ -666,7 +428,7 @@ describe('setup (interactive)', () => {
     it('asks again for a blank key and a missing folder in plain words', async () => {
       const custom = stageMetadata(path.join(root, 'Metadata'));
       const missing = path.join(root, 'nope');
-      const session = await runSetup(['2', HOSTED_URL, 'k', '', HOSTED_KEY, '', missing, custom, 'n']);
+      const session = await runSetup(['2', '1', HOSTED_URL, 'k', '', HOSTED_KEY, '', missing, custom, 'n']);
 
       expect(session.code).toBe(0);
       expect(session.out).toContain('A hosted API key is required.');
@@ -708,7 +470,7 @@ describe('setup (interactive)', () => {
       const cwd = path.join(root, 'work');
       fs.mkdirSync(cwd, { recursive: true });
       const input = new PassThrough();
-      input.write(['1', packages, '', '', 'y', 'n'].join('\n') + '\n');
+      input.write(['1', packages, ''].join('\n') + '\n');
       input.write('n');
       input.end();
       const code = await setupCommand({
@@ -718,7 +480,6 @@ describe('setup (interactive)', () => {
         output: new PassThrough(),
         terminal: false,
         runDoctor: vi.fn().mockResolvedValue(0),
-        runIndex: vi.fn().mockResolvedValue(0),
       });
 
       expect(code).toBe(0);

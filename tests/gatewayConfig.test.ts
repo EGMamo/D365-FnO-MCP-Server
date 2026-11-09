@@ -79,9 +79,17 @@ describe('loadGatewayConfig hosted URL', () => {
     expect(urlFor('https://d365.example.com/gateway/mcp')).toBe('https://d365.example.com/gateway/mcp');
   });
 
-  it('requires the URL and rejects values that are not URLs', () => {
+  it('treats no URL and no key as local mode, and rejects values that are not URLs', () => {
+    const local = loadGatewayConfig(validEnv({ D365_HOSTED_MCP_URL: undefined, D365_HOSTED_API_KEY: undefined }));
+    expect(local.hostedUrl).toBeNull();
+    expect(local.hostedApiKey).toBeNull();
     expect(problemsOf(validEnv({ D365_HOSTED_MCP_URL: undefined }))).toEqual([
-      expect.stringMatching(/^D365_HOSTED_MCP_URL: is required/),
+      'D365_HOSTED_API_KEY: D365_HOSTED_API_KEY is set but D365_HOSTED_MCP_URL is empty',
+    ]);
+    const keyFile = path.join(root, 'local-mode.key');
+    fs.writeFileSync(keyFile, HOSTED_KEY);
+    expect(problemsOf(validEnv({ D365_HOSTED_MCP_URL: undefined, D365_HOSTED_API_KEY: undefined, D365_HOSTED_API_KEY_FILE: keyFile }))).toEqual([
+      'D365_HOSTED_API_KEY_FILE: D365_HOSTED_API_KEY_FILE is set but D365_HOSTED_MCP_URL is empty',
     ]);
     expect(problemsOf(validEnv({ D365_HOSTED_MCP_URL: 'd365.example.com' }))).toEqual([
       expect.stringMatching(/^D365_HOSTED_MCP_URL: /),
@@ -532,8 +540,6 @@ describe('field checks', () => {
   }
 
   const urlRows: Array<[label: string, raw: string, valid: boolean]> = [
-    ['empty', '', false],
-    ['blank', '   ', false],
     ['padded', ' https://H.example.com ', true],
     ['remote http', 'http://d365.example.com/mcp', false],
     ['ftp', 'ftp://d365.example.com/mcp', false],
@@ -547,6 +553,11 @@ describe('field checks', () => {
     const check = validateHostedUrl(raw);
     expect(check.ok).toBe(valid);
     expectParity(check, validEnv({ D365_HOSTED_MCP_URL: raw }), 'hostedUrl');
+  });
+
+  it('refuses an empty URL, which the gateway reads as local mode rather than a hosted server', () => {
+    expect(validateHostedUrl('').ok).toBe(false);
+    expect(validateHostedUrl('   ').ok).toBe(false);
   });
 
   it('returns the normalised URL the gateway would use', () => {
