@@ -12,7 +12,7 @@ export interface ApiKeyEntry {
   key: string;
 }
 
-export const MIN_API_KEY_LENGTH = 32;
+const MIN_API_KEY_LENGTH = 32;
 
 /** Name of the entry created from the legacy single `MCP_API_KEY` variable. */
 export const LEGACY_API_KEY_NAME = 'default';
@@ -22,7 +22,7 @@ export const KEY_NAME_PATTERN = /^[A-Za-z0-9._@-]{1,64}$/;
 const NAME_PATTERN = KEY_NAME_PATTERN;
 
 /** The prefix that tells an admin key apart from a developer key at a glance. */
-export const ADMIN_KEY_PREFIX = 'adm_';
+const ADMIN_KEY_PREFIX = 'adm_';
 
 /** A developer key: 64 hexadecimal characters from 32 random bytes. */
 export function generateApiKey(): string {

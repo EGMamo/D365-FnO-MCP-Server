@@ -27,7 +27,7 @@ import { DEFAULT_REQUIRED_CAPABILITIES } from './capabilityCoverage.js';
 import { INDEX_SCHEMA_VERSION } from './db.js';
 import { VERSION } from '../version.js';
 
-export const ACQUISITION_PHASES = [
+const ACQUISITION_PHASES = [
   'acquire',
   'build',
   'bundle',
@@ -377,7 +377,7 @@ export function acquisitionStepLogFile(
   return path.join(runDirectory, 'logs', `${phase}-${index + 1}-${safeName || 'step'}.log`);
 }
 
-export async function executeAcquisitionCommand(
+async function executeAcquisitionCommand(
   command: AcquisitionCommand,
   context: AcquisitionStepContext
 ): Promise<void> {

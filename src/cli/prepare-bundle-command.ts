@@ -91,7 +91,7 @@ function describeIssues(error: z.ZodError, prefix?: string): string {
 }
 
 /** Reads and validates `sources.json`; Windows PowerShell 5.1 writes it with a UTF-8 BOM. */
-export function readSourcesFile(file: string): AcquiredSources {
+function readSourcesFile(file: string): AcquiredSources {
   let value: unknown;
   try {
     value = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^﻿/, ''));
@@ -119,7 +119,7 @@ function provenanceEntry(
 }
 
 /** The bundle options for an index built from `sources`, declaring what the indexer covers. */
-export function createBundleOptions(
+function createBundleOptions(
   sources: AcquiredSources,
   capabilities: CapabilityInventory,
   releaseId = `ude-${sources.applicationVersion}`

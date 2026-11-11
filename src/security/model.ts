@@ -8,7 +8,7 @@ import { getObjectHeader, getSecurityGrants, getXrefsFrom, getXrefsTo, type Secu
  * Role/Duty extensions that contribute to their base object via `extends`.
  */
 
-export const MENU_ITEM_TYPES = ['MenuItemDisplay', 'MenuItemAction', 'MenuItemOutput'] as const;
+const MENU_ITEM_TYPES = ['MenuItemDisplay', 'MenuItemAction', 'MenuItemOutput'] as const;
 
 /** Keep unresolved references visible, but use indexed spelling for known objects. */
 function indexedName(db: Database, name: string, type: string): string {

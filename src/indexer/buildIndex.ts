@@ -75,7 +75,7 @@ export interface BuildIndexOptions extends ScanOptions {
   onProgress?: (progress: IndexProgress) => void;
 }
 
-export function shouldStoreRawXml(env: NodeJS.ProcessEnv = process.env): boolean {
+function shouldStoreRawXml(env: NodeJS.ProcessEnv = process.env): boolean {
   const value = env.D365_INDEX_STORE_RAW_XML;
   if (value === undefined) return true;
   return !['0', 'false', 'no', 'off'].includes(value.trim().toLowerCase());

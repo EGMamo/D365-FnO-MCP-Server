@@ -28,7 +28,7 @@ export const ARTIFACT_CAPABILITY_NAMES = [
   'securityGraphs',
 ] as const;
 
-export const ArtifactCapabilityNameSchema = z.enum(ARTIFACT_CAPABILITY_NAMES);
+const ArtifactCapabilityNameSchema = z.enum(ARTIFACT_CAPABILITY_NAMES);
 
 export type ArtifactCapabilityName = z.infer<typeof ArtifactCapabilityNameSchema>;
 
@@ -88,7 +88,7 @@ export const ArtifactProvenanceSchema = z
 
 export type ArtifactProvenance = z.infer<typeof ArtifactProvenanceSchema>;
 
-export const ArtifactValidationReportSchema = z
+const ArtifactValidationReportSchema = z
   .object({
     contract: z.literal(ARTIFACT_CONTRACT_NAME),
     contractVersion: z.literal(ARTIFACT_CONTRACT_VERSION),
@@ -223,7 +223,7 @@ const ArtifactPointerSchema = z
   })
   .strict();
 
-export const ArtifactPointersSchema = z
+const ArtifactPointersSchema = z
   .object({
     contract: z.literal(ARTIFACT_CONTRACT_NAME),
     contractVersion: z.literal(ARTIFACT_CONTRACT_VERSION),
@@ -270,7 +270,7 @@ export function canonicalJson(value: unknown): string {
   return `${JSON.stringify(stableValue(value))}\n`;
 }
 
-export function sha256Buffer(value: string | Buffer): string {
+function sha256Buffer(value: string | Buffer): string {
   return createHash('sha256').update(value).digest('hex');
 }
 
@@ -317,7 +317,7 @@ function numericVersion(value: string): number[] {
   return core.split('.').map((part) => Number(part));
 }
 
-export function compareArtifactVersions(left: string, right: string): number {
+function compareArtifactVersions(left: string, right: string): number {
   const a = numericVersion(left);
   const b = numericVersion(right);
   for (let index = 0; index < Math.max(a.length, b.length); index += 1) {

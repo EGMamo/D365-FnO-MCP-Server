@@ -1,7 +1,7 @@
 import { KeyRegistryConflictError, parseRegistryDocument, type RegistryStore } from './keyRegistry.js';
 
 /** The registry blob's name inside its container. */
-export const REGISTRY_BLOB_NAME = 'key-registry.json';
+const REGISTRY_BLOB_NAME = 'key-registry.json';
 
 /** The two operations the store needs from a blob, so tests can stand in for Azure. */
 export interface RegistryBlob {

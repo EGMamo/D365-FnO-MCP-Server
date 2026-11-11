@@ -60,7 +60,7 @@ export interface DeployAnswers {
   developerName: string;
 }
 
-export const REGIONS = ['northeurope', 'westeurope', 'uksouth', 'swedencentral', 'eastus', 'eastus2', 'westus3', 'australiaeast'] as const;
+const REGIONS = ['northeurope', 'westeurope', 'uksouth', 'swedencentral', 'eastus', 'eastus2', 'westus3', 'australiaeast'] as const;
 const MONTHLY_COST = { cheapest: 'about $290 a month', standard: 'about $470 a month' } as const;
 const ENVIRONMENT_NAME = /^[a-z0-9-]{1,8}$/;
 const GUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
@@ -68,7 +68,7 @@ const DATAVERSE_URL = /^https:\/\/[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+\/?$/;
 const REPOSITORY = /^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/;
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const RESOURCE_GROUP = /^[-\w._()]{1,90}$/;
-export const KEY_REGISTRY_CONTAINER = 'd365-keys';
+const KEY_REGISTRY_CONTAINER = 'd365-keys';
 const HEALTH_TIMEOUT_MS = 30 * 60_000;
 const HEALTH_INTERVAL_MS = 15_000;
 const ROLE_PROPAGATION_MS = 5 * 60_000;
@@ -80,7 +80,7 @@ export class DeployError extends Error {}
 // ── Checks ──────────────────────────────────────────────────────────────────
 
 /** The tools the scripts need, and an Azure CLI sign-in. Returns the signed-in account's subscription and tenant. */
-export async function preflight(deps: Pick<DeployDependencies, 'runner' | 'repoRoot'>): Promise<{ subscriptionId: string; tenantId: string }> {
+async function preflight(deps: Pick<DeployDependencies, 'runner' | 'repoRoot'>): Promise<{ subscriptionId: string; tenantId: string }> {
   const missing: string[] = [];
   const tool = async (command: string, args: string[], name: string, page: string): Promise<void> => {
     const result = await deps.runner.capture(command, args).catch(() => ({ code: 127, stdout: '', stderr: '' }));
@@ -121,7 +121,7 @@ export function keyNameFrom(user: string): string {
 }
 
 /** Checks one answer; the problem in plain words, or undefined. Shared by the prompts and the flags. */
-export function answerProblem(field: keyof DeployAnswers, value: string): string | undefined {
+function answerProblem(field: keyof DeployAnswers, value: string): string | undefined {
   switch (field) {
     case 'subscriptionId':
     case 'tenantId':
@@ -331,7 +331,7 @@ async function resetAdminWithRetry(deps: DeployDependencies, outputs: Deployment
 }
 
 /** The steps after the confirmation; each failure names the step and how to resume. */
-export async function runDeployment(deps: DeployDependencies, answers: DeployAnswers): Promise<DeployResult> {
+async function runDeployment(deps: DeployDependencies, answers: DeployAnswers): Promise<DeployResult> {
   const step = async (label: string, command: string, args: string[]): Promise<void> => {
     deps.log(`\n${label}: ${commandLine(command, args)}`);
     const code = await deps.runner.interactive(command, args, { cwd: deps.repoRoot });

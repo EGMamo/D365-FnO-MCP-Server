@@ -12,7 +12,7 @@ const num = z.coerce.number().finite().default(0);
 const id = z.preprocess((v) => (typeof v === 'number' || typeof v === 'bigint' ? String(v) : v), z.string().min(1));
 const optionalText = z.preprocess((v) => (v === null || v === undefined ? undefined : String(v)), z.string().optional());
 
-export const traceSessionSchema = z.object({
+const traceSessionSchema = z.object({
   session_id: id,
   trace_name: optionalText,
   session_name: optionalText,
@@ -25,7 +25,7 @@ export const traceSessionSchema = z.object({
   rows_fetched: num,
 });
 
-export const traceMethodSchema = z.object({
+const traceMethodSchema = z.object({
   session_id: id,
   method_name: z.string().min(1),
   calls: num,
@@ -38,7 +38,7 @@ export const traceMethodSchema = z.object({
   worst_line_db_ms: num,
 });
 
-export const traceStatementSchema = z.object({
+const traceStatementSchema = z.object({
   session_id: id,
   statement: z.string().min(1),
   table_names: optionalText,
@@ -49,15 +49,11 @@ export const traceStatementSchema = z.object({
   rows_fetched: num,
 });
 
-export const traceSnapshotSchema = z.object({
+const traceSnapshotSchema = z.object({
   sessions: z.array(traceSessionSchema),
   methods: z.array(traceMethodSchema).default([]),
   statements: z.array(traceStatementSchema).default([]),
 });
-
-export type TraceSession = z.infer<typeof traceSessionSchema>;
-export type TraceMethod = z.infer<typeof traceMethodSchema>;
-export type TraceStatement = z.infer<typeof traceStatementSchema>;
 export type TraceSnapshot = z.infer<typeof traceSnapshotSchema>;
 
 /** Columns the aggregate queries read; probed up front so a wrong database fails clearly. */
@@ -93,7 +89,7 @@ const LINES = `
   JOIN dbo.Traces t ON t.TraceId = p.TraceId
   WHERE (@trace IS NULL OR t.TraceName = @trace)`;
 
-export const TRACE_SESSIONS_QUERY = `
+const TRACE_SESSIONS_QUERY = `
 SELECT us.SessionId AS session_id, t.TraceName AS trace_name, us.SessionName AS session_name,
   u.UserName AS user_name, CONVERT(varchar(33), t.TimeStampBegin, 126) AS started_at,
   CONVERT(varchar(33), t.TimeStampEnd, 126) AS ended_at,
@@ -110,7 +106,7 @@ WHERE (@trace IS NULL OR t.TraceName = @trace)
 GROUP BY us.SessionId, t.TraceName, us.SessionName, u.UserName, t.TimeStampBegin, t.TimeStampEnd`;
 
 /** Per (session, method) totals plus the single line with the most database calls (FastTrack's N+1 unit). */
-export const TRACE_METHODS_QUERY = `
+const TRACE_METHODS_QUERY = `
 WITH lines AS (
   SELECT p.SessionId, tl.MethodHash, tl.InclusiveDurationNano, tl.ExclusiveDurationNano,
     tl.DatabaseDurationNano, tl.DatabaseCalls, tl.RowFetchCount,
@@ -136,7 +132,7 @@ JOIN dbo.MethodNames mn ON mn.MethodHash = a.MethodHash
 WHERE a.r <= @limit`;
 
 /** Per (session, statement) totals, with the method and tables of its slowest execution. */
-export const TRACE_STATEMENTS_QUERY = `
+const TRACE_STATEMENTS_QUERY = `
 WITH lines AS (
   SELECT p.SessionId, tl.QueryStatementHash, tl.QueryTableHash, tl.MethodHash,
     tl.DatabaseDurationNano, tl.RowFetchCount,

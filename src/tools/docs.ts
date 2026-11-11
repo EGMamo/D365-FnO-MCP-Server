@@ -47,7 +47,7 @@ export interface SearchDocsArgs {
   limit?: number;
 }
 
-export function searchDocs(db: Database, args: SearchDocsArgs): ToolResult {
+function searchDocs(db: Database, args: SearchDocsArgs): ToolResult {
   const info = sources(db);
   if (!info || info.length === 0) return fail(NO_DOCS);
   if (args.source && !info.some((s) => s.source === args.source)) {
@@ -118,7 +118,7 @@ export interface GetDocPageArgs {
   maxChars?: number;
 }
 
-export function getDocPage(db: Database, args: GetDocPageArgs): ToolResult {
+function getDocPage(db: Database, args: GetDocPageArgs): ToolResult {
   const info = sources(db);
   if (!info || info.length === 0) return fail(NO_DOCS);
   if (args.pageId === undefined && !args.url) return fail('Pass pageId or url.');

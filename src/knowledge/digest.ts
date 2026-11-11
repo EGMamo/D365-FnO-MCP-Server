@@ -111,7 +111,7 @@ function stripCodeFences(content: string): string {
     .join('\n');
 }
 
-export function extractTitle(content: string): string | null {
+function extractTitle(content: string): string | null {
   for (const line of stripCodeFences(content).split(/\r?\n/)) {
     const match = /^#\s+(.+)$/.exec(line.trim());
     if (match) return match[1].trim();

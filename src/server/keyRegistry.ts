@@ -99,7 +99,7 @@ export interface KeyRegistryOptions {
   now?: () => Date;
 }
 
-export const DEFAULT_REGISTRY_POLL_MS = 5_000;
+const DEFAULT_REGISTRY_POLL_MS = 5_000;
 
 /** Opens the registry: reads it once (failing when it cannot), then keeps it current. */
 export async function createKeyRegistry(store: RegistryStore, options: KeyRegistryOptions = {}): Promise<KeyRegistry> {

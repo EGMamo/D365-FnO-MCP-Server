@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { glob, globIterate } from 'glob';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { checkCustomMetadataDir, checkPackagesDir, firstProblem, type CheckResult } from '../src/cli/checks.js';
+import { checkCustomMetadataDir, checkPackagesDir, type CheckResult } from '../src/cli/checks.js';
 
 // The real glob, wrapped so a test can see whether the packages check walked the tree with it.
 vi.mock('glob', async (importOriginal) => {
@@ -204,38 +204,6 @@ describe('checkPackagesDir', () => {
         expect(byName(await checkPackagesDir(root), 'metadata-files')?.message).toBe(expected);
       }
     });
-  });
-});
-
-describe('firstProblem', () => {
-  const pass: CheckResult = { name: 'a', status: 'pass', message: 'fine' };
-  const warn: CheckResult = { name: 'b', status: 'warn', message: 'careful' };
-  const fail: CheckResult = { name: 'c', status: 'fail', message: 'broken' };
-  const secondFail: CheckResult = { name: 'd', status: 'fail', message: 'also broken' };
-
-  it('returns the message of the first failure and skips warnings before it', () => {
-    expect(firstProblem([pass, warn, fail, secondFail])).toBe('broken');
-  });
-
-  it('returns null when nothing failed, whatever the warnings', () => {
-    expect(firstProblem([pass, pass])).toBeNull();
-    expect(firstProblem([pass, warn])).toBeNull();
-    expect(firstProblem([])).toBeNull();
-  });
-
-  it('returns the first result that is not a pass when warnings are rejected', () => {
-    expect(firstProblem([pass, warn, fail], { rejectWarnings: true })).toBe('careful');
-    expect(firstProblem([pass, fail, warn], { rejectWarnings: true })).toBe('broken');
-  });
-
-  it('returns null when everything passed and warnings are rejected', () => {
-    expect(firstProblem([pass, pass], { rejectWarnings: true })).toBeNull();
-    expect(firstProblem([], { rejectWarnings: true })).toBeNull();
-  });
-
-  it('treats an explicit rejectWarnings: false like the default', () => {
-    expect(firstProblem([warn], { rejectWarnings: false })).toBeNull();
-    expect(firstProblem([warn, fail], { rejectWarnings: false })).toBe('broken');
   });
 });
 

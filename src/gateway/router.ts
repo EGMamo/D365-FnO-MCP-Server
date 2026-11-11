@@ -177,11 +177,11 @@ const isRefusal = (error: unknown): boolean =>
   error instanceof McpError && error.code !== ErrorCode.RequestTimeout && error.code !== ErrorCode.ConnectionClosed;
 
 /** The answer to a tool only the hosted server can give, in local mode. */
-export const localModeToolError = (name: string): string =>
+const localModeToolError = (name: string): string =>
   `This gateway runs in local mode (custom models only); ${name} needs a hosted server. Run setup --mode hosted.`;
 
 /** Added to a lookup the custom index could not answer, in local mode. */
-export const LOCAL_MODE_HINT =
+const LOCAL_MODE_HINT =
   'Local mode indexes only your custom models; standard objects need a hosted server (setup --mode hosted).';
 
 /** True in local mode: there is no hosted server at all, which is not the same as one that is down. */

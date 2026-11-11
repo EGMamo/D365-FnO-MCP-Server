@@ -50,7 +50,7 @@ export interface BestPracticeArgs {
   methods?: string[];
 }
 
-export async function checkBestPractices(db: Database, args: BestPracticeArgs): Promise<ToolResult> {
+async function checkBestPractices(db: Database, args: BestPracticeArgs): Promise<ToolResult> {
   const notes: string[] = [
     'Heuristic checks over comment/string-masked X++ source; they approximate, not replace, the compiler best-practice checks (xppbp).',
   ];

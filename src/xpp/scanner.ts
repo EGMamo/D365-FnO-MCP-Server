@@ -198,7 +198,7 @@ export function extractMethodSources(xml: string): XppMethodSource[] {
 }
 
 /** Select qualifiers that are not buffer names. */
-export const SELECT_KEYWORDS = new Set([
+const SELECT_KEYWORDS = new Set([
   'select', 'while', 'firstonly', 'firstonly10', 'firstonly100', 'firstonly1000', 'firstfast', 'forupdate',
   'nofetch', 'reverse', 'crosscompany', 'forceplaceholders', 'forceliterals', 'forceselectorder',
   'forcenestedloop', 'pessimisticlock', 'optimisticlock', 'repeatableread', 'generateonly', 'validtimestate',

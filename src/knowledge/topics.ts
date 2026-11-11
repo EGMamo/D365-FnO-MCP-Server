@@ -17,7 +17,7 @@ const rowPattern = z
   })
   .strict();
 
-export const topicHeaderSchema = z
+const topicHeaderSchema = z
   .object({
     appliesTo: z
       .object({
@@ -79,12 +79,12 @@ function withoutCode(markdown: string): string {
   return markdown.replace(/```[\s\S]*?```/g, '');
 }
 
-export function topicTitle(body: string, fallback: string): string {
+function topicTitle(body: string, fallback: string): string {
   const match = /^#\s+(.+)$/m.exec(withoutCode(body));
   return match ? match[1].trim() : fallback;
 }
 
-export function topicSummary(body: string): string {
+function topicSummary(body: string): string {
   const text = withoutCode(body);
   const section = /^##\s+When to use[^\n]*\n([\s\S]*?)(?=^##\s|$(?![\s\S]))/im.exec(text);
   const source = section ? section[1] : text.replace(/^#\s+.+$/m, '');
@@ -109,7 +109,7 @@ export function topicPassages(body: string): string[] {
   return passages.length > 0 ? passages : [body.replace(/\s+/g, ' ').trim().slice(0, 1200)];
 }
 
-export function readTopic(filePath: string): KnowledgeTopic {
+function readTopic(filePath: string): KnowledgeTopic {
   const slug = path.basename(filePath, '.md');
   const { header, body } = splitFrontMatter(fs.readFileSync(filePath, 'utf8'));
   return {

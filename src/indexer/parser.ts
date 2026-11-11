@@ -108,7 +108,7 @@ const FIELD_TYPE_MAP: Record<string, string> = {
 };
 
 /** Map a raw XML type token (e.g. AxTableFieldString) to a canonical type name. */
-export function canonicalFieldType(raw: string): string {
+function canonicalFieldType(raw: string): string {
   const trimmed = (raw || '').trim();
   if (!trimmed) return 'Unknown';
   if (FIELD_TYPE_MAP[trimmed]) return FIELD_TYPE_MAP[trimmed];

@@ -8,15 +8,6 @@ export interface CheckResult {
   message: string;
 }
 
-/**
- * The message of the first check that failed, or null when none did. With `rejectWarnings` a warning counts
- * as well, for a caller that wants a clean result rather than a usable one.
- */
-export function firstProblem(results: readonly CheckResult[], options: { rejectWarnings?: boolean } = {}): string | null {
-  const problem = results.find((result) => (options.rejectWarnings ? result.status !== 'pass' : result.status === 'fail'));
-  return problem?.message ?? null;
-}
-
 /** The folder types whose XML shows a folder holds D365 metadata. */
 const METADATA_FOLDERS: readonly string[] = ['Table', 'Class', 'Enum', 'Form', 'Query', 'DataEntityView', 'Edt'].map(
   (type) => `Ax${type}`

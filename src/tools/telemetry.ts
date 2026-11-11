@@ -380,7 +380,7 @@ export function buildKqlQuery(opts: KqlOptions): KqlQuery {
   };
 }
 
-export function generateKqlQuery(db: Database, opts: KqlOptions): ToolResult {
+function generateKqlQuery(db: Database, opts: KqlOptions): ToolResult {
   let result: KqlQuery;
   try {
     result = buildKqlQuery(opts);
@@ -456,7 +456,7 @@ function returnsLiteral(body: string | undefined): boolean | null {
   return null;
 }
 
-export async function analyzeBatchClass(db: Database, className: string): Promise<BatchClassAnalysis | null> {
+async function analyzeBatchClass(db: Database, className: string): Promise<BatchClassAnalysis | null> {
   const obj = dbUtils.getObjectByName(db, className, 'Class');
   if (!obj) return null;
 

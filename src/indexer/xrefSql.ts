@@ -1,6 +1,6 @@
 import type * as Sql from 'mssql';
 
-export const XREF_TABLES = [
+const XREF_TABLES = [
   'References', 'SysXRefTableReferences', 'SysXRefClassReferences',
   'SysXRefMethodReferences', 'SysXRefVariableReferences', 'SysXRefLabelReferences',
 ] as const;
@@ -86,7 +86,7 @@ export function usesWindowsAuthentication(connectionString: string): boolean {
     .test(connectionString);
 }
 
-export const DEFAULT_ODBC_DRIVER = 'ODBC Driver 17 for SQL Server';
+const DEFAULT_ODBC_DRIVER = 'ODBC Driver 17 for SQL Server';
 
 /**
  * ODBC connection string for the msnodesqlv8 driver: `Integrated Security`
