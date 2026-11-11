@@ -11,7 +11,7 @@ import type { ArtifactDescription } from '../server/serverStatus.js';
 import { analyzeImpact, explainSearchHits } from './impact.js';
 
 /** Every object type the indexer stores, for tools that accept any indexed type. */
-export const INDEXED_OBJECT_TYPES = [
+const INDEXED_OBJECT_TYPES = [
   'Table',
   'TableExtension',
   'View',

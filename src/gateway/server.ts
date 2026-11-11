@@ -88,7 +88,7 @@ const LOCAL_MODE_NOTE = [
 ].join(' ');
 
 /** Stands in for the hosted server in local mode: nothing is configured, so nothing is ever sent anywhere. */
-export const NO_UPSTREAM: UpstreamPort = {
+const NO_UPSTREAM: UpstreamPort = {
   configured: false,
   isAvailable: () => false,
   listTools: () => Promise.resolve([]),

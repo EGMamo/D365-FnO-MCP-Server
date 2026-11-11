@@ -133,9 +133,9 @@ function authenticate(presented: string, keys: readonly ApiKeyEntry[]): ApiKeyEn
 }
 
 /** What the 401 says when no key was sent at all. */
-export const NO_KEY_MESSAGE = 'Unauthorized: no API key was sent. Send it as the X-API-Key header or as Authorization: Bearer <key>.';
+const NO_KEY_MESSAGE = 'Unauthorized: no API key was sent. Send it as the X-API-Key header or as Authorization: Bearer <key>.';
 /** What the 401 says for a key that is not (or no longer) accepted. */
-export const UNKNOWN_KEY_MESSAGE =
+const UNKNOWN_KEY_MESSAGE =
   'Unauthorized: the API key was not recognized. It may have been revoked; ask your operator for a new key.';
 
 /** Seconds a client is asked to wait before it tries a full server again. */

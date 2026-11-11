@@ -22,7 +22,7 @@ export const FNO_RELEASE_PRODUCTS = [
 const MAX_PAGES = 100;
 const text = z.preprocess((v) => (v === null || v === undefined ? '' : String(v)), z.string());
 
-export const releasePlanFeedItemSchema = z.object({
+const releasePlanFeedItemSchema = z.object({
   'Release Plan ID': z.string().min(1),
   'Product name': text,
   'Feature name': z.string().min(1),

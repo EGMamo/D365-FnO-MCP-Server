@@ -411,62 +411,15 @@ export interface EnumValueInput {
   labelId?: string;
 }
 
-export function upsertEnumValues(db: Database, objectId: number | bigint, values: EnumValueInput[]) {
-  db.prepare(`DELETE FROM ax_enum_values WHERE object_id = ?`).run(objectId);
-  if (!values || values.length === 0) return;
-
-  const stmt = db.prepare(
-    `INSERT INTO ax_enum_values (object_id, name, value, label_id) VALUES (?, ?, ?, ?)`
-  );
-  const insertMany = transaction(db, (items: EnumValueInput[]) => {
-    for (const item of items) {
-      stmt.run(objectId, item.name, item.value === undefined ? '' : String(item.value), item.labelId || '');
-    }
-  });
-  insertMany(values);
-}
-
 export interface DataSourceInput {
   name: string;
   table?: string;
-}
-
-export function upsertDataSources(db: Database, objectId: number | bigint, dataSources: DataSourceInput[]) {
-  db.prepare(`DELETE FROM ax_datasources WHERE object_id = ?`).run(objectId);
-  if (!dataSources || dataSources.length === 0) return;
-
-  const stmt = db.prepare(`INSERT INTO ax_datasources (object_id, name, table_name) VALUES (?, ?, ?)`);
-  const insertMany = transaction(db, (items: DataSourceInput[]) => {
-    for (const item of items) {
-      stmt.run(objectId, item.name, item.table || '');
-    }
-  });
-  insertMany(dataSources);
 }
 
 export interface ControlInput {
   name: string;
   type?: string;
   children?: ControlInput[];
-}
-
-export function upsertFormControls(db: Database, objectId: number | bigint, controls: ControlInput[]) {
-  db.prepare(`DELETE FROM ax_form_controls WHERE object_id = ?`).run(objectId);
-  if (!controls || controls.length === 0) return;
-
-  const stmt = db.prepare(
-    `INSERT INTO ax_form_controls (object_id, name, type, parent_name) VALUES (?, ?, ?, ?)`
-  );
-  const insertMany = transaction(db, (items: ControlInput[]) => {
-    const walk = (list: ControlInput[], parent: string) => {
-      for (const c of list) {
-        stmt.run(objectId, c.name, c.type || '', parent);
-        if (c.children && c.children.length > 0) walk(c.children, c.name);
-      }
-    };
-    walk(items, '');
-  });
-  insertMany(controls);
 }
 
 export function upsertProperties(db: Database, objectId: number | bigint, props: Record<string, unknown>) {
@@ -528,35 +481,6 @@ export function upsertLabels(db: Database, labels: LabelInput[], sourceFile: str
   });
 
   insertMany(labels);
-}
-
-export function getLabelSource(db: Database, sourceFile: string): ExistingLabelSourceRow | undefined {
-  return db
-    .prepare(`SELECT source_file, file_mtime, label_count FROM ax_label_sources WHERE source_file = ?`)
-    .get(sourceFile) as ExistingLabelSourceRow | undefined;
-}
-
-export function updateLabelSourceMtime(
-  db: Database,
-  sourceFile: string,
-  fileMtime: number,
-  labelCount: number = 0
-): void {
-  db
-    .prepare(
-      `INSERT INTO ax_label_sources (source_file, file_mtime, label_count)
-       VALUES (?, ?, ?)
-       ON CONFLICT(source_file) DO UPDATE SET
-         file_mtime = excluded.file_mtime,
-         label_count = excluded.label_count`
-    )
-    .run(sourceFile, fileMtime, labelCount);
-}
-
-export function countLabelsFromSource(db: Database, sourceFile: string): number {
-  return (db.prepare(`SELECT COUNT(*) as count FROM ax_labels WHERE source_file = ?`).get(sourceFile) as {
-    count: number;
-  }).count;
 }
 
 /**
@@ -648,10 +572,6 @@ export function prune(db: Database, seenObjectFiles: Set<string>, seenLabelFiles
   } finally {
     db.exec('DROP TABLE IF EXISTS temp.prune_seen_objects; DROP TABLE IF EXISTS temp.prune_seen_labels');
   }
-}
-
-export function deleteXrefsFrom(db: Database, fromType: string, fromName: string) {
-  db.prepare(`DELETE FROM ax_xref WHERE from_type = ? AND from_name = ?`).run(fromType, fromName);
 }
 
 /**
@@ -1003,7 +923,7 @@ export function listModels(db: Database): { model: string; objectCount: number }
  * `MyLabels:Greeting`; a legacy `@SYS1` as `SYS1`, or as `SYS:SYS1` when its
  * label file writes the id without the `@`.
  */
-export function labelIdCandidates(labelId: string): string[] {
+function labelIdCandidates(labelId: string): string[] {
   const cleanId = labelId.startsWith('@') ? labelId.substring(1) : labelId;
   const legacy = /^([A-Za-z]+)\d+$/.exec(cleanId);
   return legacy ? [cleanId, `${legacy[1]}:${cleanId}`] : [cleanId];
@@ -1305,7 +1225,7 @@ function editDistance(a: string, b: string, max: number): number {
  * share a prefix or substring with the input, or are within a small edit distance of it.
  * Bounded: at most 200 candidate rows are scored.
  */
-export function suggestObjectNames(db: Database, name: string, type: string, limit = 5): string[] {
+function suggestObjectNames(db: Database, name: string, type: string, limit = 5): string[] {
   const q = name.trim().toLowerCase();
   if (q.length < 2) return [];
   const esc = (v: string) => v.replace(/[\\%_]/g, (c) => `\\${c}`);

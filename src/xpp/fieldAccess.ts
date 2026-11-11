@@ -35,7 +35,7 @@ export interface FieldAccessContext {
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /** Variable name → declared type (lowercase), from declarations and parameters. */
-export function declaredTypes(code: string): Map<string, string> {
+function declaredTypes(code: string): Map<string, string> {
   const vars = new Map<string, string>();
   const skip = new Set(['return', 'new', 'else', 'case', 'throw', 'next', 'select', 'while', 'if', 'public', 'private', 'protected', 'static', 'final', 'server', 'client']);
   for (const m of code.matchAll(/\b([A-Za-z_]\w*)\s+([A-Za-z_]\w*)\s*(?=[;,=)])/g)) {

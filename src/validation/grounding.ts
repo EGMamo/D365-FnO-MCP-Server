@@ -34,7 +34,7 @@ export interface AxObject {
 }
 
 /** X++ reserved words that may not be used as identifiers. */
-export const XPP_RESERVED_WORDS = new Set([
+const XPP_RESERVED_WORDS = new Set([
   'abstract', 'anytype', 'as', 'asc', 'at', 'avg', 'break', 'by', 'byref', 'case', 'catch',
   'changecompany', 'class', 'client', 'container', 'continue', 'count', 'crosscompany',
   'date', 'default', 'delegate', 'delete_from', 'desc', 'display', 'div', 'do', 'edit',
@@ -50,7 +50,6 @@ export const XPP_RESERVED_WORDS = new Set([
 ]);
 
 const OBJECT_TYPES = ['Class', 'Table', 'Form', 'Enum', 'Query', 'DataEntity', 'Edt'] as const;
-export type ObjectType = (typeof OBJECT_TYPES)[number];
 
 function get(db: Database, name: string, type: string): AxObject | null {
   return dbUtils.getObjectByName(db, name, type) as AxObject | null;

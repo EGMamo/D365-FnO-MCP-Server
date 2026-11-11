@@ -24,10 +24,10 @@ export interface KeyAdminOptions {
   allowLoopback?: boolean;
 }
 
-export const ADMIN_KEY_REQUIRED = 'Admin key required: send it as X-Admin-Key.';
-export const DEVELOPER_KEY_REFUSED = 'This is a developer key; key management needs the admin key.';
-export const HTTPS_ONLY = 'Key management is served over HTTPS only.';
-export const NO_ADMIN_YET = 'No admin key yet: run keys reset-admin.';
+const ADMIN_KEY_REQUIRED = 'Admin key required: send it as X-Admin-Key.';
+const DEVELOPER_KEY_REFUSED = 'This is a developer key; key management needs the admin key.';
+const HTTPS_ONLY = 'Key management is served over HTTPS only.';
+const NO_ADMIN_YET = 'No admin key yet: run keys reset-admin.';
 
 const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
 

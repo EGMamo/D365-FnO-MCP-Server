@@ -8,7 +8,7 @@ function flagBool(flags: Record<string, string | boolean>, name: string): boolea
 }
 
 /** Why `index` no longer runs: the standard application is indexed only by the hosted worker, in Azure. */
-export const FULL_LOCAL_INDEX_REMOVED =
+const FULL_LOCAL_INDEX_REMOVED =
   'Full local indexes are no longer supported. Local mode indexes only your custom models (setup --mode local); ' +
   'the standard application comes from a hosted server, whose worker builds the index in Azure.';
 
@@ -18,7 +18,7 @@ export interface CliResult {
   keepAlive?: boolean;
 }
 
-export async function run(argv: string[]): Promise<CliResult> {
+async function run(argv: string[]): Promise<CliResult> {
   const { command, flags, positionals } = parseArgs(argv);
 
   if (flags.help === true || flags.h === true || command === 'help') {

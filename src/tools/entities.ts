@@ -114,7 +114,7 @@ function withFileBlocks(result: ToolResult): ToolResult {
 // check_entity_odata_readiness
 // ---------------------------------------------------------------------------
 
-export async function checkEntityODataReadiness(db: Database, entityName: string): Promise<ToolResult> {
+async function checkEntityODataReadiness(db: Database, entityName: string): Promise<ToolResult> {
   const entity = getObject(db, entityName, 'DataEntity');
   if (!entity) return fail(`DataEntity '${entityName}' was not found in the index.`);
 
@@ -253,7 +253,7 @@ export interface DataEntitySpec {
   label?: string;
 }
 
-export async function generateDataEntityXml(db: Database, spec: DataEntitySpec): Promise<ToolResult> {
+async function generateDataEntityXml(db: Database, spec: DataEntitySpec): Promise<ToolResult> {
   const errors: string[] = [];
   const warnings: string[] = [];
   const notes: string[] = [];
@@ -533,7 +533,7 @@ function checkLabel(db: Database, label: string | undefined, errors: string[]) {
   if (label && label.startsWith('@') && !resolveLabel(db, label)) errors.push(`Label '${label}' was not found in the label index.`);
 }
 
-export function generateSecurityPrivilegeXml(
+function generateSecurityPrivilegeXml(
   db: Database,
   spec: { name: string; label?: string; targets: PrivilegeTarget[] }
 ): ToolResult {
@@ -551,7 +551,7 @@ export function generateSecurityPrivilegeXml(
   return withFileBlocks(ok(fileBlock(`AxSecurityPrivilege/${spec.name}.xml`, privilegeXml(spec.name, spec.label, targets, comments))));
 }
 
-export function generateReadOnlyRoleXml(
+function generateReadOnlyRoleXml(
   db: Database,
   spec: { roleName: string; entities: string[]; label?: string; description?: string; privilegeName?: string; dutyName?: string }
 ): ToolResult {
@@ -641,7 +641,7 @@ function resolveXppType(db: Database, type: string): string | null {
   return null;
 }
 
-export function generateODataActionXpp(db: Database, spec: ODataActionSpec): ToolResult {
+function generateODataActionXpp(db: Database, spec: ODataActionSpec): ToolResult {
   const errors: string[] = [];
   const entity = getObject(db, spec.entityName, 'DataEntity');
   if (!entity) errors.push(`DataEntity '${spec.entityName}' was not found in the index.`);

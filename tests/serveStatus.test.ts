@@ -47,7 +47,8 @@ afterEach(async () => {
       await exited;
     }
   }
-  fs.rmSync(root, { recursive: true, force: true });
+  // On Windows a process that just exited can hold its files for a moment, and the delete is refused (EPERM).
+  fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 });
 
 /** A local index with one object and the given metadata. */

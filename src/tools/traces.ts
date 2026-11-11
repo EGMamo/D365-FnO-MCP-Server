@@ -12,9 +12,9 @@ import { fail, ok, type ToolResult } from './generators.js';
  * views (vw_NPlusOnePatterns, vw_SlowQueries), MIT licensed,
  * Copyright (c) Microsoft Corporation.
  */
-export const N_PLUS_ONE_MIN_CALLS = 100;
-export const N_PLUS_ONE_MAX_AVG_MS = 5;
-export const SLOW_SQL_MIN_MS = 5000;
+const N_PLUS_ONE_MIN_CALLS = 100;
+const N_PLUS_ONE_MAX_AVG_MS = 5;
+const SLOW_SQL_MIN_MS = 5000;
 
 const NO_TRACES =
   'No trace data imported. Run `d365-fno-mcp index-trace --connection-string "<AxTrace database>"` ' +
@@ -130,7 +130,7 @@ interface SessionRow {
   total_ms: number; db_ms: number; db_calls: number; rows_fetched: number;
 }
 
-export function listTraceSessions(db: Database, source?: string, limit = 50): ToolResult {
+function listTraceSessions(db: Database, source?: string, limit = 50): ToolResult {
   if (!hasTraces(db)) return fail(NO_TRACES);
   const imports = db.prepare('SELECT * FROM ax_trace_imports ORDER BY imported_at DESC').all();
   const where = scopeWhere({ source }, 's');
@@ -154,7 +154,7 @@ interface MethodRow {
   worst_line_db_calls: number; worst_line_db_ms: number;
 }
 
-export function findNPlusOne(
+function findNPlusOne(
   db: Database,
   scope: Scope & { minCalls?: number; maxAvgMs?: number; limit?: number }
 ): ToolResult {
@@ -193,7 +193,7 @@ interface SqlRow {
   method_name: string | null; executions: number; total_ms: number; max_ms: number; rows_fetched: number;
 }
 
-export async function findSlowSql(
+async function findSlowSql(
   db: Database,
   scope: Scope & { minMs?: number; metric?: 'max' | 'total'; limit?: number }
 ): Promise<ToolResult> {
@@ -230,7 +230,7 @@ export async function findSlowSql(
   }));
 }
 
-export function getTopMethods(
+function getTopMethods(
   db: Database,
   scope: Scope & { orderBy?: 'inclusive' | 'exclusive' | 'db'; limit?: number }
 ): ToolResult {
@@ -257,7 +257,7 @@ export function getTopMethods(
   }));
 }
 
-export function searchTrace(db: Database, scope: Scope & { keyword: string; limit?: number }): ToolResult {
+function searchTrace(db: Database, scope: Scope & { keyword: string; limit?: number }): ToolResult {
   if (!hasTraces(db)) return fail(NO_TRACES);
   const keyword = scope.keyword.trim();
   if (!keyword) return fail('keyword must not be empty.');

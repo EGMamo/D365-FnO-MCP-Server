@@ -32,7 +32,7 @@ export function changeLockPaths(change: Pick<OfflineChange, 'modelDir' | 'worksp
   ])].sort();
 }
 
-export function assertChangeInputs(change: OfflineChange, projectInstalled = false): void {
+function assertChangeInputs(change: OfflineChange, projectInstalled = false): void {
   for (const directory of change.directories) {
     checkedPath(directory.root, directory.path);
     if (identity(fs.statSync(directory.path)) !== directory.identity) {

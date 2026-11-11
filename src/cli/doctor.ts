@@ -533,7 +533,7 @@ export async function checkGateway(env: NodeJS.ProcessEnv): Promise<CheckResult[
 export type DoctorEdition = 'operator' | 'developer';
 
 /** True when the environment sets up the gateway: a hosted URL, or local mode (a custom-models folder alone). */
-export function gatewayConfiguredIn(env: NodeJS.ProcessEnv): boolean {
+function gatewayConfiguredIn(env: NodeJS.ProcessEnv): boolean {
   return Boolean(env.D365_HOSTED_MCP_URL?.trim() || env.D365_CUSTOM_METADATA_DIR?.trim() || env.D365_PROJECT_DIR?.trim());
 }
 

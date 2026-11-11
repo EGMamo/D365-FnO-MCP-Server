@@ -36,7 +36,7 @@ export interface SetupEdition {
   deploy?: DeployRunner;
 }
 
-export const OPERATOR_BIN = 'd365-fno-mcp-server';
+const OPERATOR_BIN = 'd365-fno-mcp-server';
 export const DEVELOPER_BIN = 'd365-fno-mcp';
 
 export interface SetupOptions {
@@ -127,12 +127,12 @@ function fail(message: string): never {
 }
 
 /** Why a flag of the old full-local-index mode is refused. */
-export function removedFlagMessage(flag: string): string {
+function removedFlagMessage(flag: string): string {
   return `--${flag} is no longer supported: setup no longer builds a full local index. Use --mode local (custom models only) or --mode hosted.`;
 }
 
 /** What the developer package says when asked to deploy. */
-export function deployNeedsOperatorMessage(): string {
+function deployNeedsOperatorMessage(): string {
   return (
     'Deploying a hosted server needs the operator package and Owner (or Contributor and User Access Administrator) on the Azure subscription. ' +
     `Run: npx ${OPERATOR_BIN} setup --mode hosted --deploy`
@@ -181,7 +181,7 @@ export function parseSetupFlags(
 }
 
 /** A pasted path as typed: trimmed, one pair of surrounding quotes removed (Explorer's "Copy as path" adds them), `~/` expanded. */
-export function cleanPathAnswer(answer: string): string {
+function cleanPathAnswer(answer: string): string {
   let value = answer.trim();
   const first = value[0];
   if (value.length >= 2 && (first === '"' || first === "'") && value.endsWith(first)) value = value.slice(1, -1).trim();

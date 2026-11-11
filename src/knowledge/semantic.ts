@@ -72,7 +72,7 @@ export class PassageCache {
   }
 }
 
-export async function embedPassages(
+async function embedPassages(
   embedder: Embedder,
   markdown: string,
   cache: PassageCache = new PassageCache()
@@ -126,7 +126,7 @@ export function scoreQuery(query: Float32Array, topics: TopicVectors[]): Semanti
  * the closest passage on the other, averaged; the higher of the two directions wins so a short
  * draft that restates part of a long topic still scores high.
  */
-export function scoreDuplicates(draft: Float32Array[], topics: TopicVectors[]): SemanticMatch[] {
+function scoreDuplicates(draft: Float32Array[], topics: TopicVectors[]): SemanticMatch[] {
   return topics
     .map(({ topic, passages }) => ({
       slug: topic.slug,

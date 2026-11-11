@@ -55,7 +55,7 @@ export interface SearchReleasePlansArgs {
   today?: string;
 }
 
-export function searchReleasePlans(db: Database, args: SearchReleasePlansArgs): ToolResult {
+function searchReleasePlans(db: Database, args: SearchReleasePlansArgs): ToolResult {
   const info = importInfo(db);
   if (!info) return fail(NO_PLANS);
   const today = args.today ?? todayIso();
@@ -185,7 +185,7 @@ const DEFAULT_IMPACT_TYPES = [
 
 const likeFragment = (term: string) => `%${term.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
 
-export function checkFeatureImpact(db: Database, args: CheckFeatureImpactArgs): ToolResult {
+function checkFeatureImpact(db: Database, args: CheckFeatureImpactArgs): ToolResult {
   const lines: string[] = [];
   let terms = (args.terms ?? []).map((t) => t.trim()).filter((t) => /^[\w.]{3,}$/.test(t)).slice(0, 10);
   if (args.planId) {

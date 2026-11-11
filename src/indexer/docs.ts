@@ -30,7 +30,7 @@ const MIN_PAGE_CHARS = 80;
 
 const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
 
-export function decodeEntities(text: string): string {
+function decodeEntities(text: string): string {
   return text.replace(/&(#\d+|#x[\da-f]+|\w+);/gi, (m, e: string) => {
     if (e[0] === '#') {
       const code = e[1].toLowerCase() === 'x' ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10);
@@ -51,7 +51,7 @@ function mainContent(html: string): string {
   return html;
 }
 
-export function htmlTitle(html: string): string {
+function htmlTitle(html: string): string {
   const h1 = /<h1\b[^>]*>([\s\S]*?)<\/h1>/i.exec(mainContent(html));
   const title = h1 ? stripTags(h1[1]) : /<title\b[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1];
   return decodeEntities(title ?? '').replace(/\s+/g, ' ').trim();
@@ -90,7 +90,7 @@ export function htmlToMarkdown(html: string): string {
 }
 
 /** True when the page asks not to be indexed (`<meta name="robots" content="noindex">`). */
-export function isNoIndex(html: string): boolean {
+function isNoIndex(html: string): boolean {
   return /<meta\b(?=[^>]*name=["']robots["'])(?=[^>]*content=["'][^"']*noindex)[^>]*>/i.test(html);
 }
 
@@ -205,7 +205,7 @@ const DOC_EXTENSIONS = new Set(['.md', '.markdown', '.html', '.htm']);
 const SKIPPED_FOLDERS = new Set(['includes', 'media', 'node_modules']);
 
 /** Normalizes `--include` folders to `a/b/` form; empty means everything. */
-export function normalizeIncludes(include: string[] | undefined): string[] {
+function normalizeIncludes(include: string[] | undefined): string[] {
   return (include ?? [])
     .map((entry) => entry.trim().replace(/\\/g, '/').replace(/^\.?\/+/, '').replace(/\/*$/, '/'))
     .filter((entry) => entry !== '/');
@@ -250,7 +250,7 @@ export function readDocsFolder(
 }
 
 /** Drops the fragment and query, so `page?tabs=x#y` and `page` are one page. */
-export function normalizeDocUrl(raw: string, base?: string): string | null {
+function normalizeDocUrl(raw: string, base?: string): string | null {
   try {
     const url = new URL(raw, base);
     if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
@@ -335,11 +335,11 @@ export interface CrawlResult {
   truncated: boolean;
 }
 
-export const DOCS_USER_AGENT = 'd365-fno-mcp-server-docs-import (+https://github.com/EGMamo/D365-FnO-MCP-Server)';
+const DOCS_USER_AGENT = 'd365-fno-mcp-server-docs-import (+https://github.com/EGMamo/D365-FnO-MCP-Server)';
 const DEFAULT_MAX_PAGES = 2000;
 const MAX_SITEMAPS = 50;
 
-export function defaultScope(startUrl: string): string {
+function defaultScope(startUrl: string): string {
   const url = new URL(startUrl);
   url.hash = '';
   url.search = '';
