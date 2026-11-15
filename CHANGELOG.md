@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `D365_ALLOWED_HOSTS` (comma-separated Host header values) for the main server: when set, requests with
+  any other Host are refused with 403 before rate limiting and auth, closing the DNS-rebinding window
+  the gateway already closed for itself.
+
+### Changed
+
+- **Sessions bind to the API key's SHA-256 digest, not its name.** Key names are unique within the fixed
+  `MCP_API_KEYS` list and within the key registry, but not across the two; a colliding name could adopt
+  another key's session or fill its `MAX_SESSIONS_PER_API_KEY` quota. Ownership checks and per-key caps
+  now compare digests.
+- **`X-Forwarded-For`/`-Proto` are only believed when the direct socket peer is a trusted proxy** (loopback
+  or a private address). A remote client that connects directly — no proxy in between — is never the proxy:
+  it can no longer forge `X-Forwarded-Proto: https` to get the admin key past the HTTPS guard, or rotate
+  `X-Forwarded-For` to rotate rate-limit buckets.
+- The gateway warns loudly at startup when a hosted server is configured without
+  `D365_GATEWAY_PRIVATE_PREFIXES`: with no prefixes, names of custom objects (never the code itself) may be
+  forwarded to the hosted server, including objects saved but not yet indexed.
+- `fetch-model` downloads with a 120-second timeout, aborts cleanly on Ctrl-C, and extracts with
+  `tar --no-same-owner` (the archive stays hash-pinned; this is defense in depth).
+- The blob key registry refuses a registry blob larger than 1 MiB — by declared length and while streaming —
+  instead of buffering a hostile blob into memory (the file registry already had this cap).
+- The artifact blob verifier downloads into a private `mkdtemp` directory instead of a predictable
+  `/tmp` file name that could be pre-planted as a symlink.
+- Azure Blob artifact calls (`uploadFile`, `uploadBuffer`, `downloadToFile`, `downloadToBuffer`,
+  `getProperties`, leases) now take an abort signal: the acquisition worker's timeout and cancellation
+  actually stop them, and a hung upload no longer keeps the process alive. Hosted startup runs
+  `materializeAzureArtifactIndex` under a 30-minute deadline (a `Promise.race` backstop, not just the
+  signal) and exits with an actionable message instead of listening unready forever.
+- The acquisition run lock's stale-takeover is now race-free: a dead owner's lock is quarantined with an
+  atomic rename, re-verified, and restored when it turns out live, so two workers starting at once can no
+  longer both acquire the same run. The artifact pointer lock records its pid and age, takes over a lock
+  left by a crashed process after ten minutes, and names the file to delete in its error. Index activation
+  (`activateIndexFile`) is serialized across processes sharing a disk with a steal-able lock beside the
+  target, and fsyncs the candidate file and its directory so a power loss cannot leave the active index
+  name empty or truncated (the pointer writer fsyncs its directory too).
+- The gateway's layered index compares object names, label ids and languages case-insensitively
+  (`COLLATE NOCASE`), so a custom copy whose file differs in casing from the standard index still shadows
+  the standard rows instead of leaking them into the union view.
+- When the file watcher cannot run (Linux has no recursive `fs.watch`), the gateway caps the effective
+  refresh TTL at 30 seconds regardless of `D365_GATEWAY_REINDEX_TTL_MS`, so saves are picked up quickly
+  by polling instead of silently serving stale custom metadata for up to an hour.
+- The gateway's generated token file is adopted on a concurrent first start: whichever process wins the
+  race, every printed client entry stays valid after a restart.
+- `serve` opens an existing local index read-only when write tools are off (a read-only mount now works),
+  and says so when it creates an empty index instead of failing, so an operator knows why no objects are
+  served. Index refresh failures name `SQLITE_BUSY` as another process writing the index.
+- `verifySnapshot` removes the destination file when verification fails, so a corrupt/partial candidate is
+  never left on disk for a later run to trip over.
+- `npm audit` is clean: `hono` and `@hono/node-server` are pinned past their advisories via `overrides`
+  (both within the MCP SDK's declared ranges).
+- `npm run bench` works again (`suggestObjectNames` is exported from the DB layer and covered by a test).
+
 ### Changed
 
 - **Full local indexes are no longer supported.** `setup` asks "Local only" (your custom models, indexed by the

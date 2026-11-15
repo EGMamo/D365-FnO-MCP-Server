@@ -253,9 +253,20 @@ function writeRunLock(file: string, owner: RunLockOwner, flag: 'wx' | 'w' = 'w')
   });
 }
 
+function runLockIsLive(existing: Partial<RunLockOwner>): boolean {
+  const heartbeat = Date.parse(existing.heartbeatAt ?? '');
+  return (
+    typeof existing.instanceId === 'string' &&
+    existing.instanceId.length > 0 &&
+    isProcessRunning(existing.pid ?? 0) &&
+    Number.isFinite(heartbeat) &&
+    Date.now() - heartbeat < RUN_LOCK_STALE_AFTER_MS
+  );
+}
+
 function acquireRunLock(file: string, runId: string): RunLockOwner {
   const owner = { pid: process.pid, instanceId: randomUUID(), heartbeatAt: new Date().toISOString() };
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (let attempt = 0; attempt < 8; attempt++) {
     try {
       writeRunLock(file, owner, 'wx');
       return owner;
@@ -265,20 +276,43 @@ function acquireRunLock(file: string, runId: string): RunLockOwner {
       try {
         existing = JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<RunLockOwner>;
       } catch {
-        fs.rmSync(file, { force: true });
+        // Unreadable: another process may be mid-write. Retry rather than deleting a live lock.
         continue;
       }
-      const heartbeat = Date.parse(existing.heartbeatAt ?? '');
-      const isLive =
-        typeof existing.instanceId === 'string' &&
-        existing.instanceId.length > 0 &&
-        isProcessRunning(existing.pid ?? 0) &&
-        Number.isFinite(heartbeat) &&
-        Date.now() - heartbeat < RUN_LOCK_STALE_AFTER_MS;
-      if (isLive) {
+      if (runLockIsLive(existing)) {
         throw new Error(`Acquisition run ${runId} is already in progress.`);
       }
-      fs.rmSync(file, { force: true });
+      // Steal the stale lock. The quarantine rename is atomic, and a concurrent stealer that
+      // renames *after* us sees live content only when the slot changed hands — it restores it
+      // rather than deleting, so a live owner can never be evicted by a stale-read stealer.
+      const quarantine = `${file}.stale.${randomUUID()}`;
+      try {
+        fs.renameSync(file, quarantine);
+      } catch (renameError) {
+        if ((renameError as NodeJS.ErrnoException).code === 'ENOENT') continue; // Lost the race; retry.
+        throw renameError;
+      }
+      let quarantined: Partial<RunLockOwner>;
+      try {
+        quarantined = JSON.parse(fs.readFileSync(quarantine, 'utf8')) as Partial<RunLockOwner>;
+      } catch {
+        fs.rmSync(quarantine, { force: true });
+        continue;
+      }
+      if (runLockIsLive(quarantined)) {
+        // The owner refreshed between our read and the rename (or another worker won the steal):
+        // put a live lock back untouched and treat it as held.
+        try {
+          fs.renameSync(quarantine, file);
+        } catch {
+          // The slot now holds someone else's claim; the quarantine file is stale enough to leave.
+          fs.rmSync(quarantine, { force: true });
+        }
+        throw new Error(`Acquisition run ${runId} is already in progress.`);
+      }
+      fs.rmSync(quarantine, { force: true });
+      // Loop: the next `wx` either wins or loses to a concurrent claimer (whose live lock the
+      // re-read then reports).
     }
   }
   throw new Error(`Could not acquire the lock for acquisition run ${runId}.`);
@@ -492,18 +526,18 @@ export class AzureArtifactPublisher implements ArtifactPublisher {
     signal: AbortSignal
   ): Promise<{ revision: number }> {
     signal.throwIfAborted();
-    await this.store.uploadBundle(bundle.directory, policy);
+    await this.store.uploadBundle(bundle.directory, policy, signal);
     signal.throwIfAborted();
     let promoted: ArtifactPointerSnapshot | undefined;
     await this.store.withAcquisitionLease(async (writer) => {
       signal.throwIfAborted();
-      const current = await this.store.readPointers();
+      const current = await this.store.readPointers(signal);
       promoted = await writer.promote(
         bundle.manifest.bundleId,
         current.pointers.revision,
         policy
       );
-    });
+    }, signal);
     if (!promoted) throw new Error('Azure artifact promotion did not return a pointer snapshot.');
     return { revision: promoted.pointers.revision };
   }

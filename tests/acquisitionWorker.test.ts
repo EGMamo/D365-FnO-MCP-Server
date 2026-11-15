@@ -280,6 +280,45 @@ describe('scheduled acquisition worker', () => {
     expect(status.attempt).toBe(2);
   });
 
+  it('refuses a run whose lock names a live process with a fresh heartbeat', async () => {
+    const runDirectory = path.join(config.runsRoot, config.runId);
+    fs.mkdirSync(runDirectory, { recursive: true });
+    fs.writeFileSync(
+      path.join(runDirectory, '.lock'),
+      JSON.stringify({ pid: process.pid, instanceId: 'other-worker', heartbeatAt: new Date().toISOString() })
+    );
+
+    await expect(
+      runAcquisitionWorker(config, new LocalArtifactPublisher(storeRoot), {}, { executeCommand: vi.fn() })
+    ).rejects.toThrow('already in progress');
+    // The live lock is untouched.
+    expect(JSON.parse(fs.readFileSync(path.join(runDirectory, '.lock'), 'utf8'))).toMatchObject({
+      pid: process.pid,
+      instanceId: 'other-worker',
+    });
+  });
+
+  it('takes over a lock whose process is gone even when its heartbeat is still fresh', async () => {
+    const runDirectory = path.join(config.runsRoot, config.runId);
+    fs.mkdirSync(runDirectory, { recursive: true });
+    fs.writeFileSync(
+      path.join(runDirectory, '.lock'),
+      JSON.stringify({ pid: 2_147_483_647, instanceId: 'crashed-worker', heartbeatAt: new Date().toISOString() })
+    );
+
+    const status = await runAcquisitionWorker(
+      config,
+      new LocalArtifactPublisher(storeRoot),
+      {},
+      {
+        executeCommand: async (command, context) => {
+          if (command.name === 'build-index') writeCandidate(context);
+        },
+      }
+    );
+    expect(status.state).toBe('succeeded');
+  });
+
   it('cancels an in-flight phase and still cleans the workspace', async () => {
     const controller = new AbortController();
     const promise = runAcquisitionWorker(

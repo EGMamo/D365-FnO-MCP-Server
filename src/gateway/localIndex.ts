@@ -55,6 +55,12 @@ function affectsIndex(filename: string | null): boolean {
 }
 
 /**
+ * Longest the index is served between refresh passes when the file watcher is unavailable (Node's
+ * recursive watch does not exist on Linux). Without change events, freshness rests on polling alone.
+ */
+const WATCHERLESS_MAX_TTL_MS = 30_000;
+
+/**
  * Opens (creating it when missing) the separate SQLite index of the custom models
  * and brings it up to date before resolving. The returned index refreshes itself
  * lazily: callers await `ensureFresh()` before reading `db`.
@@ -85,6 +91,10 @@ export async function openLocalIndex(opts: LocalIndexOptions): Promise<LocalInde
     .sort((a, b) => b[0].length - a[0].length);
   const describeError = (err: unknown): string => {
     let text = err instanceof Error ? err.message : String(err);
+    if (/database is locked|SQLITE_BUSY/i.test(text)) {
+      // The only other writer is a process: say so, instead of a raw driver error.
+      text += ' (another process is writing this index database; stop it and retry)';
+    }
     for (const [dir, label] of hiddenPaths) text = text.split(dir).join(label);
     return text;
   };
@@ -198,7 +208,16 @@ export async function openLocalIndex(opts: LocalIndexOptions): Promise<LocalInde
     }
   }
 
-  const isStale = () => dirty || lastAttemptAt === null || Date.now() - lastAttemptAt >= ttlMs;
+  const isStale = () => dirty || lastAttemptAt === null || Date.now() - lastAttemptAt >= effectiveTtlMs();
+
+  /**
+   * Longest a refresh pass is served when the file watcher cannot report changes (Node's recursive
+   * watch is unavailable on Linux): freshness then depends on the periodic pass alone, so a long
+   * configured TTL would serve stale custom metadata for its whole duration after every save.
+   */
+  function effectiveTtlMs(): number {
+    return watcherState === 'active' ? ttlMs : Math.min(ttlMs, WATCHERLESS_MAX_TTL_MS);
+  }
 
   function ensureFresh(): Promise<void> {
     if (closed) return Promise.resolve();
@@ -240,7 +259,10 @@ export async function openLocalIndex(opts: LocalIndexOptions): Promise<LocalInde
     stopWatcher();
     watcherState = 'error';
     watcherError = describeError(err);
-    logger.warn('Local index file watcher failed; relying on the periodic refresh', { error: watcherError });
+    logger.warn('Local index file watcher failed; freshness relies on the periodic refresh', {
+      error: watcherError,
+      effectiveTtlMs: Math.min(ttlMs, WATCHERLESS_MAX_TTL_MS),
+    });
   }
 
   function startWatcher(): void {

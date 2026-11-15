@@ -1225,7 +1225,7 @@ function editDistance(a: string, b: string, max: number): number {
  * share a prefix or substring with the input, or are within a small edit distance of it.
  * Bounded: at most 200 candidate rows are scored.
  */
-function suggestObjectNames(db: Database, name: string, type: string, limit = 5): string[] {
+export function suggestObjectNames(db: Database, name: string, type: string, limit = 5): string[] {
   const q = name.trim().toLowerCase();
   if (q.length < 2) return [];
   const esc = (v: string) => v.replace(/[\\%_]/g, (c) => `\\${c}`);

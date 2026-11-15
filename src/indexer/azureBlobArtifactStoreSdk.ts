@@ -43,8 +43,8 @@ class AzureSdkBlobLease implements ArtifactBlobLease {
 class AzureSdkBlobObject implements ArtifactBlobObject {
   constructor(private readonly blob: BlockBlobClient) {}
 
-  async getProperties(conditions?: BlobConditions) {
-    const properties = await this.blob.getProperties({ conditions });
+  async getProperties(conditions?: BlobConditions, signal?: AbortSignal) {
+    const properties = await this.blob.getProperties({ conditions, abortSignal: signal });
     return {
       contentLength: properties.contentLength,
       etag: properties.etag,
@@ -52,45 +52,48 @@ class AzureSdkBlobObject implements ArtifactBlobObject {
     };
   }
 
-  async uploadFile(source: string, options: UploadOptions): Promise<void> {
+  async uploadFile(source: string, options: UploadOptions, signal?: AbortSignal): Promise<void> {
     await this.blob.uploadFile(source, {
       conditions: options.conditions,
       blobHTTPHeaders: { blobContentType: options.contentType },
       metadata: options.metadata,
+      abortSignal: signal,
     });
   }
 
-  async uploadBuffer(content: Buffer, options: UploadOptions): Promise<void> {
+  async uploadBuffer(content: Buffer, options: UploadOptions, signal?: AbortSignal): Promise<void> {
     await this.blob.uploadData(content, {
       conditions: options.conditions,
       blobHTTPHeaders: { blobContentType: options.contentType },
       metadata: options.metadata,
+      abortSignal: signal,
     });
   }
 
-  async downloadToFile(target: string, conditions?: BlobConditions): Promise<void> {
+  async downloadToFile(target: string, conditions?: BlobConditions, signal?: AbortSignal): Promise<void> {
     await this.blob.downloadToFile(target, 0, undefined, {
       conditions,
       maxRetryRequests: 5,
+      abortSignal: signal,
     });
   }
 
-  async downloadToBuffer(maxBytes: number, conditions?: BlobConditions): Promise<Buffer> {
-    const properties = await this.getProperties(conditions);
+  async downloadToBuffer(maxBytes: number, conditions?: BlobConditions, signal?: AbortSignal): Promise<Buffer> {
+    const properties = await this.getProperties(conditions, signal);
     if (properties.contentLength === undefined) throw new Error('Blob did not report a content length.');
     if (properties.contentLength > maxBytes) {
       throw new Error(`Blob size ${properties.contentLength} exceeds the ${maxBytes}-byte limit.`);
     }
-    return this.blob.downloadToBuffer(0, properties.contentLength, { conditions });
+    return this.blob.downloadToBuffer(0, properties.contentLength, { conditions, abortSignal: signal });
   }
 
-  async deleteIfExists(): Promise<void> {
-    await this.blob.deleteIfExists({ deleteSnapshots: 'include' });
+  async deleteIfExists(signal?: AbortSignal): Promise<void> {
+    await this.blob.deleteIfExists({ deleteSnapshots: 'include', abortSignal: signal });
   }
 
-  async acquireLease(durationSeconds: number): Promise<ArtifactBlobLease> {
+  async acquireLease(durationSeconds: number, signal?: AbortSignal): Promise<ArtifactBlobLease> {
     const lease = this.blob.getBlobLeaseClient();
-    await lease.acquireLease(durationSeconds);
+    await lease.acquireLease(durationSeconds, { abortSignal: signal });
     return new AzureSdkBlobLease(lease);
   }
 }
@@ -98,8 +101,8 @@ class AzureSdkBlobObject implements ArtifactBlobObject {
 class AzureSdkBlobContainer implements ArtifactBlobContainer {
   constructor(private readonly container: ContainerClient) {}
 
-  async getProperties(): Promise<void> {
-    await this.container.getProperties();
+  async getProperties(signal?: AbortSignal): Promise<void> {
+    await this.container.getProperties({ abortSignal: signal });
   }
 
   getBlob(name: string): ArtifactBlobObject {

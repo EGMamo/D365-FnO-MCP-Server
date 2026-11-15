@@ -187,15 +187,43 @@ export function applyOfflineChange(change: OfflineChange, revalidate: () => void
       if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error;
       checkedPath(change.metadataRoot, parent);
       if (!fs.statSync(parent).isDirectory()) throw new Error(`Not a directory: ${parent}`);
+      // Created concurrently (or between preview and apply): record it so the post-open check below
+      // still proves the directories above the opened file were not swapped for symlinks.
+      outputDirectory = { path: parent, identity: identity(fs.statSync(parent)) };
     }
     assertAbsent(change.metadataRoot, change.targetPath);
-    const fd = fs.openSync(change.targetPath, 'wx', 0o600);
+    // O_NOFOLLOW (where the platform has it) makes the exclusive open fail instead of writing
+    // through a symlink planted at the final component in the window since the check above.
+    const noFollow = process.platform === 'win32' ? 0 : (fs.constants.O_NOFOLLOW ?? 0);
+    const fd = fs.openSync(
+      change.targetPath,
+      fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | noFollow,
+      0o600
+    );
     metadataOpened = true;
-    let createdId: string;
+    let createdId: string | undefined;
     try {
       createdId = identity(fs.fstatSync(fd));
+      // The exclusive open protects only the final component. Re-verify every directory above
+      // it *after* the open and before any content is written: if a directory was swapped for a
+      // symlink in the window, the file was created outside the root — and nothing is written yet.
+      assertChangeInputs(change);
+      if (outputDirectory && identity(fs.statSync(outputDirectory.path)) !== outputDirectory.identity) {
+        throw new Error(`Directory was replaced during write: ${outputDirectory.path}`);
+      }
       fs.writeFileSync(fd, change.metadata);
       fs.fsyncSync(fd);
+    } catch (error) {
+      // The just-created (still empty) file may sit outside the root; remove it only if it is
+      // exactly the inode we created. Best effort — a failure leaves the path in the recovery report.
+      if (createdId !== undefined) {
+        try {
+          if (identity(fs.statSync(change.targetPath)) === createdId) fs.unlinkSync(change.targetPath);
+        } catch {
+          // Not our file (or gone); reported below.
+        }
+      }
+      throw error;
     } finally {
       fs.closeSync(fd);
     }

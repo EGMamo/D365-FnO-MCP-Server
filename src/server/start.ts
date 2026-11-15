@@ -63,11 +63,33 @@ export async function startServer(): Promise<void> {
   /** The served index. Hosted mode opens it only after the artifact bundle is activated. */
   let db: Database | null = null;
   const openIndex = () => {
-    const opened = hosted ? openDbReadOnly(config.indexDbPath) : openDb(config.indexDbPath);
-    // A representative read proves the activated snapshot is queryable before readiness.
-    if (hosted) opened.prepare('SELECT name FROM ax_objects LIMIT 1').get();
+    let opened: Database;
+    let readOnly = false;
+    if (hosted) {
+      opened = openDbReadOnly(config.indexDbPath);
+      readOnly = true;
+      // A representative read proves the activated snapshot is queryable before readiness.
+      opened.prepare('SELECT name FROM ax_objects LIMIT 1').get();
+    } else if (config.indexDbPath === ':memory:' || config.enableWriteTools) {
+      // An in-memory index needs creating; a legacy local setup with write tools may still build here.
+      opened = openDb(config.indexDbPath);
+    } else if (!fsSync.existsSync(config.indexDbPath)) {
+      // Local serve has always been able to start before an index exists (the entry is printed and
+      // the client connects to an empty index). Keep that, but say so — an empty index serves no
+      // objects, and the warning names the build path.
+      opened = openDb(config.indexDbPath);
+      logger.warn('The index database did not exist and was created empty; no objects are served until one is built', {
+        path: config.indexDbPath,
+        hint: 'The gateway indexes custom models; the hosted worker builds the standard index',
+      });
+    } else {
+      // The serving process never writes an existing index (the indexer and the gateway do), so it is
+      // opened read-only; a deployment that mounts the file read-only keeps working.
+      opened = openDbReadOnly(config.indexDbPath);
+      readOnly = true;
+    }
     db = opened;
-    logger.info('Opened SQLite DB', { path: config.indexDbPath, readOnly: hosted });
+    logger.info('Opened SQLite DB', { path: config.indexDbPath, readOnly });
   };
   const requireDb = (): Database => {
     if (!db) throw new Error('The index is not open yet.');
@@ -239,6 +261,7 @@ export async function startServer(): Promise<void> {
     rateLimitWindowMs: config.rateLimitWindowMs,
     requestTimeoutMs: config.requestTimeoutMs,
     trustProxyHops: config.trustProxyHops,
+    allowedHosts: config.allowedHosts.length > 0 ? config.allowedHosts : undefined,
     maxConcurrentSessions: config.maxConcurrentSessions,
     maxSessionsPerApiKey: config.maxSessionsPerApiKey,
     sessionIdleTimeoutMs: config.sessionIdleTimeoutMs,

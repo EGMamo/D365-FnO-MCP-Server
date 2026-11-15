@@ -7,6 +7,7 @@ import { createServer, type Server } from 'http';
 import { logger } from '../utils/logger.js';
 import { INDEX_VERSION_HEADER, readDeclaredClientVersion } from '../indexer/appVersion.js';
 import { digestKey, type ApiKeyEntry, type RegistryKeys } from './apiKeys.js';
+import { effectiveClientIp } from './clientAddress.js';
 import type { StatusProvider } from './serverStatus.js';
 
 /**
@@ -103,6 +104,9 @@ interface SessionEntry {
   initialized: boolean;
   /** Name of the API key that opened the session; other keys may not use it. */
   apiKeyName: string;
+  /** SHA-256 of the key that opened the session. Owns the session: a key's *name* may collide across
+   * the fixed `MCP_API_KEYS` list and the registry, but its digest cannot. */
+  apiKeyDigest: string;
   /** Digest of the registry key that opened the session (memory only), or null for a fixed key. */
   registryDigest: string | null;
 }
@@ -176,10 +180,13 @@ export function createHttpApp(createMcpServer: ServerFactory, options: HttpTrans
   /**
    * Resolve the client IP. `req.ip` is only trustworthy when a known number of
    * reverse proxies sit in front of us; otherwise a client can forge
-   * `X-Forwarded-For` and rotate its rate-limit key at will.
+   * `X-Forwarded-For` and rotate its rate-limit key at will. Even with trusted
+   * hops configured, the direct socket peer must itself be local (where a proxy
+   * could actually sit): a remote client connecting directly is never the
+   * proxy and must be keyed on its socket address.
    */
   const clientIp = (req: Request): string =>
-    trustProxyHops > 0 ? (req.ip ?? 'unknown') : (req.socket.remoteAddress ?? 'unknown');
+    effectiveClientIp(trustProxyHops, req.socket.remoteAddress, req.ip);
 
   app.disable('x-powered-by');
   if (trustProxyHops > 0) {
@@ -263,7 +270,10 @@ export function createHttpApp(createMcpServer: ServerFactory, options: HttpTrans
       return;
     }
     // Only the key's name is recorded anywhere; the key itself is never logged.
+    // The digest binds the session and the per-key cap: names are unique within the fixed list and within
+    // the registry, but not across the two, so a name would let a colliding key adopt another key's session.
     res.locals.apiKeyName = name;
+    res.locals.apiKeyDigest = digestKey(presented as string);
     res.locals.registryDigest = registryDigest;
     logger.info('Request', { method: req.method, path: req.path, ip: clientIp(req), apiKey: name });
     next();
@@ -420,11 +430,11 @@ export function createHttpApp(createMcpServer: ServerFactory, options: HttpTrans
           res.status(404).json({ error: 'Session not found. Please reconnect.' });
           return;
         }
-        if (existing.apiKeyName !== res.locals.apiKeyName) {
+        if (existing.apiKeyDigest !== (res.locals.apiKeyDigest as string)) {
           logger.warn('Session used with a different API key', {
             sessionId,
             sessionKey: existing.apiKeyName,
-            presentedKey: res.locals.apiKeyName,
+            presentedKey: res.locals.apiKeyName as string,
           });
           res.status(403).json({ error: 'Session belongs to a different API key' });
           return;
@@ -454,11 +464,12 @@ export function createHttpApp(createMcpServer: ServerFactory, options: HttpTrans
       }
 
       const apiKeyName = res.locals.apiKeyName as string;
+      const apiKeyDigest = res.locals.apiKeyDigest as string;
       // Counts reserved slots too, and runs synchronously up to the reservation
       // below, so concurrent initializations cannot overshoot the per-key cap.
       if (maxSessionsPerApiKey > 0) {
         let held = 0;
-        for (const s of sessions.values()) if (s.apiKeyName === apiKeyName) held++;
+        for (const s of sessions.values()) if (s.apiKeyDigest === apiKeyDigest) held++;
         if (held >= maxSessionsPerApiKey) {
           logger.warn('Per-key session limit reached', { apiKey: apiKeyName, active: held, max: maxSessionsPerApiKey });
           res.status(429).set('Retry-After', String(SESSION_RETRY_AFTER_SECONDS)).json(jsonRpcError(-32000, keyAtCap, firstId(req.body)));
@@ -483,6 +494,7 @@ export function createHttpApp(createMcpServer: ServerFactory, options: HttpTrans
         lastActivity: Date.now(),
         initialized: false,
         apiKeyName,
+        apiKeyDigest,
         registryDigest: (res.locals.registryDigest as string | null | undefined) ?? null,
       };
 

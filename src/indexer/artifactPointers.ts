@@ -48,9 +48,50 @@ function writePointersAtomic(storeRoot: string, pointers: ArtifactPointers): voi
       fs.closeSync(descriptor);
     }
     fs.renameSync(temporary, target);
+    // The rename is only durable once the directory entry itself is flushed.
+    try {
+      const directory = fs.openSync(root, 'r');
+      try {
+        fs.fsyncSync(directory);
+      } finally {
+        fs.closeSync(directory);
+      }
+    } catch {
+      // Best effort: some filesystems do not allow opening directories.
+    }
   } finally {
     fs.rmSync(temporary, { force: true });
   }
+}
+
+/** How old a pointer lock must be before a live-pid check can declare it stale. */
+const POINTER_LOCK_STALE_AFTER_MS = 10 * 60 * 1000;
+
+/** True when `pid` is not a running process. */
+function processIsGone(pid: number): boolean {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return true;
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ESRCH';
+  }
+}
+
+/** A pointer lock older than the threshold whose writer process is gone, or null when it is live. */
+function stalePointerLock(lock: string): { pid: number; createdAt: number } | null {
+  let recorded: { pid?: unknown; createdAt?: unknown };
+  try {
+    recorded = JSON.parse(fs.readFileSync(lock, 'utf8')) as { pid?: unknown; createdAt?: unknown };
+  } catch {
+    return null; // Unreadable: never steal what cannot be proven stale.
+  }
+  const pid = typeof recorded.pid === 'number' ? recorded.pid : 0;
+  const createdAt = typeof recorded.createdAt === 'number' ? recorded.createdAt : 0;
+  if (Date.now() - createdAt >= POINTER_LOCK_STALE_AFTER_MS && processIsGone(pid)) {
+    return { pid, createdAt };
+  }
+  return null;
 }
 
 function withPointerLock<T>(storeRoot: string, action: () => T): T {
@@ -61,11 +102,21 @@ function withPointerLock<T>(storeRoot: string, action: () => T): T {
   try {
     descriptor = fs.openSync(lock, 'wx', 0o600);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
-      throw new Error('Artifact pointer update is already in progress.');
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    // The update must be short, so a lock here means either a live update or a crash. A lock whose
+    // recorded process is gone (and that is old enough) is taken over; anything else is refused.
+    if (stalePointerLock(lock) === null) {
+      throw new Error(
+        `Artifact pointer update is already in progress. If no other update is running, delete ${lock}.`
+      );
     }
-    throw error;
+    fs.rmSync(lock, { force: true });
+    descriptor = fs.openSync(lock, 'wx', 0o600);
   }
+  // The pid + timestamp let a later process tell a crashed writer's lock from a live one.
+  fs.writeFileSync(descriptor, JSON.stringify({ pid: process.pid, createdAt: Date.now() }), {
+    encoding: 'utf8',
+  });
   try {
     return action();
   } finally {

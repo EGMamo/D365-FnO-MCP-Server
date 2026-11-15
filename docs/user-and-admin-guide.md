@@ -124,7 +124,10 @@ are in [hosted deployment](hosted-deployment.md#operations).
   [Developer keys](hosted-deployment.md#developer-keys).
 - Every valid HTTP key can use MCP tools and read index status. Rate limiting
   is by client IP, not by key. Protect the endpoint and keys accordingly;
-  `TRUST_PROXY_HOPS` must reflect only trusted proxies.
+  `TRUST_PROXY_HOPS` must reflect only trusted proxies, and forwarded headers
+  are believed only when the direct socket peer really is a proxy (loopback or
+  a private address). Set `D365_ALLOWED_HOSTS` to the public hostname(s) to
+  refuse requests with any other `Host` header.
 - `D365_ENABLE_WRITE_TOOLS=1` registers preview/apply tools for all clients,
   not for a special administrator identity. `D365_WRITABLE_MODELS` authorizes
   literal `Package/Model` targets; an empty list rejects writes. Configure

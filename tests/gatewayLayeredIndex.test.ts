@@ -161,6 +161,38 @@ describe.each([
   });
 });
 
+describe('layered index case-insensitive shadowing', () => {
+  it('a custom object whose name differs only in casing hides the standard row', async () => {
+    const customDir = fs.mkdtempSync(path.join(root, 'case-'));
+    // The same table the standard index knows, written with a different casing on disk.
+    stage(customDir, 'ContosoExt', [['AxTable', 'samplestandardtable', table('samplestandardtable', ['CasedField'])]]);
+    const localIndex = await openLocalIndex({
+      customDir,
+      dbPath: path.join(root, 'case.db'),
+      ttlMs: 0,
+      debounceMs: 0,
+    });
+    const layered = openLayeredIndex(standardDb, localIndex.attachUri);
+    try {
+      const rows = layered.db
+        .prepare(`SELECT name, package, id FROM ax_objects WHERE type = 'Table' ORDER BY name`)
+        .all() as { name: string; package: string; id: number }[];
+      const names = rows.map((row) => row.name.toLowerCase());
+      // Exactly one SampleStandardTable row: the standard one is hidden by the differently-cased custom one.
+      expect(names.filter((name) => name === 'samplestandardtable')).toHaveLength(1);
+      expect(rows.find((row) => row.name.toLowerCase() === 'samplestandardtable')!.package).toBe('ContosoExt');
+      // Its child rows are the custom ones: the standard AccountNum/Name must not leak through.
+      const fields = layered.db
+        .prepare(`SELECT f.name FROM ax_fields f JOIN ax_objects o ON o.id = f.object_id WHERE o.name LIKE 'SampleStandardTable' COLLATE NOCASE`)
+        .all() as { name: string }[];
+      expect(fields.map((field) => field.name)).toEqual(['CasedField']);
+    } finally {
+      layered.close();
+      localIndex.close();
+    }
+  });
+});
+
 describe('openLayeredIndex', () => {
   it('lays every table it names', () => {
     expect(LAYERED_TABLES).toEqual(

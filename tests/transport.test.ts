@@ -6,6 +6,7 @@ import { Server as ProtocolServer } from '@modelcontextprotocol/sdk/server/index
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import express, { type Request, type Response, type Router } from 'express';
 import { createHttpApp, startHttpServer, type ConnectableServer } from '../src/server/httpTransport.js';
+import { digestKey } from '../src/server/apiKeys.js';
 import { logger } from '../src/utils/logger.js';
 import type { ServerStatus, StatusProvider } from '../src/server/serverStatus.js';
 
@@ -714,6 +715,32 @@ describe('session lifecycle', () => {
     });
     expect(sameKey.status).toBe(200);
     await sameKey.text();
+  });
+
+  it('does not let a registry key with the same *name* adopt a fixed key session (digest binding)', async () => {
+    const registryKey = 'registry-credential-abcdef0123456789-abcdef';
+    const { app } = makeApp(undefined, {
+      registryKeys: {
+        developerKeys: () => new Map([[digestKey(registryKey), 'test']]), // Same name as the fixed key "test".
+        onChange: () => () => undefined,
+      },
+    });
+    const url = await listen(app);
+
+    const init = await fetch(`${url}/mcp`, { method: 'POST', headers: initHeaders, body: JSON.stringify(initBody) });
+    expect(init.status).toBe(200);
+    await init.text();
+    const sessionId = init.headers.get('mcp-session-id');
+    expect(sessionId).toBeTruthy();
+
+    // The registry key shares the fixed key's name, but is a different credential: the session is not its.
+    const listBody = JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
+    const hijack = await fetch(`${url}/mcp`, {
+      method: 'POST',
+      headers: { ...initHeaders, 'X-API-Key': registryKey, 'mcp-session-id': sessionId! },
+      body: listBody,
+    });
+    expect(hijack.status).toBe(403);
   });
 
   it('closes idle sessions via the sweep', async () => {

@@ -298,6 +298,28 @@ describe('Azure artifact contract', () => {
     expect(readArtifactPointers(root).active).toBeNull();
   });
 
+  it('refuses a promotion while a live pointer lock is held', () => {
+    const bundle = createBundle(FIRST_TIME);
+    const lock = path.join(root, '.deployment-pointers.json.lock');
+    fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, createdAt: Date.now() }));
+    expect(() => promoteArtifactBundle(root, bundle.manifest.bundleId, 0, policy, FIRST_TIME)).toThrow(
+      /already in progress/
+    );
+    expect(readArtifactPointers(root).active).toBeNull();
+  });
+
+  it('takes over a pointer lock left by a crashed process and promotes normally', () => {
+    const bundle = createBundle(FIRST_TIME);
+    const lock = path.join(root, '.deployment-pointers.json.lock');
+    // A dead pid, recorded long ago: the crash of a previous promotion.
+    fs.writeFileSync(lock, JSON.stringify({ pid: 2_147_483_647, createdAt: Date.now() - 20 * 60 * 1000 }));
+    const promoted = promoteArtifactBundle(root, bundle.manifest.bundleId, 0, policy, FIRST_TIME);
+    expect(promoted.revision).toBe(1);
+    expect(promoted.active?.bundleId).toBe(bundle.manifest.bundleId);
+    // The lock is released again after the promotion.
+    expect(fs.existsSync(lock)).toBe(false);
+  });
+
   it('makes hosted startup require an active pointer and the configured complete capabilities', () => {
     const target = path.join(root, 'runtime', 'active.db');
     const startup = {

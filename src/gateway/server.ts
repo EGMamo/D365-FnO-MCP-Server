@@ -604,6 +604,14 @@ export async function launchGateway(config: GatewayConfig): Promise<RunningGatew
   if (!localMode && config.appVersion && declarableVersion(config.appVersion) === null) {
     logger.warn('D365_APP_VERSION cannot be sent as a client version; the hosted server will not be told your SDK version');
   }
+  if (!localMode && config.privatePrefixes.length === 0) {
+    // With no private prefixes, every privacy check is a no-op: the names of custom objects are
+    // forwarded to the hosted server (never the code itself), including ones saved but not yet
+    // indexed. Loud, so the "custom code never leaves the machine" promise stays honest.
+    logger.warn('No D365_GATEWAY_PRIVATE_PREFIXES configured: names of custom objects may be sent to the hosted server', {
+      hint: 'Set D365_GATEWAY_PRIVATE_PREFIXES to a comma-separated list of your object-name prefixes',
+    });
+  }
 
   logger.info('Indexing the custom models', { customDir: config.customMetadataDir });
   const localIndex = await openLocalIndex({

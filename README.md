@@ -132,7 +132,8 @@ Configuration comes from environment variables (a `.env` file in the working dir
 | `RATE_LIMIT_MAX_REQUESTS` | `500` | Max requests per client IP per rate-limit window. |
 | `RATE_LIMIT_WINDOW_MS` | `900000` | Rate-limit window in milliseconds (15 minutes). |
 | `MCP_REQUEST_TIMEOUT_MS` | `120000` | Per-request timeout in milliseconds. |
-| `TRUST_PROXY_HOPS` | `0` | Number of trusted reverse-proxy hops. `0` ignores `X-Forwarded-For`; set this to the real hop count **only** when behind a trusted proxy. |
+| `TRUST_PROXY_HOPS` | `0` | Number of trusted reverse-proxy hops. `0` ignores `X-Forwarded-For`; set this to the real hop count **only** when behind a trusted proxy. Even with hops set, the forwarded headers are believed only when the direct socket peer is loopback or a private address (where a proxy can actually sit). |
+| `D365_ALLOWED_HOSTS` | _(empty)_ | Comma-separated Host header values the server answers. Empty answers any Host; set it to the public hostname(s) the server sits behind to refuse DNS-rebinding requests. |
 | `MAX_CONCURRENT_SESSIONS` | `100` | Max simultaneous MCP sessions; further sessions receive HTTP `503`. |
 | `MAX_SESSIONS_PER_API_KEY` | `0` | Max simultaneous sessions one API key may hold; further sessions for that key receive HTTP `429`. `0` applies only `MAX_CONCURRENT_SESSIONS`. Set it when several named keys share a server, so one client cannot lock the others out. |
 | `SESSION_IDLE_TIMEOUT_MS` | `1800000` | Idle sessions are closed after this period (swept every 60s). |
@@ -947,9 +948,10 @@ database. Set `D365_RUN_SQL_INTEGRATION=1` and `D365_XREF_CONNECTION_STRING`, th
 
 ## Security notes
 
-- **API keys** — every key must be at least 32 characters; generate one per person with `openssl rand -hex 32` and list them in `MCP_API_KEYS`. Each request is checked against every key in constant time, only the key's name is logged, and a session is bound to the key that opened it. The `/health` and `/live` endpoints are the only unauthenticated routes.
+- **API keys** — every key must be at least 32 characters; generate one per person with `openssl rand -hex 32` and list them in `MCP_API_KEYS`. Each request is checked against every key in constant time, only the key's name is logged, and a session is bound to the SHA-256 digest of the key that opened it (never the name, which can collide across the fixed list and the registry). The `/health` and `/live` endpoints are the only unauthenticated routes.
 - **Rate limiting** — requests are limited per client IP (`RATE_LIMIT_MAX_REQUESTS` per `RATE_LIMIT_WINDOW_MS`). Limiting is deliberately keyed on IP only, so rotating credentials cannot bypass the limit.
-- **Trust proxy** — `TRUST_PROXY_HOPS` defaults to `0`, meaning `X-Forwarded-For` is ignored and the socket address is used. Only raise it when the server genuinely sits behind that many trusted proxies; otherwise clients can spoof their IP and evade rate limiting.
+- **Trust proxy** — `TRUST_PROXY_HOPS` defaults to `0`, meaning `X-Forwarded-For` is ignored and the socket address is used. Only raise it when the server genuinely sits behind that many trusted proxies; otherwise clients can spoof their IP and evade rate limiting. Even with hops set, the forwarded headers are believed only when the direct socket peer is loopback or a private address, and the key-administration HTTPS guard never accepts a forged `X-Forwarded-Proto` from a remote client that connects directly.
+- **Host allowlist** — set `D365_ALLOWED_HOSTS` to the public hostname(s) the server sits behind to refuse requests with any other `Host` header (DNS-rebinding protection) before rate limiting and auth.
 - **Session limits** — `MAX_CONCURRENT_SESSIONS`, `MAX_SESSIONS_PER_API_KEY` and `SESSION_IDLE_TIMEOUT_MS` bound memory use and clean up abandoned sessions.
 - **Exposure** — the server grants read access to your source metadata and should not be exposed to untrusted networks. It binds every interface unless `MCP_HOST` says otherwise; set `MCP_HOST=127.0.0.1` for a local server, and front a shared one with TLS (App Service terminates HTTPS in hosted mode).
 - **Write tools over HTTP** — with `D365_ENABLE_WRITE_TOOLS=1` every API key can use the write tools. Enable them only on a local or single-user server. No tool adds or changes knowledge base topics.

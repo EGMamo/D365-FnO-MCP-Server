@@ -40,6 +40,9 @@ export function createFileRegistryStore(file: string): RegistryStore {
       try {
         fs.writeFileSync(staging, `${JSON.stringify(document, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
         // Checked again right before the rename, which narrows the window a second writer could slip into.
+        // It does not close it: two concurrent writers both pass this check and the last rename wins.
+        // Both writers produce a whole, valid document (write-to-temp + rename), so this is a benign
+        // last-writer-wins race, not corruption. The blob registry is strictly better (ETag conditions).
         if (currentVersion() !== expected) throw new KeyRegistryConflictError();
         fs.renameSync(staging, target);
       } finally {

@@ -6,7 +6,7 @@ import path from 'path';
 import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
 import type { Database } from '../src/indexer/db.js';
-import { openDb, prune, getObjectByName, searchSymbols, resolveLabelByLanguage, setMeta, getMeta, META_KEYS, type Xref } from '../src/indexer/db.js';
+import { openDb, prune, getObjectByName, searchSymbols, resolveLabelByLanguage, setMeta, getMeta, META_KEYS, suggestObjectNames, type Xref } from '../src/indexer/db.js';
 import { buildIndex, getIndexStats, type IndexProgress } from '../src/indexer/buildIndex.js';
 import { setSourceFileReads } from '../src/indexer/sourceFiles.js';
 import { logger } from '../src/utils/logger.js';
@@ -209,6 +209,14 @@ describe('buildIndex with fixtures', () => {
       Edt: 1,
     });
     expect(stats.totalLabels).toBe(2);
+  });
+
+  it('suggestObjectNames offers typo and substring candidates (exported for scripts/bench.mjs)', () => {
+    expect(suggestObjectNames(db, 'SampleTabl', 'Table')).toContain('SampleTable');
+    expect(suggestObjectNames(db, 'ample', 'Table')).toContain('SampleTable');
+    expect(suggestObjectNames(db, 'ZzzNoSuchName', 'Table')).toEqual([]);
+    // Too short an input never suggests anything.
+    expect(suggestObjectNames(db, 'a', 'Table')).toEqual([]);
   });
 
   it('stores table fields with correct types', () => {

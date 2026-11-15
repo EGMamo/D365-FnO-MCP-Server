@@ -47,13 +47,13 @@ interface UploadOptions {
 }
 
 export interface ArtifactBlobObject {
-  getProperties(conditions?: BlobConditions): Promise<BlobProperties>;
-  uploadFile(source: string, options: UploadOptions): Promise<void>;
-  uploadBuffer(content: Buffer, options: UploadOptions): Promise<void>;
-  downloadToFile(target: string, conditions?: BlobConditions): Promise<void>;
-  downloadToBuffer(maxBytes: number, conditions?: BlobConditions): Promise<Buffer>;
-  deleteIfExists(): Promise<void>;
-  acquireLease(durationSeconds: number): Promise<ArtifactBlobLease>;
+  getProperties(conditions?: BlobConditions, signal?: AbortSignal): Promise<BlobProperties>;
+  uploadFile(source: string, options: UploadOptions, signal?: AbortSignal): Promise<void>;
+  uploadBuffer(content: Buffer, options: UploadOptions, signal?: AbortSignal): Promise<void>;
+  downloadToFile(target: string, conditions?: BlobConditions, signal?: AbortSignal): Promise<void>;
+  downloadToBuffer(maxBytes: number, conditions?: BlobConditions, signal?: AbortSignal): Promise<Buffer>;
+  deleteIfExists(signal?: AbortSignal): Promise<void>;
+  acquireLease(durationSeconds: number, signal?: AbortSignal): Promise<ArtifactBlobLease>;
 }
 
 export interface ArtifactBlobLease {
@@ -62,7 +62,7 @@ export interface ArtifactBlobLease {
 }
 
 export interface ArtifactBlobContainer {
-  getProperties(): Promise<void>;
+  getProperties(signal?: AbortSignal): Promise<void>;
   getBlob(name: string): ArtifactBlobObject;
   listBlobNames(prefix: string): AsyncIterable<string>;
 }
@@ -77,6 +77,8 @@ export interface MaterializeArtifactBundleOptions {
   policy: ArtifactCompatibilityPolicy;
   /** Runs after the manifest is read and before any bundle file is downloaded. */
   beforeDownload?: (manifest: ArtifactManifest) => void;
+  /** Aborts every Blob call; a caller deadline turns a stalled download into a fast, closed failure. */
+  signal?: AbortSignal;
 }
 
 function statusCode(error: unknown): number | undefined {
@@ -133,24 +135,26 @@ export class AzureBlobArtifactStore {
 
   async uploadBundle(
     directory: string,
-    policy: ArtifactCompatibilityPolicy
+    policy: ArtifactCompatibilityPolicy,
+    signal?: AbortSignal
   ): Promise<ValidatedArtifactBundle> {
     return new AzureBlobArtifactWriter(
       this,
       this.container,
-      async () => undefined
-    ).uploadBundle(directory, policy);
+      async () => undefined,
+      signal
+    ).uploadBundle(directory, policy, signal);
   }
 
-  async verifyContainer(): Promise<void> {
-    await this.container.getProperties();
+  async verifyContainer(signal?: AbortSignal): Promise<void> {
+    await this.container.getProperties(signal);
   }
 
-  async readPointers(): Promise<ArtifactPointerSnapshot> {
+  async readPointers(signal?: AbortSignal): Promise<ArtifactPointerSnapshot> {
     const blob = this.container.getBlob(ARTIFACT_POINTERS_FILE);
     let properties: BlobProperties;
     try {
-      properties = await blob.getProperties();
+      properties = await blob.getProperties(undefined, signal);
     } catch (error) {
       if (isNotFound(error)) return { pointers: emptyPointers(), etag: null };
       throw error;
@@ -162,7 +166,7 @@ export class AzureBlobArtifactStore {
     if (properties.contentLength > MAX_POINTER_BYTES) {
       throw new Error(`Artifact pointer blob exceeds the ${MAX_POINTER_BYTES}-byte limit.`);
     }
-    const content = await blob.downloadToBuffer(MAX_POINTER_BYTES, { ifMatch: etag });
+    const content = await blob.downloadToBuffer(MAX_POINTER_BYTES, { ifMatch: etag }, signal);
     return {
       pointers: parseArtifactPointers(JSON.parse(content.toString('utf8')) as unknown),
       etag,
@@ -170,13 +174,20 @@ export class AzureBlobArtifactStore {
   }
 
   /** Reads and parses a bundle's manifest without downloading its database. */
-  async readManifest(bundleId: string): Promise<{ manifest: ArtifactManifest; bytes: Buffer }> {
+  async readManifest(
+    bundleId: string,
+    signal?: AbortSignal
+  ): Promise<{ manifest: ArtifactManifest; bytes: Buffer }> {
     const manifestBlob = this.container.getBlob(`${bundlePrefix(bundleId)}/${ARTIFACT_MANIFEST_FILE}`);
-    const manifestProperties = await manifestBlob.getProperties();
+    const manifestProperties = await manifestBlob.getProperties(undefined, signal);
     const manifestEtag = requireEtag(manifestProperties.etag, 'Artifact manifest read');
-    const bytes = await manifestBlob.downloadToBuffer(MAX_MANIFEST_BYTES, {
-      ifMatch: manifestEtag,
-    });
+    const bytes = await manifestBlob.downloadToBuffer(
+      MAX_MANIFEST_BYTES,
+      {
+        ifMatch: manifestEtag,
+      },
+      signal
+    );
     const manifest = parseArtifactManifest(JSON.parse(bytes.toString('utf8')) as unknown);
     if (manifest.bundleId !== bundleId) {
       throw new Error(
@@ -190,8 +201,9 @@ export class AzureBlobArtifactStore {
     bundleId: string,
     options: MaterializeArtifactBundleOptions
   ): Promise<ValidatedArtifactBundle> {
+    const signal = options.signal;
     const prefix = bundlePrefix(bundleId);
-    const { manifest, bytes: manifestBytes } = await this.readManifest(bundleId);
+    const { manifest, bytes: manifestBytes } = await this.readManifest(bundleId, signal);
     options.beforeDownload?.(manifest);
 
     const root = path.resolve(options.localStoreRoot);
@@ -207,13 +219,15 @@ export class AzureBlobArtifactStore {
         `${prefix}/${ARTIFACT_VALIDATION_FILE}`,
         path.join(staging, ARTIFACT_VALIDATION_FILE),
         manifest.validationReport.bytes,
-        manifest.validationReport.sha256
+        manifest.validationReport.sha256,
+        signal
       );
       await this.downloadExactFile(
         `${prefix}/${ARTIFACT_DATABASE_FILE}`,
         path.join(staging, ARTIFACT_DATABASE_FILE),
         manifest.index.bytes,
-        manifest.index.sha256
+        manifest.index.sha256,
+        signal
       );
 
       const finalDirectory = artifactBundleDirectory(root, bundleId);
@@ -226,22 +240,27 @@ export class AzureBlobArtifactStore {
   }
 
   async withAcquisitionLease<T>(
-    action: (writer: AzureBlobArtifactWriter) => Promise<T>
+    action: (writer: AzureBlobArtifactWriter) => Promise<T>,
+    signal?: AbortSignal
   ): Promise<T> {
     const lockBlob = this.container.getBlob(ACQUISITION_LOCK_BLOB);
     try {
-      await lockBlob.uploadBuffer(Buffer.alloc(0), {
-        conditions: { ifNoneMatch: '*' },
-        contentType: 'application/octet-stream',
-        metadata: { purpose: 'acquisition-serialization' },
-      });
+      await lockBlob.uploadBuffer(
+        Buffer.alloc(0),
+        {
+          conditions: { ifNoneMatch: '*' },
+          contentType: 'application/octet-stream',
+          metadata: { purpose: 'acquisition-serialization' },
+        },
+        signal
+      );
     } catch (error) {
       if (!isConflict(error)) throw error;
     }
 
     let lease: ArtifactBlobLease;
     try {
-      lease = await lockBlob.acquireLease(LEASE_DURATION_SECONDS);
+      lease = await lockBlob.acquireLease(LEASE_DURATION_SECONDS, signal);
     } catch (error) {
       if (isConflict(error)) throw new Error('An artifact acquisition run is already in progress.');
       throw error;
@@ -280,7 +299,7 @@ export class AzureBlobArtifactStore {
     };
 
     try {
-      return await action(new AzureBlobArtifactWriter(this, this.container, ensureLeaseHealthy));
+      return await action(new AzureBlobArtifactWriter(this, this.container, ensureLeaseHealthy, signal));
     } finally {
       clearInterval(renewal);
       await renewalChain;
@@ -292,10 +311,11 @@ export class AzureBlobArtifactStore {
     blobName: string,
     target: string,
     expectedBytes: number,
-    expectedSha256: string
+    expectedSha256: string,
+    signal?: AbortSignal
   ): Promise<void> {
     const blob = this.container.getBlob(blobName);
-    const properties = await blob.getProperties();
+    const properties = await blob.getProperties(undefined, signal);
     const etag = requireEtag(properties.etag, `Artifact blob ${blobName}`);
     if (properties.contentLength !== expectedBytes) {
       throw new Error(
@@ -303,7 +323,7 @@ export class AzureBlobArtifactStore {
           `expected ${expectedBytes}.`
       );
     }
-    await blob.downloadToFile(target, { ifMatch: etag });
+    await blob.downloadToFile(target, { ifMatch: etag }, signal);
     const actualBytes = fs.statSync(target).size;
     const actualSha256 = sha256File(target);
     if (actualBytes !== expectedBytes || actualSha256 !== expectedSha256) {
@@ -316,12 +336,14 @@ export class AzureBlobArtifactWriter {
   constructor(
     private readonly store: AzureBlobArtifactStore,
     private readonly container: ArtifactBlobContainer,
-    private readonly ensureLeaseHealthy: () => Promise<void>
+    private readonly ensureLeaseHealthy: () => Promise<void>,
+    private readonly signal?: AbortSignal
   ) {}
 
   async uploadBundle(
     directory: string,
-    policy: ArtifactCompatibilityPolicy
+    policy: ArtifactCompatibilityPolicy,
+    signal?: AbortSignal
   ): Promise<ValidatedArtifactBundle> {
     await this.ensureLeaseHealthy();
     const validated = validateArtifactBundle(directory, policy);
@@ -350,20 +372,24 @@ export class AzureBlobArtifactWriter {
       const blobName = `${prefix}/${file.name}`;
       const blob = this.container.getBlob(blobName);
       try {
-        await blob.uploadFile(source, {
-          conditions: { ifNoneMatch: '*' },
-          contentType: contentType(file.name),
-          metadata: {
-            bundleid: validated.manifest.bundleId.slice('sha256:'.length),
-            sha256: file.sha256,
-            bytes: String(file.bytes),
-            contractversion: String(validated.manifest.contractVersion),
+        await blob.uploadFile(
+          source,
+          {
+            conditions: { ifNoneMatch: '*' },
+            contentType: contentType(file.name),
+            metadata: {
+              bundleid: validated.manifest.bundleId.slice('sha256:'.length),
+              sha256: file.sha256,
+              bytes: String(file.bytes),
+              contractversion: String(validated.manifest.contractVersion),
+            },
           },
-        });
+          signal
+        );
       } catch (error) {
         if (!isConflict(error)) throw error;
       }
-      await this.verifyRemoteFile(blobName, file.bytes, file.sha256);
+      await this.verifyRemoteFile(blobName, file.bytes, file.sha256, signal);
     }
     return validated;
   }
@@ -375,14 +401,14 @@ export class AzureBlobArtifactWriter {
     promotedAt = new Date().toISOString()
   ): Promise<ArtifactPointerSnapshot> {
     await this.ensureLeaseHealthy();
-    const candidate = await this.validateRemoteBundle(bundleId, policy);
-    const current = await this.store.readPointers();
+    const candidate = await this.validateRemoteBundle(bundleId, policy, this.signal);
+    const current = await this.store.readPointers(this.signal);
     assertExpectedRevision(current, expectedRevision);
     if (current.pointers.active?.bundleId === bundleId) return current;
     // Only the active bundle's timestamps matter here. Its database was validated when it was
     // promoted, and it may predate the current policy (for example after a server upgrade).
     const active = current.pointers.active
-      ? (await this.store.readManifest(current.pointers.active.bundleId)).manifest
+      ? (await this.store.readManifest(current.pointers.active.bundleId, this.signal)).manifest
       : null;
     if (active) {
       const candidateTime = Math.max(
@@ -439,10 +465,10 @@ export class AzureBlobArtifactWriter {
     return this.writePointers(next, current.etag);
   }
 
-  async deleteUnreferencedBundle(bundleId: string): Promise<boolean> {
+  async deleteUnreferencedBundle(bundleId: string, signal?: AbortSignal): Promise<boolean> {
     await this.ensureLeaseHealthy();
     const prefix = `${bundlePrefix(bundleId)}/`;
-    const before = await this.store.readPointers();
+    const before = await this.store.readPointers(signal);
     if (
       before.pointers.active?.bundleId === bundleId ||
       before.pointers.previous?.bundleId === bundleId
@@ -451,22 +477,23 @@ export class AzureBlobArtifactWriter {
     }
     const blobNames: string[] = [];
     for await (const name of this.container.listBlobNames(prefix)) blobNames.push(name);
-    const after = await this.store.readPointers();
+    const after = await this.store.readPointers(signal);
     if (after.etag !== before.etag) {
       throw new Error('Artifact pointers changed while evaluating bundle retention.');
     }
     await this.ensureLeaseHealthy();
-    for (const name of blobNames) await this.container.getBlob(name).deleteIfExists();
+    for (const name of blobNames) await this.container.getBlob(name).deleteIfExists(signal);
     return blobNames.length > 0;
   }
 
   private async validateRemoteBundle(
     bundleId: string,
-    policy: ArtifactCompatibilityPolicy
+    policy: ArtifactCompatibilityPolicy,
+    signal?: AbortSignal
   ): Promise<ValidatedArtifactBundle> {
     const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'd365-azure-artifact-'));
     try {
-      return await this.store.materializeBundle(bundleId, { localStoreRoot: temporary, policy });
+      return await this.store.materializeBundle(bundleId, { localStoreRoot: temporary, policy, signal });
     } finally {
       fs.rmSync(temporary, { recursive: true, force: true });
     }
@@ -475,25 +502,26 @@ export class AzureBlobArtifactWriter {
   private async verifyRemoteFile(
     blobName: string,
     expectedBytes: number,
-    expectedSha256: string
+    expectedSha256: string,
+    signal?: AbortSignal
   ): Promise<void> {
-    const temporary = path.join(
-      os.tmpdir(),
-      `.d365-blob-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`
-    );
+    // A private directory (mkdtemp: 0700, atomically created) rather than a file name in the shared
+    // temp dir: a fixed name there could be pre-planted as a symlink to redirect the download.
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'd365-blob-'));
+    const temporary = path.join(directory, 'artifact.bin');
     const blob = this.container.getBlob(blobName);
     try {
-      const properties = await blob.getProperties();
+      const properties = await blob.getProperties(undefined, signal);
       const etag = requireEtag(properties.etag, `Uploaded artifact blob ${blobName}`);
       if (properties.contentLength !== expectedBytes) {
         throw new Error(`Uploaded artifact blob ${blobName} has an unexpected size.`);
       }
-      await blob.downloadToFile(temporary, { ifMatch: etag });
+      await blob.downloadToFile(temporary, { ifMatch: etag }, signal);
       if (fs.statSync(temporary).size !== expectedBytes || sha256File(temporary) !== expectedSha256) {
         throw new Error(`Uploaded artifact blob ${blobName} failed verification.`);
       }
     } finally {
-      fs.rmSync(temporary, { force: true });
+      fs.rmSync(directory, { recursive: true, force: true });
     }
   }
 
