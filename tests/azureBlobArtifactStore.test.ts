@@ -513,6 +513,53 @@ describe('Azure startup materialization', () => {
     expect(readFixtureName()).toBe('AzureBlobFixture');
   });
 
+  it('refuses to activate while another process holds the activation lock', async () => {
+    const bundle = createBundle(FIRST_TIME);
+    await publishAndPromote(bundle);
+    fs.mkdirSync(path.dirname(indexDbPath), { recursive: true });
+    fs.writeFileSync(`${indexDbPath}.lock`, JSON.stringify({ pid: process.pid, createdAt: Date.now() }));
+
+    await expect(startup()).rejects.toThrow(/being activated by another process/);
+    // Nothing was activated, and the live lock is untouched.
+    expect(fs.existsSync(indexDbPath)).toBe(false);
+    expect(JSON.parse(fs.readFileSync(`${indexDbPath}.lock`, 'utf8'))).toMatchObject({ pid: process.pid });
+  });
+
+  it('takes over an activation lock left by a crashed process and proceeds', async () => {
+    const bundle = createBundle(FIRST_TIME);
+    await publishAndPromote(bundle);
+    fs.mkdirSync(path.dirname(indexDbPath), { recursive: true });
+    fs.writeFileSync(`${indexDbPath}.lock`, JSON.stringify({ pid: 2_147_483_647, createdAt: Date.now() - 20 * 60 * 1000 }));
+
+    const prepared = await startup();
+    expect(prepared.bundle.manifest.bundleId).toBe(bundle.manifest.bundleId);
+    expect(readFixtureName()).toBe('AzureBlobFixture');
+    expect(fs.existsSync(`${indexDbPath}.lock`)).toBe(false);
+  });
+
+  it('fails closed when the Azure store never answers (startup deadline)', async () => {
+    const bundle = createBundle(FIRST_TIME);
+    await publishAndPromote(bundle);
+    const hanging = {
+      readPointers: () => new Promise<never>(() => undefined),
+      materializeBundle: (...args: Parameters<typeof store.materializeBundle>) => store.materializeBundle(...args),
+    };
+    await expect(
+      materializeAzureArtifactIndex({
+        store: hanging as never,
+        storePath: localStore,
+        indexDbPath,
+        serverVersion: policy.serverVersion,
+        indexSchemaVersion: INDEX_SCHEMA_VERSION,
+        requiredCapabilities: policy.requiredCapabilities,
+        freeBytes: plenty,
+        timeoutMs: 50,
+      })
+    ).rejects.toThrow(/Timed out after/);
+    // Nothing was activated.
+    expect(fs.existsSync(indexDbPath)).toBe(false);
+  });
+
   it('reuses a validated local copy and prunes superseded bundles and interrupted downloads', async () => {
     const first = createBundle(FIRST_TIME);
     const second = createBundle(SECOND_TIME);

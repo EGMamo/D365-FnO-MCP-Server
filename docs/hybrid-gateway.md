@@ -459,7 +459,9 @@ arguments, at any depth, is split into identifiers; if one starts with a listed 
 
 The prefix list is a name filter, not a classifier. A custom name without a listed prefix still
 goes upstream, and the resource and prompt relays are not filtered. Without a naming convention
-there is no protection, so keep the list in line with your customer and ISV prefixes.
+there is no protection, so keep the list in line with your customer and ISV prefixes. When the
+gateway runs in hosted mode without `D365_GATEWAY_PRIVATE_PREFIXES`, every prefix check is a no-op
+and the startup log says so explicitly; set the variable before relying on the privacy promise.
 
 ## Security notes
 

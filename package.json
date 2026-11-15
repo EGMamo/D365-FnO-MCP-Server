@@ -96,6 +96,8 @@
     "protobufjs": false
   },
   "overrides": {
-    "minimatch": "^11.0.4"
+    "minimatch": "^11.0.4",
+    "hono": "^4.13.18",
+    "@hono/node-server": "^2.1.8"
   }
 }

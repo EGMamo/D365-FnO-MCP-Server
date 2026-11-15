@@ -145,7 +145,14 @@ export function snapshotIndex(dbPath: string, destination: string, options: Snap
   } finally {
     fs.rmSync(scratch, { force: true });
   }
-  if (options.verify !== false) verifySnapshot(destination, objects, options.integrityCheck === true);
+  try {
+    if (options.verify !== false) verifySnapshot(destination, objects, options.integrityCheck === true);
+  } catch (error) {
+    // A candidate that fails verification must not stay on disk: a later run or a human reader
+    // would otherwise open a corrupt/partial file and fail confusingly.
+    fs.rmSync(destination, { force: true });
+    throw error;
+  }
   return {
     file: destination,
     builtAt,

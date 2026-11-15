@@ -250,6 +250,23 @@ function postDeployArgs(answers: DeployAnswers): string[] {
 const commandLine = (command: string, args: string[]): string =>
   [command, ...args.map((arg) => (/^[\w./:@=-]+$/.test(arg) ? arg : `'${arg.replace(/'/g, "''")}'`))].join(' ');
 
+/**
+ * Quotes one argument for cmd.exe, which `spawn(..., { shell: true })` runs on Windows. Node joins
+ * the arguments with spaces and cmd then re-parses the line, so metacharacters in operator input
+ * (a resource group may legally contain parentheses) must be neutralized. Inside double quotes cmd
+ * treats most metacharacters literally; an embedded double quote is escaped by doubling, and a
+ * trailing backslash would escape the closing quote, so it is doubled too.
+ */
+function cmdQuote(arg: string): string {
+  if (!/[\s"&()^=;!`~<>|%]/.test(arg)) return arg;
+  return `"${arg.replace(/"/g, '""').replace(/\\+$/, (m) => m + m)}"`;
+}
+
+/** Arguments as `spawn` should receive them: quoted when the shell (cmd on Windows) re-parses the line. */
+function shellSafeArgs(args: string[], useShell: boolean): string[] {
+  return useShell ? args.map(cmdQuote) : args;
+}
+
 interface DeploymentOutputs {
   webAppHostName: string;
   artifactAccountUrl: string;
@@ -472,7 +489,8 @@ function repositoryOf(root: string): string | null {
 const childRunner: CommandRunner = {
   capture(command, args) {
     return new Promise((resolve) => {
-      const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'], shell: process.platform === 'win32' });
+      const useShell = process.platform === 'win32';
+      const child = spawn(command, shellSafeArgs(args, useShell), { stdio: ['ignore', 'pipe', 'pipe'], shell: useShell });
       let stdout = '';
       let stderr = '';
       child.stdout.setEncoding('utf8').on('data', (chunk: string) => (stdout += chunk));
@@ -483,7 +501,8 @@ const childRunner: CommandRunner = {
   },
   interactive(command, args, options) {
     return new Promise((resolve) => {
-      const child = spawn(command, args, { stdio: 'inherit', cwd: options.cwd, shell: process.platform === 'win32' });
+      const useShell = process.platform === 'win32';
+      const child = spawn(command, shellSafeArgs(args, useShell), { stdio: 'inherit', cwd: options.cwd, shell: useShell });
       child.on('error', () => resolve(127));
       child.on('close', (code) => resolve(code ?? 1));
     });

@@ -402,7 +402,21 @@ function loadOrCreateToken(localIndexDbPath: string): { token: string; tokenFile
   try {
     fs.mkdirSync(path.dirname(tokenFile), { recursive: true });
     fs.writeFileSync(staging, `${token}\n`, { flag: 'wx', mode: 0o600 });
-    fs.renameSync(staging, tokenFile);
+    try {
+      fs.renameSync(staging, tokenFile);
+    } catch (renameError) {
+      // On Windows a concurrent first start holds the name: adopt what it wrote instead of failing.
+      const code = (renameError as NodeJS.ErrnoException).code;
+      if (code !== 'EEXIST' && code !== 'EPERM') throw renameError;
+    }
+    // A concurrent first start may have won the race (or written after us); serving the file's
+    // token keeps every printed client entry valid after a restart. The window that remains is
+    // the instant between this read and a competing rename — far smaller than a whole startup.
+    const winner = fs.readFileSync(tokenFile, 'utf8').trim();
+    if (winner.length > 0 && tokenProblems(winner).length === 0) {
+      if (process.platform !== 'win32') fs.chmodSync(tokenFile, 0o600);
+      return { token: winner, tokenFile };
+    }
   } catch (err) {
     try {
       fs.rmSync(staging, { force: true });

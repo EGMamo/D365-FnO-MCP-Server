@@ -61,6 +61,11 @@ export interface AzureArtifactStartupOptions extends ArtifactStartupOptions {
   store: Pick<AzureBlobArtifactStore, 'readPointers' | 'materializeBundle'>;
   /** Free bytes on the filesystem holding `directory`. Overridable for tests. */
   freeBytes?: (directory: string) => number;
+  /**
+   * Startup deadline for the whole materialization (pointer read, download, validation). A stalled
+   * network must fail the replica closed instead of listening unready forever. Default 30 minutes.
+   */
+  timeoutMs?: number;
 }
 
 export interface MaterializedArtifactIndex extends PreparedArtifactIndex {
@@ -156,7 +161,36 @@ function pruneLocalBundles(bundlesRoot: string, keepBundleId: string | null): vo
 export async function materializeAzureArtifactIndex(
   options: AzureArtifactStartupOptions
 ): Promise<MaterializedArtifactIndex> {
-  const snapshot = await options.store.readPointers();
+  const timeoutMs = options.timeoutMs ?? 30 * 60 * 1000;
+  const controller = new AbortController();
+  let timer: NodeJS.Timeout | undefined;
+  // The signal aborts every Blob call (the polite, resource-freeing path); the race below is the
+  // backstop that fails the replica closed even if something ignores the signal, so a stalled
+  // network can never leave it listening unready forever.
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      controller.abort(
+        new Error(
+          `Timed out after ${Math.round(timeoutMs / 60_000)} minutes materializing the active artifact ` +
+            'bundle from Azure Blob Storage; the replica exits so the platform can retry.'
+        )
+      );
+      reject(controller.signal.reason);
+    }, timeoutMs);
+    timer.unref();
+  });
+  try {
+    return await Promise.race([materializeWithSignal(options, controller.signal), deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function materializeWithSignal(
+  options: AzureArtifactStartupOptions,
+  signal: AbortSignal
+): Promise<MaterializedArtifactIndex> {
+  const snapshot = await options.store.readPointers(signal);
   const active = snapshot.pointers.active;
   if (!active || snapshot.etag === null) {
     throw new Error('The configured Azure artifact store has no active validated bundle.');
@@ -186,6 +220,7 @@ export async function materializeAzureArtifactIndex(
     bundle = await options.store.materializeBundle(active.bundleId, {
       localStoreRoot: localRoot,
       policy,
+      signal,
       beforeDownload: (manifest) => assertCapacity(manifest, bundlesRoot, indexDirectory, freeBytes),
     });
   }

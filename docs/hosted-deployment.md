@@ -231,7 +231,8 @@ Microsoft sign-in for it. The server keeps only a SHA-256 fingerprint of each ke
 
 A new key works at once. A revoked key gets `401` at once on the replica that revoked it and within about
 5 seconds on every other one, and the sessions it opened are closed. Admin requests are rate limited
-(20 a minute per address), served over HTTPS only, and logged with the key name and the action, never a key.
+(20 a minute per address), served over HTTPS only (the app's own TLS socket, a trusted proxy's `https`
+report with a local peer, or this machine), and logged with the key name and the action, never a key.
 
 ## Operations
 

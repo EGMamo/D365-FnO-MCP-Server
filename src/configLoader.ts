@@ -65,6 +65,17 @@ const configSchema = z.object({
   RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(15 * 60 * 1000),
   MCP_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(120_000),
   TRUST_PROXY_HOPS: z.coerce.number().int().min(0).default(0),
+  /**
+   * Comma-separated Host header values the server answers. Empty: every Host is accepted (the
+   * default; a rebinding page can still reach loopback deployments). Set it to the public
+   * hostname(s) behind which the server sits to refuse DNS-rebinding requests.
+   */
+  D365_ALLOWED_HOSTS: z.string().default('').transform((value) =>
+    value
+      .split(',')
+      .map((entry) => entry.trim().toLowerCase())
+      .filter((entry) => entry.length > 0)
+  ),
   MAX_CONCURRENT_SESSIONS: z.coerce.number().int().positive().default(100),
   MAX_SESSIONS_PER_API_KEY: z.coerce.number().int().min(0).default(0),
   SESSION_IDLE_TIMEOUT_MS: z.coerce.number().int().positive().default(30 * 60 * 1000),
@@ -211,6 +222,7 @@ function buildConfig(env: ParsedEnv) {
     rateLimitWindowMs: env.RATE_LIMIT_WINDOW_MS,
     requestTimeoutMs: env.MCP_REQUEST_TIMEOUT_MS,
     trustProxyHops: env.TRUST_PROXY_HOPS,
+    allowedHosts: env.D365_ALLOWED_HOSTS,
     maxConcurrentSessions: env.MAX_CONCURRENT_SESSIONS,
     maxSessionsPerApiKey: env.MAX_SESSIONS_PER_API_KEY,
     sessionIdleTimeoutMs: env.SESSION_IDLE_TIMEOUT_MS,

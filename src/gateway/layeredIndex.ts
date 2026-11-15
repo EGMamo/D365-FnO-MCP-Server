@@ -17,9 +17,14 @@ export const CUSTOM_ID_OFFSET = 2 ** 40;
 const STANDARD = 'std';
 const CUSTOM = 'cus';
 
-/** A custom object hides the standard object of the same type and name (an overlayered object), with its child rows. */
+/**
+ * A custom object hides the standard object of the same type and name (an overlayered object), with its
+ * child rows. Names and label ids are compared case-insensitively: AOT identities are case-insensitive
+ * everywhere else (COLLATE NOCASE), so a custom copy whose file differs in casing must still shadow the
+ * standard row instead of leaking it through the union view.
+ */
 const shadowedObject = (alias: string) =>
-  `EXISTS (SELECT 1 FROM ${STANDARD}.ax_objects so JOIN ${CUSTOM}.ax_objects co ON co.type = so.type AND co.name = so.name WHERE so.id = ${alias}.object_id)`;
+  `EXISTS (SELECT 1 FROM ${STANDARD}.ax_objects so JOIN ${CUSTOM}.ax_objects co ON co.type = so.type AND co.name = so.name COLLATE NOCASE WHERE so.id = ${alias}.object_id)`;
 
 interface LayerSpec {
   /** Columns that hold an id of the same index and get the custom offset. */
@@ -38,7 +43,7 @@ const CHILD: LayerSpec = { ids: ['id', 'object_id'], hidden: shadowedObject('s')
 const LAYERS: Readonly<Record<string, LayerSpec>> = {
   ax_objects: {
     ids: ['id'],
-    hidden: `EXISTS (SELECT 1 FROM ${CUSTOM}.ax_objects c WHERE c.type = s.type AND c.name = s.name)`,
+    hidden: `EXISTS (SELECT 1 FROM ${CUSTOM}.ax_objects c WHERE c.type = s.type AND c.name = s.name COLLATE NOCASE)`,
   },
   ax_fields: CHILD,
   ax_methods: CHILD,
@@ -49,12 +54,12 @@ const LAYERS: Readonly<Record<string, LayerSpec>> = {
   ax_security_grants: CHILD,
   ax_labels: {
     ids: ['id'],
-    hidden: `EXISTS (SELECT 1 FROM ${CUSTOM}.ax_labels c WHERE c.label_id = s.label_id AND c.language = s.language)`,
+    hidden: `EXISTS (SELECT 1 FROM ${CUSTOM}.ax_labels c WHERE c.label_id = s.label_id COLLATE NOCASE AND c.language = s.language COLLATE NOCASE)`,
   },
   ax_label_sources: { ids: [], hidden: null },
   ax_xref: {
     ids: ['id'],
-    hidden: `EXISTS (SELECT 1 FROM ${CUSTOM}.ax_objects c WHERE c.type = s.from_type AND c.name = s.from_name)`,
+    hidden: `EXISTS (SELECT 1 FROM ${CUSTOM}.ax_objects c WHERE c.type = s.from_type AND c.name = s.from_name COLLATE NOCASE)`,
   },
 };
 

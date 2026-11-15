@@ -12,7 +12,7 @@ import {
   type RegistryStore,
 } from '../src/server/keyRegistry.js';
 import { createFileRegistryStore } from '../src/server/keyRegistryFile.js';
-import { createBlobRegistryStore, type RegistryBlob } from '../src/server/keyRegistryBlob.js';
+import { createBlobRegistryStore, collectRegistryBody, type RegistryBlob } from '../src/server/keyRegistryBlob.js';
 import { logger } from '../src/utils/logger.js';
 
 const NOW = '2026-11-08T10:00:00.000Z';
@@ -117,6 +117,20 @@ describe('blob registry store', () => {
     expect(v2).not.toBe(v1);
     await expect(store.write(emptyRegistryDocument(), v1)).rejects.toBeInstanceOf(KeyRegistryConflictError);
     expect((await store.read()).version).toBe(v2);
+  });
+
+  it('refuses an oversized declared length before reading a byte', async () => {
+    await expect(collectRegistryBody(1024 * 1024 + 1, (async function* () {})())).rejects.toThrow('larger than 1 MiB');
+  });
+
+  it('refuses a body that overruns the cap while streaming', async () => {
+    async function* chunks(): AsyncIterable<Uint8Array> {
+      yield Buffer.alloc(512 * 1024);
+      yield Buffer.alloc(512 * 1024);
+      yield Buffer.alloc(1); // 1 byte over the 1 MiB cap.
+    }
+    await expect(collectRegistryBody(undefined, chunks())).rejects.toThrow('larger than 1 MiB');
+    expect(Buffer.from(await collectRegistryBody(3, (async function* () { yield Buffer.from('abc'); })())).toString()).toBe('abc');
   });
 });
 

@@ -389,6 +389,53 @@ function tryHardLink(source: string, destination: string): boolean {
   }
 }
 
+/** How old an activation lock must be before a dead pid can declare it stale. */
+const ACTIVATION_LOCK_STALE_AFTER_MS = 60_000;
+
+/**
+ * Serializes index activation between processes sharing a host disk (App Service slots): the
+ * rename-and-cleanup sequence is not safe when two replicas activate into the same path. A lock
+ * whose recorded process is gone is taken over, so a crashed replica cannot block every restart.
+ */
+function withActivationLock<T>(target: string, action: () => T): T {
+  const lock = `${target}.lock`;
+  let descriptor: number;
+  try {
+    descriptor = fs.openSync(lock, 'wx', 0o600);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    let stale = false;
+    try {
+      const recorded = JSON.parse(fs.readFileSync(lock, 'utf8')) as { pid?: unknown; createdAt?: unknown };
+      const pid = typeof recorded.pid === 'number' ? recorded.pid : 0;
+      const createdAt = typeof recorded.createdAt === 'number' ? recorded.createdAt : 0;
+      if (Date.now() - createdAt >= ACTIVATION_LOCK_STALE_AFTER_MS) {
+        try {
+          process.kill(pid, 0);
+        } catch (check) {
+          stale = (check as NodeJS.ErrnoException).code === 'ESRCH';
+        }
+      }
+    } catch {
+      // Unreadable lock: never steal what cannot be proven stale.
+    }
+    if (!stale) throw new Error(`The artifact index ${target} is being activated by another process.`);
+    fs.rmSync(lock, { force: true });
+    descriptor = fs.openSync(lock, 'wx', 0o600);
+  }
+  fs.writeFileSync(descriptor, JSON.stringify({ pid: process.pid, createdAt: Date.now() }), { encoding: 'utf8' });
+  try {
+    return action();
+  } finally {
+    try {
+      fs.closeSync(descriptor);
+    } catch {
+      // Already closed.
+    }
+    fs.rmSync(lock, { force: true });
+  }
+}
+
 /**
  * Places an already validated bundle's database next to `targetDatabase`,
  * by hard link when `options.link` allows it or else by a re-verified copy,
@@ -406,24 +453,26 @@ export function activateValidatedArtifactBundle(
     path.dirname(target),
     `.${path.basename(target)}.${process.pid}.${Date.now()}.candidate`
   );
-  try {
-    if (options.link && tryHardLink(source, candidate)) {
-      // A link shares the bytes validation just hashed, so the multi-GB re-hash is skipped;
-      // the size check is a cheap guard against the bundle file being rewritten since.
-      if (fs.statSync(candidate).size !== validated.manifest.index.bytes) {
-        throw new Error('Artifact database size changed after validation.');
+  withActivationLock(target, () => {
+    try {
+      if (options.link && tryHardLink(source, candidate)) {
+        // A link shares the bytes validation just hashed, so the multi-GB re-hash is skipped;
+        // the size check is a cheap guard against the bundle file being rewritten since.
+        if (fs.statSync(candidate).size !== validated.manifest.index.bytes) {
+          throw new Error('Artifact database size changed after validation.');
+        }
+      } else {
+        options.beforeCopy?.();
+        fs.copyFileSync(source, candidate, fs.constants.COPYFILE_EXCL);
+        if (sha256File(candidate) !== validated.manifest.index.sha256) {
+          throw new Error('Staged artifact database SHA-256 changed during local copy.');
+        }
       }
-    } else {
-      options.beforeCopy?.();
-      fs.copyFileSync(source, candidate, fs.constants.COPYFILE_EXCL);
-      if (sha256File(candidate) !== validated.manifest.index.sha256) {
-        throw new Error('Staged artifact database SHA-256 changed during local copy.');
-      }
+      activateIndexFile(candidate, target);
+    } finally {
+      // Also covers rename() leaving the candidate in place when it is already a link to the target.
+      fs.rmSync(candidate, { force: true });
     }
-    activateIndexFile(candidate, target);
-  } finally {
-    // Also covers rename() leaving the candidate in place when it is already a link to the target.
-    fs.rmSync(candidate, { force: true });
-  }
+  });
   return validated;
 }

@@ -5,6 +5,7 @@ import { logger } from '../utils/logger.js';
 import { renderAdminPage } from './adminPage.js';
 import { KEY_NAME_PATTERN, digestKey, type ApiKeyEntry } from './apiKeys.js';
 import { KeyRegistryError, type KeyRegistry } from './keyRegistry.js';
+import { effectiveClientIp, isLocalPeer, LOOPBACK_ADDRESSES } from './clientAddress.js';
 
 /**
  * Key administration over HTTP, mounted at `/admin` ahead of API-key auth: the page, and `GET/POST /admin/api/keys`
@@ -29,7 +30,7 @@ const DEVELOPER_KEY_REFUSED = 'This is a developer key; key management needs the
 const HTTPS_ONLY = 'Key management is served over HTTPS only.';
 const NO_ADMIN_YET = 'No admin key yet: run keys reset-admin.';
 
-const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
+const LOOPBACK = LOOPBACK_ADDRESSES;
 
 function digestsEqual(a: string, b: string): boolean {
   return timingSafeEqual(Buffer.from(a, 'hex'), Buffer.from(b, 'hex'));
@@ -41,7 +42,7 @@ export function createKeyAdminRouter(options: KeyAdminOptions): Router {
   const staticDigests = new Set(staticKeys.map((entry) => digestKey(entry.key)));
   const staticNames = new Set(staticKeys.map((entry) => entry.name));
   const clientIp = (req: Request): string =>
-    options.trustProxyHops > 0 ? (req.ip ?? 'unknown') : (req.socket.remoteAddress ?? 'unknown');
+    effectiveClientIp(options.trustProxyHops, req.socket.remoteAddress, req.ip);
 
   router.use((_req: Request, res: Response, next: NextFunction) => {
     res.set({ 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' });
@@ -62,9 +63,14 @@ export function createKeyAdminRouter(options: KeyAdminOptions): Router {
     })
   );
 
-  // Over HTTPS, as the proxy in front reports it when one is trusted, or from this machine itself.
+  // The admin key travels in this request, so the transport must be encrypted on the app's own
+  // socket, or reported `https` by a trusted proxy that is genuinely the direct peer (loopback or
+  // a private address), or the caller must be on this machine. A remote client that connects
+  // directly — no proxy in between — is itself the "trusted" hop when TRUST_PROXY_HOPS is set and
+  // could claim `https` while the admin key travels in cleartext, so its X-Forwarded-Proto is ignored.
   router.use((req: Request, res: Response, next: NextFunction) => {
-    const secure = options.trustProxyHops > 0 ? req.protocol === 'https' : req.secure;
+    const proxied = options.trustProxyHops > 0 && req.protocol === 'https' && isLocalPeer(req.socket.remoteAddress);
+    const secure = (req.socket as { encrypted?: boolean }).encrypted === true || proxied;
     if (secure || ((options.allowLoopback ?? true) && LOOPBACK.has(req.socket.remoteAddress ?? ''))) return next();
     res.status(403).json({ error: HTTPS_ONLY });
   });

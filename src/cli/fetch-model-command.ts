@@ -37,17 +37,28 @@ export async function fetchModelCommand(options: FetchModelOptions): Promise<num
     return 0;
   }
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'd365-embedding-model-'));
+  // A stalled download must not hang the CLI forever (and Ctrl-C must leave no half-written model).
+  let cancelled = false;
+  const onSigint = () => {
+    cancelled = true;
+    console.error('Cancelled.');
+  };
+  process.on('SIGINT', onSigint);
   try {
     console.log(`Downloading ${ARCHIVE_URL}`);
-    const response = await fetch(ARCHIVE_URL);
+    const response = await fetch(ARCHIVE_URL, { signal: AbortSignal.timeout(120_000) });
     if (!response.ok) throw new Error(`Download failed: HTTP ${response.status}`);
     const archive = Buffer.from(await response.arrayBuffer());
+    if (cancelled) return 130;
     const actual = createHash('sha256').update(archive).digest('hex');
     if (actual !== ARCHIVE_SHA256) throw new Error(`Archive hash mismatch: expected ${ARCHIVE_SHA256}, got ${actual}`);
     const archivePath = path.join(work, 'onnx.tar.gz');
     fs.writeFileSync(archivePath, archive);
-    // tar ships with Linux, macOS and Windows 10+.
-    execFileSync('tar', ['-xzf', archivePath, '-C', work], { stdio: 'inherit' });
+    if (cancelled) return 130;
+    // tar ships with Linux, macOS and Windows 10+. The archive is hash-pinned before extraction;
+    // --no-same-owner keeps any metadata-planted owner/group out of the target (defense in depth).
+    execFileSync('tar', ['-xzf', archivePath, '-C', work, '--no-same-owner'], { stdio: 'inherit' });
+    if (cancelled) return 130;
 
     const staging = `${target}.partial`;
     fs.rmSync(staging, { recursive: true, force: true });
@@ -61,6 +72,7 @@ export async function fetchModelCommand(options: FetchModelOptions): Promise<num
     console.error(err instanceof Error ? err.message : String(err));
     return 1;
   } finally {
+    process.off('SIGINT', onSigint);
     fs.rmSync(work, { recursive: true, force: true });
   }
 }

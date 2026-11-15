@@ -330,7 +330,7 @@ describe('rollback and fail-closed manual recovery', () => {
     let targetFd: number | undefined;
     vi.spyOn(fs, 'openSync').mockImplementation((file, flags, mode) => {
       const fd = open(file, flags, mode);
-      if (file === prepared.target.path && flags === 'wx') targetFd = fd;
+      if (file === prepared.target.path && typeof flags === 'number' && (flags & fs.constants.O_EXCL) !== 0) targetFd = fd;
       return fd;
     });
     vi.spyOn(fs, 'writeFileSync').mockImplementation((file, data, options) => {
@@ -367,6 +367,31 @@ describe('rollback and fail-closed manual recovery', () => {
     const before = treeSnapshot(fixture.root);
     expect((await apply(handlers, prepared.changeId)).state).toBe('conflict');
     expect(treeSnapshot(fixture.root)).toEqual(before);
+  });
+
+  it('does not write metadata through a directory swapped for a symlink at open time', async () => {
+    const handlers = tools();
+    const prepared = await preview(handlers);
+    const parent = path.dirname(prepared.target.path);
+    const outside = fs.mkdtempSync(path.join(fixture.root, 'outside-'));
+    const moved = path.join(fixture.root, 'moved-type-dir');
+    const open = fs.openSync.bind(fs);
+    // Between the last path check and the exclusive open, a local attacker replaces the type
+    // directory with a symlink to a directory outside the tree.
+    vi.spyOn(fs, 'openSync').mockImplementation((file, flags, mode) => {
+      if (String(file) === prepared.target.path) {
+        fs.renameSync(parent, moved);
+        fs.symlinkSync(outside, parent, process.platform === 'win32' ? 'junction' : 'dir');
+      }
+      return open(file, flags, mode);
+    });
+    const response = await apply(handlers, prepared.changeId);
+    expect(response.state).toBe('recoveryRequired');
+    expect(response.written).toBe(null);
+    // Nothing was written outside the tree: the created file was empty and removed.
+    expect(fs.readdirSync(outside)).toEqual([]);
+    // The recovery report names the target path for the operator to reconcile.
+    expect(response.recoveryPaths).toContain(prepared.target.path);
   });
 
   it('reports committed changes honestly when final lock cleanup fails', async () => {
