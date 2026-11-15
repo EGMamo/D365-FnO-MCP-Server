@@ -396,8 +396,10 @@ function Resolve-Environment {
         if (-not $entry -or -not $entry.Value.value) { throw "Deployment '$name' has no '$key' output. Redeploy infra/main.bicep from master." }
         return [string]$entry.Value.value
     }
-    $script:WebApp = & $value webAppName
-    $script:WebAppHost = & $value webAppHostName
+    # A worker-only stack (deployApi = false) has no web app; the steps that need one say so themselves.
+    $optional = { param($key) $entry = $outputs.PSObject.Properties[$key]; if ($entry -and $entry.Value.value) { [string]$entry.Value.value } else { '' } }
+    $script:WebApp = & $optional webAppName
+    $script:WebAppHost = & $optional webAppHostName
     $script:Registry = & $value registryName
     $script:DeployClientId = & $value deployClientId
     $script:ArtifactAccountUrl = & $value artifactAccountUrl
