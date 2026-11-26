@@ -698,4 +698,65 @@ describe('Azure startup materialization', () => {
       bundle.manifest.bundleId.slice('sha256:'.length),
     ]);
   });
+
+  it('rolls back to the first acquisition after a second one, end to end through restarts', async () => {
+    // Acquisition 1 publishes and promotes; with no previous bundle there is nothing to roll back to.
+    const first = createBundle(FIRST_TIME);
+    await publishAndPromote(first);
+    await expect(
+      store.withAcquisitionLease((writer) => writer.rollback(1, policy, FIRST_TIME))
+    ).rejects.toThrow(/No previous validated artifact bundle/);
+    expect((await startup()).bundle.manifest.bundleId).toBe(first.manifest.bundleId);
+    expect(readFixtureName()).toBe('AzureBlobFixture');
+
+    // Acquisition 2 indexes different content, so the served index visibly changes.
+    const database = openDb(sourceDatabase);
+    database.prepare("UPDATE ax_objects SET name = 'SecondAcquisitionFixture'").run();
+    database.close();
+    const second = createBundle(SECOND_TIME);
+    expect(second.manifest.bundleId).not.toBe(first.manifest.bundleId);
+    await store.withAcquisitionLease(async (writer) => {
+      await writer.uploadBundle(second.directory, policy);
+      await writer.promote(second.manifest.bundleId, 1, policy, SECOND_TIME);
+    });
+    // Promotion alone changes nothing on disk until the replica restarts.
+    expect(readFixtureName()).toBe('AzureBlobFixture');
+    const afterSecond = await startup();
+    expect(afterSecond.bundle.manifest.bundleId).toBe(second.manifest.bundleId);
+    expect(afterSecond.pointerRevision).toBe(2);
+    expect(readFixtureName()).toBe('SecondAcquisitionFixture');
+
+    // Roll back. A stale revision is refused first, then the real one swaps active and previous.
+    await expect(
+      store.withAcquisitionLease((writer) => writer.rollback(1, policy, THIRD_TIME))
+    ).rejects.toThrow(/expected 1, current 2/);
+    const rolledBack = await store.withAcquisitionLease((writer) =>
+      writer.rollback(2, policy, THIRD_TIME)
+    );
+    expect(rolledBack.pointers.active?.bundleId).toBe(first.manifest.bundleId);
+    expect(rolledBack.pointers.previous?.bundleId).toBe(second.manifest.bundleId);
+    expect(readFixtureName()).toBe('SecondAcquisitionFixture');
+
+    // The restart pulls the first bundle again (its local copy was pruned) and serves its content.
+    const getBlob = vi.spyOn(container, 'getBlob');
+    const afterRollback = await startup();
+    expect(afterRollback.bundle.manifest.bundleId).toBe(first.manifest.bundleId);
+    expect(afterRollback.pointerRevision).toBe(3);
+    expect(afterRollback.reusedLocalBundle).toBe(false);
+    expect(downloadedBlobs(getBlob)).toHaveLength(1);
+    expectSingleLinkedCopy(afterRollback);
+    expect(readFixtureName()).toBe('AzureBlobFixture');
+    expect(fs.readdirSync(path.join(localStore, 'bundles'))).toEqual([
+      first.manifest.bundleId.slice('sha256:'.length),
+    ]);
+
+    // Rolling back again rolls forward to the second bundle, without rebuilding anything.
+    const rolledForward = await store.withAcquisitionLease((writer) =>
+      writer.rollback(3, policy, THIRD_TIME)
+    );
+    expect(rolledForward.pointers.active?.bundleId).toBe(second.manifest.bundleId);
+    expect(rolledForward.pointers.previous?.bundleId).toBe(first.manifest.bundleId);
+    expect((await startup()).bundle.manifest.bundleId).toBe(second.manifest.bundleId);
+    expect(readFixtureName()).toBe('SecondAcquisitionFixture');
+  });
 });
