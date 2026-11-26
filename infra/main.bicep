@@ -20,6 +20,9 @@ param location string = resourceGroup().location
 
 param tags object = {}
 
+@description('Deploy the API (App Service plan, site, staging slot) and the alerts that watch it. Set false to stand up only the worker, storage, vaults and registry, for example when the subscription has no App Service quota yet. A later redeploy with true adds them.')
+param deployApi bool = true
+
 @description('standard: production sizing. cheapest: the lowest-cost settings that keep the same architecture, for dev and test (P0v3 plan, Standard SSD worker disks, Basic ACR without a private endpoint, availability test from 2 locations every 15 minutes). Explicit SKU parameters below override the profile.')
 @allowed(['standard', 'cheapest'])
 param costProfile string = 'standard'
@@ -226,7 +229,7 @@ module registry 'modules/registry.bicep' = {
   }
 }
 
-module api 'modules/apiApp.bicep' = {
+module api 'modules/apiApp.bicep' = if (deployApi) {
   name: 'api'
   params: {
     location: location
@@ -272,7 +275,7 @@ module worker 'modules/worker.bicep' = {
   }
 }
 
-module alerts 'modules/alerts.bicep' = {
+module alerts 'modules/alerts.bicep' = if (deployApi) {
   name: 'alerts'
   params: {
     location: location
@@ -281,9 +284,9 @@ module alerts 'modules/alerts.bicep' = {
     actionGroupId: monitoring.outputs.actionGroupId
     workspaceId: monitoring.outputs.workspaceId
     appInsightsId: monitoring.outputs.appInsightsId
-    siteId: api.outputs.siteId
-    siteHostName: api.outputs.defaultHostName
-    planId: api.outputs.planId
+    siteId: api!.outputs.siteId
+    siteHostName: api!.outputs.defaultHostName
+    planId: api!.outputs.planId
     schedulerId: worker.outputs.schedulerId
     freshnessWindow: freshnessWindow
     authFailureThreshold: authFailureThreshold
@@ -294,9 +297,9 @@ module alerts 'modules/alerts.bicep' = {
 // Non-secret values for the GitHub environment (vars) and the worker's
 // acquisition.json destination block.
 output resourceGroupName string = resourceGroup().name
-output webAppName string = api.outputs.siteName
-output webAppHostName string = api.outputs.defaultHostName
-output stagingHostName string = api.outputs.stagingHostName
+output webAppName string = deployApi ? api!.outputs.siteName : ''
+output webAppHostName string = deployApi ? api!.outputs.defaultHostName : ''
+output stagingHostName string = deployApi ? api!.outputs.stagingHostName : ''
 output registryName string = registry.outputs.name
 output deployClientId string = identities.outputs.deployClientId
 output artifactAccountUrl string = storage.outputs.blobEndpoint
