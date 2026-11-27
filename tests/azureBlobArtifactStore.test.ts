@@ -10,9 +10,11 @@ import {
 } from '../src/indexer/azureBlobArtifactStore.js';
 import {
   type ArtifactCompatibilityPolicy,
+  RollbackHoldError,
   type ArtifactProvenance,
   type CapabilityInventory,
 } from '../src/indexer/artifactContract.js';
+import { AzureArtifactPublisher } from '../src/indexer/acquisitionWorker.js';
 import { createArtifactBundle } from '../src/indexer/artifactBundle.js';
 import { readArtifactPointers } from '../src/indexer/artifactPointers.js';
 import { materializeAzureArtifactIndex } from '../src/server/artifactStartup.js';
@@ -697,5 +699,109 @@ describe('Azure startup materialization', () => {
     expect(fs.readdirSync(path.join(localStore, 'bundles'))).toEqual([
       bundle.manifest.bundleId.slice('sha256:'.length),
     ]);
+  });
+
+  it('keeps a rollback in place when the scheduled run promotes, until promote or clear-rollback', async () => {
+    const first = createBundle(FIRST_TIME);
+    const second = createBundle(SECOND_TIME);
+    const third = createBundle(THIRD_TIME);
+    const fourth = createBundle('2026-10-03T13:00:00.000Z');
+
+    await store.withAcquisitionLease(async (writer) => {
+      for (const bundle of [first, second, third, fourth]) await writer.uploadBundle(bundle.directory, policy);
+      await writer.promote(first.manifest.bundleId, 0, policy, FIRST_TIME);
+      await writer.promote(second.manifest.bundleId, 1, policy, SECOND_TIME);
+      const rolledBack = await writer.rollback(2, policy, THIRD_TIME);
+      expect(rolledBack.pointers.rollbackHold?.supersededBundleId).toBe(second.manifest.bundleId);
+
+      await expect(writer.promote(third.manifest.bundleId, 3, policy)).rejects.toThrow(RollbackHoldError);
+      expect((await store.readPointers()).pointers).toEqual(rolledBack.pointers);
+
+      await expect(writer.clearRollbackHold(2)).rejects.toThrow(/expected 2, current 3/);
+      const cleared = await writer.clearRollbackHold(3);
+      expect(cleared.pointers.revision).toBe(4);
+      expect(cleared.pointers.rollbackHold).toBeUndefined();
+      expect((await writer.promote(third.manifest.bundleId, 4, policy)).pointers.active?.bundleId).toBe(
+        third.manifest.bundleId
+      );
+
+      await writer.rollback(5, policy);
+      const intentional = await writer.promote(fourth.manifest.bundleId, 6, policy, undefined, {
+        intentional: true,
+      });
+      expect(intentional.pointers.active?.bundleId).toBe(fourth.manifest.bundleId);
+      expect(intentional.pointers.rollbackHold).toBeUndefined();
+    });
+  });
+
+  it('uploads but does not promote when the nightly publisher meets a rollback hold', async () => {
+    const first = createBundle(FIRST_TIME);
+    const second = createBundle(SECOND_TIME);
+    const nightly = createBundle(THIRD_TIME);
+    await store.withAcquisitionLease(async (writer) => {
+      await writer.uploadBundle(first.directory, policy);
+      await writer.uploadBundle(second.directory, policy);
+      await writer.promote(first.manifest.bundleId, 0, policy, FIRST_TIME);
+      await writer.promote(second.manifest.bundleId, 1, policy, SECOND_TIME);
+      await writer.rollback(2, policy, THIRD_TIME);
+    });
+
+    const result = await new AzureArtifactPublisher(store).publish(nightly, policy, new AbortController().signal);
+
+    expect(result).toEqual({ revision: 3, heldByRollback: true });
+    const pointers = (await store.readPointers()).pointers;
+    expect(pointers.active?.bundleId).toBe(first.manifest.bundleId);
+    expect([...container.blobs.keys()].some((name) => name.includes(nightly.manifest.bundleId.slice(7)))).toBe(true);
+  });
+
+  it('prunes old bundles but always keeps active, previous and the rolled-back-from bundle', async () => {
+    const hour = (n: number) => `2026-10-03T${String(n).padStart(2, '0')}:00:00.000Z`;
+    const bundles = [10, 11, 12, 13, 14, 15].map((n) => createBundle(hour(n)));
+    const [b0, b1, b2, b3, b4, b5] = bundles;
+    const now = new Date('2026-10-10T00:00:00.000Z');
+
+    await store.withAcquisitionLease(async (writer) => {
+      for (const bundle of bundles) await writer.uploadBundle(bundle.directory, policy);
+      await writer.promote(b0.manifest.bundleId, 0, policy, hour(10));
+      await writer.promote(b1.manifest.bundleId, 1, policy, hour(11));
+      await writer.promote(b2.manifest.bundleId, 2, policy, hour(12));
+      await writer.rollback(3, policy, hour(13)); // active b1, previous b2 (bad), hold on b2
+
+      const dry = await writer.pruneBundles({ keepRecent: 1, now, dryRun: true });
+      expect(dry.deleted.sort()).toEqual([b0, b3, b4].map((b) => b.manifest.bundleId).sort());
+      expect(container.blobs.size).toBeGreaterThan(0);
+
+      const pruned = await writer.pruneBundles({ keepRecent: 1, now });
+      expect(pruned.deleted.sort()).toEqual([b0, b3, b4].map((b) => b.manifest.bundleId).sort());
+      expect(pruned.kept).toEqual(expect.arrayContaining([b1, b2, b5].map((b) => b.manifest.bundleId)));
+    });
+
+    const remaining = (id: string) =>
+      [...container.blobs.keys()].some((name) => name.startsWith(`bundles/${id.slice(7)}/`));
+    expect(remaining(b1.manifest.bundleId)).toBe(true);
+    expect(remaining(b2.manifest.bundleId)).toBe(true);
+    expect(remaining(b0.manifest.bundleId)).toBe(false);
+    expect(remaining(b3.manifest.bundleId)).toBe(false);
+    expect(remaining(b5.manifest.bundleId)).toBe(true);
+    // Rollback still works after pruning: the bundle it needs was kept.
+    await store.withAcquisitionLease(async (writer) => {
+      expect((await writer.rollback(4, policy)).pointers.active?.bundleId).toBe(b2.manifest.bundleId);
+    });
+  });
+
+  it('does not prune a bundle younger than the minimum age', async () => {
+    const old = createBundle(FIRST_TIME);
+    const recent = createBundle(SECOND_TIME);
+    const active = createBundle(THIRD_TIME);
+    await store.withAcquisitionLease(async (writer) => {
+      for (const bundle of [old, recent, active]) await writer.uploadBundle(bundle.directory, policy);
+      await writer.promote(active.manifest.bundleId, 0, policy, THIRD_TIME);
+      const result = await writer.pruneBundles({
+        keepRecent: 0,
+        minAgeHours: 24,
+        now: new Date('2026-10-04T10:30:00.000Z'), // old is 24.5h, recent is 23.5h
+      });
+      expect(result.deleted).toEqual([old.manifest.bundleId]);
+    });
   });
 });

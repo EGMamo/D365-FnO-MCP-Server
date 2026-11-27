@@ -14,6 +14,7 @@ import {
   canonicalJson,
   parseArtifactManifest,
   parseArtifactPointers,
+  RollbackHoldError,
   sha256File,
 } from './artifactContract.js';
 import {
@@ -128,6 +129,15 @@ function assertExpectedRevision(snapshot: ArtifactPointerSnapshot, expectedRevis
 function contentType(file: string): string {
   if (file.endsWith('.json')) return 'application/json';
   return 'application/vnd.sqlite3';
+}
+
+export const DEFAULT_RETAIN_RECENT_BUNDLES = 2;
+export const DEFAULT_RETAIN_MIN_AGE_HOURS = 24;
+
+export interface BundleRetentionResult {
+  kept: string[];
+  deleted: string[];
+  skipped: string[];
 }
 
 export class AzureBlobArtifactStore {
@@ -398,9 +408,12 @@ export class AzureBlobArtifactWriter {
     bundleId: string,
     expectedRevision: number,
     policy: ArtifactCompatibilityPolicy,
-    promotedAt = new Date().toISOString()
+    promotedAt = new Date().toISOString(),
+    options: { intentional?: boolean } = {}
   ): Promise<ArtifactPointerSnapshot> {
     await this.ensureLeaseHealthy();
+    const held = (await this.store.readPointers(this.signal)).pointers.rollbackHold;
+    if (held && !options.intentional) throw new RollbackHoldError(held);
     const candidate = await this.validateRemoteBundle(bundleId, policy, this.signal);
     const current = await this.store.readPointers(this.signal);
     assertExpectedRevision(current, expectedRevision);
@@ -439,6 +452,24 @@ export class AzureBlobArtifactWriter {
     return this.writePointers(next, current.etag);
   }
 
+  /** Removes a rollback hold so scheduled promotions resume. A no-op without one. */
+  async clearRollbackHold(
+    expectedRevision: number,
+    clearedAt = new Date().toISOString()
+  ): Promise<ArtifactPointerSnapshot> {
+    await this.ensureLeaseHealthy();
+    const current = await this.store.readPointers(this.signal);
+    assertExpectedRevision(current, expectedRevision);
+    if (!current.pointers.rollbackHold) return current;
+    const next: ArtifactPointers = {
+      ...current.pointers,
+      revision: current.pointers.revision + 1,
+      updatedAt: clearedAt,
+    };
+    delete next.rollbackHold;
+    return this.writePointers(next, current.etag);
+  }
+
   async rollback(
     expectedRevision: number,
     policy: ArtifactCompatibilityPolicy,
@@ -461,6 +492,9 @@ export class AzureBlobArtifactWriter {
         promotedAt,
       },
       previous: current.pointers.active,
+      ...(current.pointers.active
+        ? { rollbackHold: { supersededBundleId: current.pointers.active.bundleId, heldAt: promotedAt } }
+        : {}),
     };
     return this.writePointers(next, current.etag);
   }
@@ -484,6 +518,64 @@ export class AzureBlobArtifactWriter {
     await this.ensureLeaseHealthy();
     for (const name of blobNames) await this.container.getBlob(name).deleteIfExists(signal);
     return blobNames.length > 0;
+  }
+
+  /**
+   * Deletes old bundles. Never touches the active bundle, the previous bundle or the bundle a
+   * rollback moved away from, keeps the newest `keepRecent` of the rest, and leaves anything younger
+   * than `minAgeHours` or without a readable manifest (an unfinished upload).
+   */
+  async pruneBundles(
+    options: { keepRecent?: number; minAgeHours?: number; dryRun?: boolean; now?: Date } = {}
+  ): Promise<BundleRetentionResult> {
+    const keepRecent = options.keepRecent ?? DEFAULT_RETAIN_RECENT_BUNDLES;
+    const minAgeHours = options.minAgeHours ?? DEFAULT_RETAIN_MIN_AGE_HOURS;
+    if (!Number.isInteger(keepRecent) || keepRecent < 0) throw new Error('keepRecent must be a non-negative integer.');
+    if (!Number.isFinite(minAgeHours) || minAgeHours < 0) throw new Error('minAgeHours must be a non-negative number.');
+    const cutoff = (options.now ?? new Date()).getTime() - minAgeHours * 3_600_000;
+
+    await this.ensureLeaseHealthy();
+    const pointers = (await this.store.readPointers(this.signal)).pointers;
+    const protectedIds = new Set(
+      [pointers.active?.bundleId, pointers.previous?.bundleId, pointers.rollbackHold?.supersededBundleId].filter(
+        (id): id is string => Boolean(id)
+      )
+    );
+    const ids = new Set<string>();
+    for await (const name of this.container.listBlobNames('bundles/')) {
+      const match = /^bundles\/([a-f0-9]{64})\//.exec(name);
+      if (match) ids.add(`sha256:${match[1]}`);
+    }
+
+    const result: BundleRetentionResult = { kept: [], deleted: [], skipped: [] };
+    const candidates: Array<{ bundleId: string; time: number }> = [];
+    for (const bundleId of [...ids].sort()) {
+      if (protectedIds.has(bundleId)) {
+        result.kept.push(bundleId);
+        continue;
+      }
+      try {
+        const { manifest } = await this.store.readManifest(bundleId, this.signal);
+        candidates.push({
+          bundleId,
+          time: Math.max(Date.parse(manifest.createdAt), Date.parse(manifest.builtAt), Date.parse(manifest.publishedAt)),
+        });
+      } catch {
+        result.skipped.push(bundleId); // No readable manifest: possibly still uploading.
+      }
+    }
+    candidates.sort((a, b) => b.time - a.time || a.bundleId.localeCompare(b.bundleId));
+    for (const [index, candidate] of candidates.entries()) {
+      if (index < keepRecent || candidate.time > cutoff) {
+        result.kept.push(candidate.bundleId);
+      } else if (options.dryRun) {
+        result.deleted.push(candidate.bundleId);
+      } else {
+        await this.deleteUnreferencedBundle(candidate.bundleId, this.signal);
+        result.deleted.push(candidate.bundleId);
+      }
+    }
+    return result;
   }
 
   private async validateRemoteBundle(
