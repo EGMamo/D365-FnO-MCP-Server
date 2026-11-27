@@ -223,6 +223,27 @@ const ArtifactPointerSchema = z
   })
   .strict();
 
+const ArtifactRollbackHoldSchema = z
+  .object({
+    /** The bundle the rollback moved away from. */
+    supersededBundleId: BundleIdSchema,
+    heldAt: IsoDateSchema,
+  })
+  .strict();
+
+export type ArtifactRollbackHold = z.infer<typeof ArtifactRollbackHoldSchema>;
+
+/** Thrown when an unattended promotion meets a rollback hold. */
+export class RollbackHoldError extends Error {
+  constructor(readonly hold: ArtifactRollbackHold) {
+    super(
+      `A rollback from ${hold.supersededBundleId} (${hold.heldAt}) is in effect, so the active bundle ` +
+        'was not replaced. Promote a bundle explicitly or run "artifact clear-rollback" to resume.'
+    );
+    this.name = 'RollbackHoldError';
+  }
+}
+
 const ArtifactPointersSchema = z
   .object({
     contract: z.literal(ARTIFACT_CONTRACT_NAME),
@@ -231,6 +252,12 @@ const ArtifactPointersSchema = z
     updatedAt: IsoDateSchema,
     active: ArtifactPointerSchema.nullable(),
     previous: ArtifactPointerSchema.nullable(),
+    /**
+     * Set by a rollback and absent otherwise. While present, an unattended promotion (the scheduled
+     * acquisition run) leaves the rolled-back bundle active; only an intentional promotion or an
+     * explicit clear removes it.
+     */
+    rollbackHold: ArtifactRollbackHoldSchema.optional(),
   })
   .strict();
 

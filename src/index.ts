@@ -198,6 +198,9 @@ async function run(argv: string[]): Promise<CliResult> {
           expectedRevision: flagString(flags, 'expected-revision'),
           json: flagBool(flags, 'json'),
           verify: flagBool(flags, 'verify'),
+          keepRecent: flagString(flags, 'keep-recent'),
+          minAgeHours: flagString(flags, 'min-age-hours'),
+          dryRun: flagBool(flags, 'dry-run'),
         }),
       };
     }

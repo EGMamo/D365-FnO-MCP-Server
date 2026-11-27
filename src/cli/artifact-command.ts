@@ -12,11 +12,13 @@ import {
 } from '../indexer/azureBlobArtifactStoreSdk.js';
 import type {
   ArtifactPointerSnapshot,
+  BundleRetentionResult,
   AzureBlobArtifactStore,
   AzureBlobArtifactWriter,
 } from '../indexer/azureBlobArtifactStore.js';
 
-export type ArtifactAction = 'publish' | 'status' | 'promote' | 'rollback';
+const ARTIFACT_ACTIONS = ['publish', 'status', 'promote', 'rollback', 'clear-rollback', 'prune'] as const;
+export type ArtifactAction = (typeof ARTIFACT_ACTIONS)[number];
 
 export interface ArtifactCommandOptions {
   action?: string;
@@ -25,6 +27,9 @@ export interface ArtifactCommandOptions {
   expectedRevision?: string;
   json?: boolean;
   verify?: boolean;
+  keepRecent?: string;
+  minAgeHours?: string;
+  dryRun?: boolean;
   store?: AzureBlobArtifactStore;
   env?: NodeJS.ProcessEnv;
 }
@@ -93,8 +98,8 @@ export async function artifactCommand(options: ArtifactCommandOptions): Promise<
   const env = options.env ?? process.env;
   try {
     const action = options.action as ArtifactAction | undefined;
-    if (!action || !['publish', 'status', 'promote', 'rollback'].includes(action)) {
-      return fail(options, 'Artifact action must be one of: publish, status, promote, rollback.');
+    if (!action || !ARTIFACT_ACTIONS.includes(action)) {
+      return fail(options, `Artifact action must be one of: ${ARTIFACT_ACTIONS.join(', ')}.`);
     }
     const store = options.store ?? createStore(env);
     const checkedPolicy = policy(env);
@@ -150,10 +155,38 @@ export async function artifactCommand(options: ArtifactCommandOptions): Promise<
       const target = bundleId(options.bundleId);
       let snapshot: ArtifactPointerSnapshot | undefined;
       await store.withAcquisitionLease(async (artifactWriter) => {
-        snapshot = await artifactWriter.promote(target, revision(options.expectedRevision), checkedPolicy);
+        // A person running promote is the intentional promotion that ends a rollback hold.
+        snapshot = await artifactWriter.promote(
+          target,
+          revision(options.expectedRevision),
+          checkedPolicy,
+          undefined,
+          { intentional: true }
+        );
       });
       if (!snapshot) throw new Error('Promotion did not return a pointer snapshot.');
       output(options, { action, ...snapshot });
+      return 0;
+    }
+
+    if (action === 'clear-rollback') {
+      let snapshot: ArtifactPointerSnapshot | undefined;
+      await store.withAcquisitionLease(async (artifactWriter) => {
+        snapshot = await artifactWriter.clearRollbackHold(revision(options.expectedRevision));
+      });
+      if (!snapshot) throw new Error('Clearing the rollback hold did not return a pointer snapshot.');
+      output(options, { action, ...snapshot });
+      return 0;
+    }
+
+    if (action === 'prune') {
+      const keepRecent = options.keepRecent === undefined ? undefined : positiveInteger(options.keepRecent, '--keep-recent');
+      const minAgeHours = options.minAgeHours === undefined ? undefined : positiveInteger(options.minAgeHours, '--min-age-hours');
+      let retention: BundleRetentionResult | undefined;
+      await store.withAcquisitionLease(async (artifactWriter) => {
+        retention = await artifactWriter.pruneBundles({ keepRecent, minAgeHours, dryRun: options.dryRun });
+      });
+      output(options, { action, dryRun: Boolean(options.dryRun), ...retention });
       return 0;
     }
 

@@ -16,7 +16,7 @@ A Model Context Protocol (MCP) server that gives AI coding assistants first-clas
 - **Hosted MCP transport** — Streamable HTTP protected by named API keys for remote/shared use.
 - **SQLite index** — an incrementally built D365 SDK index; production candidates are built, validated and atomically promoted by Azure automation.
 - **CLI** — `setup`, `doctor`, `index`, `index-status` and `serve`, plus import commands for compiler cross-references, Trace Parser data, best-practice logs and release plans (see the [CLI reference](#cli-reference)).
-- **Artifact operations** — `artifact publish`, `artifact status`, `artifact promote` and `artifact rollback` provide idempotent Azure Blob publication and optimistic-concurrency deployment control.
+- **Artifact operations** — `artifact publish`, `artifact status`, `artifact promote`, `artifact rollback`, `artifact clear-rollback` and `artifact prune` provide idempotent Azure Blob publication and optimistic-concurrency deployment control.
 - **Hosted mode** — a read-only Azure API serves the active Azure-built index. Developer machines never build, upload or activate production indexes. Scheduled hosted acquisition records the downloaded XRef backup for provenance but does not restore/import it, so hosted bundles currently have no compiler usage data. See [docs/hosted-deployment.md](docs/hosted-deployment.md).
 - **Visual Studio extension** — exposes one loopback MCP gateway for Copilot, proxies the hosted tools, keeps the Azure key in Windows Credential Manager, reports the installed SDK version and adds local workspace tools. See [docs/visual-studio-extension.md](docs/visual-studio-extension.md).
 - **Hybrid gateway** — `gateway` runs a loopback MCP endpoint that indexes only your custom models on your machine, forwards everything else to the hosted server and merges both into search, label, schema, reference and impact answers. The contents of your custom code are never sent to the hosted server. See [docs/hybrid-gateway.md](docs/hybrid-gateway.md).
@@ -167,6 +167,12 @@ d365-fno-mcp-server artifact promote \
 d365-fno-mcp-server artifact rollback --expected-revision 4 --json
 ```
 
+A rollback sticks: it records a hold in the pointers, and the scheduled acquisition run then uploads its
+new bundle without promoting it (the run reports `promotionHeldByRollback`). `artifact promote` or
+`artifact clear-rollback` ends the hold. After each scheduled run, bundles other than the active, previous
+and rolled-back-from ones are pruned, keeping the newest two and anything under 24 hours old;
+`artifact prune --dry-run` previews that. `scripts/rollback.ps1` wraps status, rollback and clear-rollback.
+
 Promotion and rollback fail when the expected pointer revision is stale. Promotion first
 materializes and validates every remote bundle file, while publication uses create-only blob
 conditions and verifies each upload, so retries are safe and incomplete uploads cannot be promoted.
@@ -311,8 +317,15 @@ Commands:
   artifact promote         Validate and promote a remotely complete bundle
       --bundle-id <id>     Immutable sha256 bundle ID
       --expected-revision <n> Required pointer revision for optimistic concurrency
-  artifact rollback        Validate and activate the previous bundle
+  artifact rollback        Validate and activate the previous bundle. The rollback holds: scheduled runs upload
+                           new bundles but do not promote them until you run promote or clear-rollback
       --expected-revision <n> Required pointer revision for optimistic concurrency
+  artifact clear-rollback  Lift the rollback hold so scheduled promotions resume
+      --expected-revision <n> Required pointer revision for optimistic concurrency
+  artifact prune           Delete old bundles; the active, previous and rolled-back-from bundles are always kept
+      --keep-recent <n>    Other bundles to keep, newest first (default 2)
+      --min-age-hours <n>  Never delete a bundle younger than this (default 24)
+      --dry-run            List what would be deleted
   artifact commands accept --json and use D365_ARTIFACT_* configuration.
 
 Options:
