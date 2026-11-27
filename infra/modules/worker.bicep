@@ -238,7 +238,7 @@ resource scheduler 'Microsoft.Logic/workflows@2019-05-01' = {
             timeZone: 'UTC'
             // A recurrence without a start time also runs once whenever the workflow is saved or
             // enabled. A start time in the past only anchors the schedule.
-            startTime: '2026-01-01T00:00:00'
+            startTime: '2026-01-01T00:00:00Z'
             schedule: { hours: scheduleHoursUtc, minutes: [0] }
           }
           runtimeConfiguration: {
