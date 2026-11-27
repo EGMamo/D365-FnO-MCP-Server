@@ -167,8 +167,15 @@ Commands:
   artifact promote         Validate and promote a remotely complete bundle
       --bundle-id <id>     Immutable sha256 bundle ID
       --expected-revision <n> Required pointer revision for optimistic concurrency
-  artifact rollback        Validate and activate the previous bundle
+  artifact rollback        Validate and activate the previous bundle. The rollback holds: scheduled runs upload
+                           new bundles but do not promote them until you run promote or clear-rollback
       --expected-revision <n> Required pointer revision for optimistic concurrency
+  artifact clear-rollback  Lift the rollback hold so scheduled promotions resume
+      --expected-revision <n> Required pointer revision for optimistic concurrency
+  artifact prune           Delete old bundles; the active, previous and rolled-back-from bundles are always kept
+      --keep-recent <n>    Other bundles to keep, newest first (default 2)
+      --min-age-hours <n>  Never delete a bundle younger than this (default 24)
+      --dry-run            List what would be deleted
   artifact commands accept --json and use D365_ARTIFACT_* configuration.
 
 Options:

@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  RollbackHoldError,
   ARTIFACT_DATABASE_FILE,
   ARTIFACT_VALIDATION_FILE,
   ArtifactProvenanceSchema,
@@ -21,6 +22,7 @@ import {
   promoteArtifactBundle,
   readArtifactPointers,
   rollbackArtifactBundle,
+  clearArtifactRollbackHold,
 } from '../src/indexer/artifactPointers.js';
 import {
   INDEX_SCHEMA_VERSION,
@@ -291,6 +293,50 @@ describe('Azure artifact contract', () => {
     expect(rolledBack.active?.bundleId).toBe(first.manifest.bundleId);
     expect(rolledBack.previous?.bundleId).toBe(second.manifest.bundleId);
     expect(readArtifactPointers(root)).toEqual(rolledBack);
+  });
+
+  it('keeps a rollback in place against unattended promotion until an intentional promote or a clear', () => {
+    const first = createBundle(FIRST_TIME);
+    const second = createBundle(SECOND_TIME);
+    const third = createBundle('2026-10-03T12:00:00.000Z');
+    const fourth = createBundle('2026-10-03T13:00:00.000Z');
+    promoteArtifactBundle(root, first.manifest.bundleId, 0, policy, FIRST_TIME);
+    promoteArtifactBundle(root, second.manifest.bundleId, 1, policy, SECOND_TIME);
+    const rolledBack = rollbackArtifactBundle(root, 2, policy, '2026-10-03T12:30:00.000Z');
+    expect(rolledBack.rollbackHold?.supersededBundleId).toBe(second.manifest.bundleId);
+
+    // The nightly run: refused, pointers untouched.
+    expect(() => promoteArtifactBundle(root, third.manifest.bundleId, 3, policy)).toThrow(RollbackHoldError);
+    expect(readArtifactPointers(root)).toEqual(rolledBack);
+
+    // An intentional promotion replaces the rolled-back bundle and ends the hold.
+    const promoted = promoteArtifactBundle(root, third.manifest.bundleId, 3, policy, undefined, {
+      intentional: true,
+    });
+    expect(promoted.active?.bundleId).toBe(third.manifest.bundleId);
+    expect(promoted.rollbackHold).toBeUndefined();
+    expect(promoteArtifactBundle(root, fourth.manifest.bundleId, 4, policy).active?.bundleId).toBe(
+      fourth.manifest.bundleId
+    );
+  });
+
+  it('clears a rollback hold explicitly, rejecting a stale revision', () => {
+    const first = createBundle(FIRST_TIME);
+    const second = createBundle(SECOND_TIME);
+    const third = createBundle('2026-10-03T12:00:00.000Z');
+    promoteArtifactBundle(root, first.manifest.bundleId, 0, policy, FIRST_TIME);
+    promoteArtifactBundle(root, second.manifest.bundleId, 1, policy, SECOND_TIME);
+    rollbackArtifactBundle(root, 2, policy);
+
+    expect(() => clearArtifactRollbackHold(root, 2)).toThrow(/expected 2, current 3/);
+    const cleared = clearArtifactRollbackHold(root, 3);
+    expect(cleared.revision).toBe(4);
+    expect(cleared.rollbackHold).toBeUndefined();
+    expect(cleared.active?.bundleId).toBe(first.manifest.bundleId);
+    expect(clearArtifactRollbackHold(root, 4).revision).toBe(4);
+    expect(promoteArtifactBundle(root, third.manifest.bundleId, 4, policy).active?.bundleId).toBe(
+      third.manifest.bundleId
+    );
   });
 
   it('never points active at an unknown bundle', () => {

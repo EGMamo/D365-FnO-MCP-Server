@@ -10,6 +10,7 @@ import {
   canonicalJson,
   parseArtifactManifest,
   parseArtifactPointers,
+  RollbackHoldError,
 } from './artifactContract.js';
 import { artifactBundleDirectory, validateArtifactBundle } from './artifactBundle.js';
 
@@ -141,16 +142,26 @@ function bundleTimestamp(bundle: { manifest: { createdAt: string; builtAt: strin
   );
 }
 
+export interface PromoteOptions {
+  /**
+   * True for a person's explicit promotion: it replaces a rolled-back bundle and clears the rollback
+   * hold. False (the default, used by scheduled runs) throws RollbackHoldError while a hold is set.
+   */
+  intentional?: boolean;
+}
+
 export function promoteArtifactBundle(
   storeRoot: string,
   bundleId: string,
   expectedRevision: number,
   policy: ArtifactCompatibilityPolicy,
-  promotedAt = new Date().toISOString()
+  promotedAt = new Date().toISOString(),
+  options: PromoteOptions = {}
 ): ArtifactPointers {
   return withPointerLock(storeRoot, () => {
     const current = readArtifactPointers(storeRoot);
     requireRevision(current, expectedRevision);
+    if (current.rollbackHold && !options.intentional) throw new RollbackHoldError(current.rollbackHold);
     const candidate = validateArtifactBundle(artifactBundleDirectory(storeRoot, bundleId), policy);
     if (current.active?.bundleId === bundleId) return current;
     if (current.active) {
@@ -198,7 +209,25 @@ export function rollbackArtifactBundle(
       updatedAt: promotedAt,
       active: { bundleId: current.previous.bundleId, promotedAt },
       previous: current.active,
+      ...(current.active ? { rollbackHold: { supersededBundleId: current.active.bundleId, heldAt: promotedAt } } : {}),
     };
+    writePointersAtomic(storeRoot, next);
+    return next;
+  });
+}
+
+/** Removes a rollback hold so scheduled promotions resume. A no-op (no revision bump) without one. */
+export function clearArtifactRollbackHold(
+  storeRoot: string,
+  expectedRevision: number,
+  clearedAt = new Date().toISOString()
+): ArtifactPointers {
+  return withPointerLock(storeRoot, () => {
+    const current = readArtifactPointers(storeRoot);
+    requireRevision(current, expectedRevision);
+    if (!current.rollbackHold) return current;
+    const next: ArtifactPointers = { ...current, revision: current.revision + 1, updatedAt: clearedAt };
+    delete next.rollbackHold;
     writePointersAtomic(storeRoot, next);
     return next;
   });

@@ -18,6 +18,7 @@ import {
   ARTIFACT_CAPABILITY_NAMES,
   type ArtifactCompatibilityPolicy,
   type ArtifactValidationReport,
+  RollbackHoldError,
 } from './artifactContract.js';
 import {
   AzureBlobArtifactStore,
@@ -91,6 +92,8 @@ export interface AcquisitionRunStatus {
   phases: Record<AcquisitionPhase, AcquisitionPhaseRecord>;
   bundleId?: string;
   pointerRevision?: number;
+  /** True when the bundle was uploaded but a rollback hold kept it from being promoted. */
+  promotionHeldByRollback?: boolean;
   validation?: {
     status: ArtifactValidationReport['status'];
     checks: ArtifactValidationReport['checks'];
@@ -103,7 +106,7 @@ export interface ArtifactPublisher {
     bundle: ValidatedArtifactBundle,
     policy: ArtifactCompatibilityPolicy,
     signal: AbortSignal
-  ): Promise<{ revision: number }>;
+  ): Promise<{ revision: number; heldByRollback?: boolean }>;
 }
 
 export interface AcquisitionWorkerDependencies {
@@ -486,7 +489,7 @@ export class LocalArtifactPublisher implements ArtifactPublisher {
     bundle: ValidatedArtifactBundle,
     policy: ArtifactCompatibilityPolicy,
     signal: AbortSignal
-  ): Promise<{ revision: number }> {
+  ): Promise<{ revision: number; heldByRollback?: boolean }> {
     signal.throwIfAborted();
     const destination = artifactBundleDirectory(this.storeRoot, bundle.manifest.bundleId);
     const bundlesRoot = path.dirname(destination);
@@ -507,13 +510,19 @@ export class LocalArtifactPublisher implements ArtifactPublisher {
     // promoteArtifactBundle refuses a bundle that is not newer than the active one, reading only
     // the active manifest: the active bundle may predate the current policy.
     const pointers = readArtifactPointers(this.storeRoot);
-    const promoted = promoteArtifactBundle(
-      this.storeRoot,
-      bundle.manifest.bundleId,
-      pointers.revision,
-      policy
-    );
-    return { revision: promoted.revision };
+    try {
+      const promoted = promoteArtifactBundle(
+        this.storeRoot,
+        bundle.manifest.bundleId,
+        pointers.revision,
+        policy
+      );
+      return { revision: promoted.revision };
+    } catch (error) {
+      // A rollback outranks the schedule: keep the bundle uploaded, leave the pointers alone.
+      if (error instanceof RollbackHoldError) return { revision: pointers.revision, heldByRollback: true };
+      throw error;
+    }
   }
 }
 
@@ -524,20 +533,33 @@ export class AzureArtifactPublisher implements ArtifactPublisher {
     bundle: ValidatedArtifactBundle,
     policy: ArtifactCompatibilityPolicy,
     signal: AbortSignal
-  ): Promise<{ revision: number }> {
+  ): Promise<{ revision: number; heldByRollback?: boolean }> {
     signal.throwIfAborted();
     await this.store.uploadBundle(bundle.directory, policy, signal);
     signal.throwIfAborted();
     let promoted: ArtifactPointerSnapshot | undefined;
+    let heldRevision: number | undefined;
     await this.store.withAcquisitionLease(async (writer) => {
       signal.throwIfAborted();
       const current = await this.store.readPointers(signal);
-      promoted = await writer.promote(
-        bundle.manifest.bundleId,
-        current.pointers.revision,
-        policy
-      );
+      try {
+        promoted = await writer.promote(
+          bundle.manifest.bundleId,
+          current.pointers.revision,
+          policy
+        );
+      } catch (error) {
+        // A rollback outranks the schedule: keep the bundle uploaded, leave the pointers alone.
+        if (!(error instanceof RollbackHoldError)) throw error;
+        heldRevision = current.pointers.revision;
+      }
+      try {
+        await writer.pruneBundles();
+      } catch {
+        // Retention is housekeeping: a failure must not fail a run whose bundle is already safe.
+      }
     }, signal);
+    if (heldRevision !== undefined) return { revision: heldRevision, heldByRollback: true };
     if (!promoted) throw new Error('Azure artifact promotion did not return a pointer snapshot.');
     return { revision: promoted.pointers.revision };
   }
@@ -658,6 +680,7 @@ export async function runAcquisitionWorker(
       if (!bundle) throw new Error('Validated artifact bundle is unavailable.');
       const result = await publisher.publish(bundle, policy, controller.signal);
       status.pointerRevision = result.revision;
+      if (result.heldByRollback) status.promotionHeldByRollback = true;
     });
     completedPhases = true;
   } catch (error) {
