@@ -168,35 +168,32 @@ jobs:
             -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"deploy-smoke","version":"0"}}}' \
             | grep -q '"serverInfo"'
 
-      # A swap restarts the staging container with production's settings, and it then downloads
-      # and validates the index bundle again, which takes several minutes. A plain swap gives the
-      # warm-up only about half a minute and fails ("application initialization ... took too long").
-      # So swap in two phases: preview applies production's settings to the staging slot, we wait
-      # for it to report ready on its own clock, then completing the swap is instant.
+      # A swap restarts the staging container with production's settings, and the restarted
+      # container downloads and validates the bundle again, which takes minutes. Azure's swap
+      # warm-up does not wait that long, so swap in two phases: the preview applies production's
+      # settings to staging (its warm-up accepts the 503 that /health answers while the bundle
+      # loads, see WEBSITE_SWAP_WARMUP_PING_STATUSES), this step waits for staging's /health,
+      # and only then completes the swap. If staging never gets ready, the swap is cancelled
+      # and production is untouched.
       - name: Swap staging into production
         run: |
-          az webapp deployment slot swap \
-            --resource-group "${{ vars.RESOURCE_GROUP }}" --name "${{ vars.WEBAPP_NAME }}" \
-            --slot "$SLOT" --target-slot production --action preview
+          swap() {
+            az webapp deployment slot swap \
+              --resource-group "${{ vars.RESOURCE_GROUP }}" --name "${{ vars.WEBAPP_NAME }}" \
+              --slot "$SLOT" --target-slot production --action "$1"
+          }
+          swap preview
           URL="https://${{ steps.hosts.outputs.staging }}"
-          READY=false
-          for _ in $(seq 1 120); do
+          for _ in $(seq 1 180); do
             if curl -fsS "$URL/health" >/dev/null 2>&1; then
-              READY=true
-              break
+              swap swap
+              exit 0
             fi
             sleep 10
           done
-          if [ "$READY" != "true" ]; then
-            echo "The staging slot did not become healthy with production's settings within 20 minutes; cancelling the swap." >&2
-            az webapp deployment slot swap \
-              --resource-group "${{ vars.RESOURCE_GROUP }}" --name "${{ vars.WEBAPP_NAME }}" \
-              --slot "$SLOT" --target-slot production --action reset
-            exit 1
-          fi
-          az webapp deployment slot swap \
-            --resource-group "${{ vars.RESOURCE_GROUP }}" --name "${{ vars.WEBAPP_NAME }}" \
-            --slot "$SLOT" --target-slot production --action swap
+          echo "The staging slot did not become healthy with production's settings within 30 minutes; cancelling the swap." >&2
+          swap reset
+          exit 1
 
       - name: Verify production, or swap back
         run: |
