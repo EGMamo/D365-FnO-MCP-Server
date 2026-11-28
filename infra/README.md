@@ -203,7 +203,10 @@ These names match the startup materialization in the server configuration (`src/
 
 `.github/workflows/deploy.yml` pushes the image, starts it in the `staging` slot, waits for the slot
 to report healthy (it has then materialized and validated the bundle), smoke-tests `/mcp` and swaps.
-The swap warm-up pings `/health` again and aborts if the slot is not ready. If production is not
+The swap runs in two phases because a swap restarts the staging container with production's settings
+and it downloads the bundle again, which takes minutes and exceeds a plain swap's warm-up: `--action
+preview` first, then the workflow waits up to 20 minutes for the staging slot's `/health`, then `--action
+swap` completes it (or `--action reset` cancels it if the slot never becomes ready). If production is not
 healthy after the swap, the workflow swaps back. It then stops `staging` while production is
 healthy (otherwise it leaves `staging` running and warns), and the next deployment starts it again.
 
