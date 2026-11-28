@@ -27,7 +27,7 @@ public sealed class ExtensionSettings
 
     /// <summary>
     /// The XPP configuration (Manage local XPP configurations) to follow, by name. Empty picks it automatically:
-    /// the only one, else the most recently saved.
+    /// the one ticked Current in Visual Studio, else the only one, else the most recently saved.
     /// </summary>
     public string XppConfigurationName { get; set; } = string.Empty;
 

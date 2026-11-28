@@ -100,6 +100,22 @@ public sealed class XppConfigurationTests : IDisposable
     }
 
     [Fact]
+    public void FollowsVisualStudiosCurrentConfigurationOverTheNewest()
+    {
+        WriteConfig("older", "10.0.1", @"C:\a", new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+        WriteConfig("newer", "10.0.2", @"C:\b", new DateTime(2026, 6, 1, 0, 0, 0, DateTimeKind.Utc));
+        IReadOnlyList<XppConfiguration> all = XppConfigurations.List(this.root);
+        string olderFile = all.Single(c => c.Name == "older").FilePath;
+
+        XppConfigurationChoice choice = XppConfigurations.Choose(all, null, olderFile.ToUpperInvariant());
+
+        Assert.Equal("older", choice.Configuration?.Name);
+        Assert.Contains("Current", choice.Reason, StringComparison.Ordinal);
+        Assert.Equal("newer", XppConfigurations.Choose(all, "newer", olderFile).Configuration?.Name);
+        Assert.Equal("newer", XppConfigurations.Choose(all, null, Path.Combine(this.root, "gone__10.0.3.json")).Configuration?.Name);
+    }
+
+    [Fact]
     public void APinWinsAndAMissingPinChoosesNothing()
     {
         WriteConfig("older", "10.0.1", @"C:\a", new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc));

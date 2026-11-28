@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Microsoft.Win32;
 
 namespace D365FnoMcp.Core;
 
@@ -116,12 +117,41 @@ public static class XppConfigurations
         }
     }
 
+    /// <summary>Where Visual Studio's D365 tools record the Current configuration (under HKEY_CURRENT_USER).</summary>
+    public const string CurrentConfigurationKey = @"Software\Microsoft\Dynamics\AX7\Development\Configurations";
+
+    /// <summary>The value holding the Current configuration's JSON file path.</summary>
+    public const string CurrentConfigurationValue = "CurrentMetadataConfig";
+
     /// <summary>
-    /// Picks the configuration to follow: the one the developer pinned, else the only one, else the most
-    /// recently saved. The files carry no "Current" flag, but ticking Current in Manage local XPP
-    /// configurations saves that configuration's file, so the newest is normally the Current one.
+    /// The JSON file of the configuration ticked Current in Manage local XPP configurations, from
+    /// <c>HKCU\Software\Microsoft\Dynamics\AX7\Development\Configurations\CurrentMetadataConfig</c>; null when
+    /// it is not set, or off Windows.
     /// </summary>
-    public static XppConfigurationChoice Choose(IReadOnlyList<XppConfiguration> configurations, string? pinnedName)
+    public static string? CurrentConfigurationFile()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return null;
+        }
+
+        try
+        {
+            using RegistryKey? key = Registry.CurrentUser.OpenSubKey(CurrentConfigurationKey);
+            return key?.GetValue(CurrentConfigurationValue) is string file && !string.IsNullOrWhiteSpace(file) ? file.Trim() : null;
+        }
+        catch (Exception ex) when (ex is System.Security.SecurityException or IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Picks the configuration to follow: the one the developer pinned, else the one Visual Studio has as
+    /// Current (<paramref name="currentFile"/>, from <see cref="CurrentConfigurationFile"/>), else the only one,
+    /// else the most recently saved.
+    /// </summary>
+    public static XppConfigurationChoice Choose(IReadOnlyList<XppConfiguration> configurations, string? pinnedName, string? currentFile = null)
     {
         if (!string.IsNullOrWhiteSpace(pinnedName))
         {
@@ -129,6 +159,15 @@ public static class XppConfigurations
             return pinned is not null
                 ? new(pinned, $"XPP configuration '{pinned.Name}' (selected in Extensions > D365 F&O MCP > Select XPP Configuration...).")
                 : new(null, $"The selected XPP configuration '{pinnedName.Trim()}' no longer exists; select another one (Extensions > D365 F&O MCP > Select XPP Configuration...).");
+        }
+
+        if (!string.IsNullOrWhiteSpace(currentFile))
+        {
+            XppConfiguration? current = configurations.FirstOrDefault(c => SameFile(c.FilePath, currentFile));
+            if (current is not null)
+            {
+                return new(current, $"XPP configuration '{current.Name}' (Current in Manage local XPP configurations).");
+            }
         }
 
         return configurations.Count switch
@@ -140,7 +179,8 @@ public static class XppConfigurations
     }
 
     /// <summary>Choose over the configurations in this user's folder.</summary>
-    public static XppConfigurationChoice ChooseDefault(string? pinnedName) => Choose(List(DefaultFolder()), pinnedName);
+    public static XppConfigurationChoice ChooseDefault(string? pinnedName) =>
+        Choose(List(DefaultFolder()), pinnedName, CurrentConfigurationFile());
 
     /// <summary>
     /// A Windows-authentication connection string for the configuration's cross-reference database, or null when
@@ -187,8 +227,21 @@ public static class XppConfigurations
         XppConfiguration newest = configurations.OrderByDescending(c => c.LastWriteTimeUtc).First();
         return new(
             newest,
-            $"XPP configuration '{newest.Name}', the most recently saved of {configurations.Count} (ticking Current saves it). If Visual Studio's Current configuration is another one, " +
+            $"XPP configuration '{newest.Name}', the most recently saved of {configurations.Count} (Visual Studio names no Current one). If you use another one, " +
             "select it in Extensions > D365 F&O MCP > Select XPP Configuration....");
+    }
+
+    private static bool SameFile(string a, string b)
+    {
+        static string Normal(string path) => Path.GetFullPath(path.Trim().Trim('"').Replace('\\', Path.DirectorySeparatorChar));
+        try
+        {
+            return string.Equals(Normal(a), Normal(b), StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
     }
 
     private static string? String(JsonElement root, string name) =>

@@ -8,7 +8,7 @@ namespace D365FnoMcp.Extension.Commands;
 /// <summary>
 /// Chooses which XPP configuration (Manage local XPP configurations) the extension follows: its custom
 /// metadata folder is indexed and served, and its version is sent to the hosted server. "Automatic" follows
-/// the only configuration, or the most recently saved one when there are several.
+/// the configuration ticked Current in Visual Studio (falling back to the only one, or the most recently saved).
 /// </summary>
 [VisualStudioContribution]
 internal sealed class SelectXppConfigurationCommand : Command
