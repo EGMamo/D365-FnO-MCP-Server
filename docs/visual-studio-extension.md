@@ -49,7 +49,7 @@ is `extension-v`, not `v`, because `v*` tags deploy the API.
 ```text
 Copilot in Visual Studio
         |
-        | http://127.0.0.1:<random>/mcp
+        | http://localhost:<random>/mcp
         | per-process bearer token
         v
 Visual Studio extension gateway
@@ -84,10 +84,25 @@ Visual Studio extension gateway
 ## Custom models
 
 The hosted index holds only standard and ISV metadata. To let Copilot see your own tables,
-extensions, classes, labels and security objects, set **Extensions > D365 F&O MCP > Set Custom
-Models Folder...** to the folder that holds your custom models (`<Package>/<Model>/Ax<Type>/` below
-it, as in `PackagesLocalDirectory`). It also asks for your private name prefixes, for example
-`Contoso,Fabrikam`. Leave the folder empty to turn this off again.
+extensions, classes, labels and security objects, the extension indexes your custom models on this
+machine.
+
+By default it follows Visual Studio's XPP configuration (**Dynamics 365 > Manage local XPP
+configurations**, stored in `%LOCALAPPDATA%\Microsoft\Dynamics365\XPPConfig\<name>__<version>.json`).
+It indexes that configuration's "Folder for your own custom metadata" (`ModelStoreFolder`), whatever
+the folder is called, and sends its application version to the hosted server. With several
+configurations it follows the one you selected in **Extensions > D365 F&O MCP > Select XPP
+Configuration...**, or else the most recently saved one (ticking Current saves it). When you switch or
+edit a configuration, the gateway restarts for it. Each configuration keeps its own index under
+`%LOCALAPPDATA%\D365FnoMcp\indexes`, so a switch back does not index from scratch. Only the
+configuration in use is served.
+
+To index another folder instead, set **Extensions > D365 F&O MCP > Set Custom Models Folder...** to the
+folder that holds your package folders (`<Package>/<Model>/Ax<Type>/` below it). The folder is checked
+whenever you set or change it. It must hold at least one model with AOT XML, and the prompt lists the
+packages found and warns when the folder differs from the XPP configuration's. The command also asks for
+your private name prefixes, for example `Contoso,Fabrikam`. Leave the folder empty to follow the XPP
+configuration again.
 
 With a folder set, the extension starts the Node hybrid gateway described in
 [Hybrid gateway](hybrid-gateway.md) as a child process and forwards to it instead of to Azure:
@@ -95,7 +110,7 @@ With a folder set, the extension starts the Node hybrid gateway described in
 ```text
 Copilot in Visual Studio
         |
-        | http://127.0.0.1:<random>/mcp, per-process bearer token
+        | http://localhost:<random>/mcp, per-process bearer token
         v
 Visual Studio extension gateway      tool selection, workspace_* tools (context, add to project, build)
         |

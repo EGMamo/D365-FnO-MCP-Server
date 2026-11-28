@@ -10,7 +10,7 @@ public class McpGatewayTests
     private sealed class ContextProvider : IWorkspaceContextProvider
     {
         public Task<WorkspaceContext> GetAsync(CancellationToken cancellationToken) =>
-            Task.FromResult(new WorkspaceContext("10.0.2095.13", "Sales", "SalesProject", "SalesModel"));
+            Task.FromResult(new WorkspaceContext("10.0.2095.13", "Sales", "SalesProject", "SalesModel", "sales-dev"));
     }
 
     private sealed class Upstream : HttpMessageHandler
@@ -220,6 +220,7 @@ public class McpGatewayTests
 
         Assert.Equal("10.0.2095.13", (string?)body["result"]!["structuredContent"]!["d365SdkVersion"]);
         Assert.Equal("SalesModel", (string?)body["result"]!["structuredContent"]!["model"]);
+        Assert.Equal("sales-dev", (string?)body["result"]!["structuredContent"]!["xppConfiguration"]);
         Assert.Equal(0, upstream.RequestCount);
     }
 

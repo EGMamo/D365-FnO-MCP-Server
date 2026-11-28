@@ -30,11 +30,15 @@ internal sealed class SetCustomModelsCommand : Command
     {
         ShellExtensibility shell = this.Extensibility.Shell();
         ExtensionSettings settings = this.services.Settings.Load();
+        XppConfiguration? configuration = this.services.ChooseXppConfiguration().Configuration;
+        string following = configuration?.ModelStoreFolder is { Length: > 0 } configured
+            ? $"Leave empty to follow XPP configuration '{configuration.Name}' ({configured})."
+            : "Leave empty to turn this off (no XPP configuration with a custom metadata folder was found).";
 
         string? folder = await shell.ShowPromptAsync(
-            $"Folder that holds your custom models (the model folders with your AxClass, AxTable... XML).{Environment.NewLine}{Environment.NewLine}" +
+            $"Folder that holds your custom package folders (<Package>\\<Model>\\AxClass, AxTable... XML). It overrides the XPP configuration's custom metadata folder.{Environment.NewLine}{Environment.NewLine}" +
             "They are indexed on this machine and merged with the hosted index; their contents are never sent to the hosted server. " +
-            "Requires Node.js 24 and the d365-fno-mcp-server command on the PATH (npm link in a clone of the server's repository). Leave empty to turn this off.",
+            $"Requires Node.js 24 and the d365-fno-mcp-server command on the PATH (npm link in a clone of the server's repository). {following}",
             InputPromptOptions.Default with { Title = "D365 F&O MCP: custom models", DefaultText = settings.CustomMetadataDirectory },
             cancellationToken);
         if (folder is null)
@@ -43,14 +47,33 @@ internal sealed class SetCustomModelsCommand : Command
         }
 
         folder = folder.Trim().Trim('"');
-        if (folder.Length > 0 && !Directory.Exists(folder))
+        string? effective = folder.Length > 0 ? folder : configuration?.ModelStoreFolder;
+        if (!string.IsNullOrWhiteSpace(effective))
         {
-            await shell.ShowPromptAsync($"The folder '{folder}' does not exist.", PromptOptions.ErrorConfirm, cancellationToken);
-            return;
+            // Checked on every set or change, so a wrong folder (a package or model folder, a typo) is caught here
+            // rather than as custom objects that silently never appear.
+            CustomModelsFolderReport report = CustomModelsFolder.Inspect(effective);
+            if (!report.IsValid)
+            {
+                await shell.ShowPromptAsync(report.Summary, PromptOptions.ErrorConfirm, cancellationToken);
+                return;
+            }
+
+            string mismatch = folder.Length > 0 && configuration?.ModelStoreFolder is { Length: > 0 } store && !CustomModelsFolder.SameFolder(folder, store)
+                ? $"{Environment.NewLine}{Environment.NewLine}Note: XPP configuration '{configuration.Name}' uses a different custom metadata folder ({store}). This folder will be indexed instead."
+                : string.Empty;
+            bool keep = await shell.ShowPromptAsync(
+                $"Found {report.Summary}{mismatch}{Environment.NewLine}{Environment.NewLine}Use {effective}?",
+                PromptOptions.OKCancel with { Title = "D365 F&O MCP: custom models" },
+                cancellationToken);
+            if (!keep)
+            {
+                return;
+            }
         }
 
         string? prefixes = settings.PrivatePrefixes;
-        if (folder.Length > 0)
+        if (effective is { Length: > 0 })
         {
             prefixes = await shell.ShowPromptAsync(
                 "Prefixes of your own object names, comma-separated (for example Contoso,Fabrikam). " +
@@ -64,7 +87,7 @@ internal sealed class SetCustomModelsCommand : Command
         }
 
         string? standardIndex = settings.StandardIndexPath;
-        if (folder.Length > 0)
+        if (effective is { Length: > 0 })
         {
             standardIndex = await shell.ShowPromptAsync(
                 "Optional: an index of the standard application (a d365_index.db built with the server's index command over your PackagesLocalDirectory). " +
@@ -111,16 +134,16 @@ internal sealed class SetCustomModelsCommand : Command
             return;
         }
 
-        string message = folder.Length == 0
+        string message = string.IsNullOrWhiteSpace(effective)
             ? "Saved. Custom models are no longer indexed; the gateway forwards to the hosted server only."
             : this.services.CustomModelsActive
                 ? settings.StandardIndexPath.Length > 0
-                    ? $"Saved. Custom models in {folder} are indexed on this machine, merged with the hosted index and laid over the standard index for the tools that run locally."
-                    : $"Saved. Custom models in {folder} are indexed on this machine and merged with the hosted index."
+                    ? $"Saved. Custom models in {effective} are indexed on this machine, merged with the hosted index and laid over the standard index for the tools that run locally."
+                    : $"Saved. Custom models in {effective} are indexed on this machine and merged with the hosted index."
                 : "Saved, but the Node gateway did not start, so the gateway forwards to the hosted server only. The reason is in the D365 F&O MCP Output pane.";
         await shell.ShowPromptAsync(
             message,
-            this.services.CustomModelsActive || folder.Length == 0 ? PromptOptions.InformationConfirm : PromptOptions.AlertConfirm,
+            this.services.CustomModelsActive || string.IsNullOrWhiteSpace(effective) ? PromptOptions.InformationConfirm : PromptOptions.AlertConfirm,
             cancellationToken);
     }
 }

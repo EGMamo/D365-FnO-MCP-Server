@@ -374,7 +374,9 @@ public sealed class McpGateway : IAsyncDisposable
             string local =
                 $"Visual Studio workspace context: SDK {workspace.D365SdkVersion ?? "unknown"}; " +
                 $"solution {workspace.Solution ?? "unknown"}; project {workspace.Project ?? "ambiguous or unknown"}; " +
-                $"model {workspace.Model ?? "ambiguous or unknown"}. Use {ContextToolName} to refresh this local context.";
+                $"model {workspace.Model ?? "ambiguous or unknown"}" +
+                (workspace.XppConfiguration is null ? string.Empty : $"; XPP configuration {workspace.XppConfiguration}") +
+                $". Use {ContextToolName} to refresh this local context.";
             initializeResult["instructions"] = string.IsNullOrWhiteSpace(hosted) ? local : $"{hosted}{Environment.NewLine}{Environment.NewLine}{local}";
         }
 
@@ -668,6 +670,7 @@ public sealed class McpGateway : IAsyncDisposable
             ["solution"] = workspace.Solution,
             ["project"] = workspace.Project,
             ["model"] = workspace.Model,
+            ["xppConfiguration"] = workspace.XppConfiguration,
         };
         var response = new JsonObject
         {
