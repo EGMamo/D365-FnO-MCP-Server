@@ -1,13 +1,10 @@
-using System.Net.Http.Headers;
+using System.Collections.Concurrent;
+using System.Collections.Specialized;
 using System.Net;
+using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
-using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Http;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
 
 namespace D365FnoMcp.Core;
 
@@ -15,6 +12,14 @@ namespace D365FnoMcp.Core;
 /// Loopback-only MCP gateway. It forwards one downstream session to the hosted
 /// service and adds local tools without disclosing the hosted API key.
 /// </summary>
+/// <remarks>
+/// The gateway runs inside the Visual Studio extension host, which loads only the base .NET
+/// runtime (Microsoft.NETCore.App) and the files in the VSIX. ASP.NET Core is a separate shared
+/// framework that the host never loads, so Kestrel cannot be used here: it fails at start with
+/// "Could not load file or assembly 'Microsoft.Extensions.Hosting.Abstractions'". The gateway
+/// therefore uses <see cref="HttpListener"/>, which is part of the base runtime, and listens on
+/// <c>localhost</c>, the one prefix Windows lets a non-administrator register.
+/// </remarks>
 public sealed class McpGateway : IAsyncDisposable
 {
     public const string ContextToolName = "workspace_get_context";
@@ -43,7 +48,11 @@ public sealed class McpGateway : IAsyncDisposable
     private readonly IWorkspaceContextProvider contextProvider;
     private readonly IVisualStudioProjects? projects;
     private readonly SemaphoreSlim buildLock = new(1, 1);
-    private WebApplication? application;
+    private const int StartAttempts = 5;
+    private readonly ConcurrentDictionary<Task, byte> inFlight = new();
+    private HttpListener? listener;
+    private CancellationTokenSource? stopping;
+    private Task? acceptLoop;
     private string upstreamEndpoint = string.Empty;
     private string apiKey = string.Empty;
     private string? sdkVersion;
@@ -73,11 +82,11 @@ public sealed class McpGateway : IAsyncDisposable
     /// <summary>When set, <see cref="AddToProjectToolName"/> adds only files inside this folder.</summary>
     public string? CustomMetadataDirectory { get; init; }
 
-    public async Task StartAsync(string serverUrl, string apiKey, string? sdkVersion, CancellationToken cancellationToken)
+    public Task StartAsync(string serverUrl, string apiKey, string? sdkVersion, CancellationToken cancellationToken)
     {
-        if (this.application is not null)
+        if (this.listener is not null)
         {
-            return;
+            return Task.CompletedTask;
         }
 
         this.upstreamEndpoint = ServerUrl.McpEndpoint(serverUrl);
@@ -85,16 +94,35 @@ public sealed class McpGateway : IAsyncDisposable
         this.sdkVersion = sdkVersion;
         this.BearerToken = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
 
-        WebApplicationBuilder builder = WebApplication.CreateSlimBuilder();
-        builder.WebHost.ConfigureKestrel(options => options.Listen(IPAddress.Loopback, 0));
-        WebApplication app = builder.Build();
-        app.MapMethods("/mcp", ["POST", "GET", "DELETE"], this.HandleAsync);
-        await app.StartAsync(cancellationToken);
+        // HttpListener cannot pick a port itself, so take a free one and retry if another
+        // process claims it between the check and the start.
+        for (int attempt = 1; ; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            int port = NodeGatewayProcess.FreeLoopbackPort();
+            var started = new HttpListener();
+            started.Prefixes.Add($"http://localhost:{port}/");
+            try
+            {
+                started.Start();
+            }
+            catch (HttpListenerException) when (attempt < StartAttempts)
+            {
+                started.Close();
+                continue;
+            }
+            catch
+            {
+                started.Close();
+                throw;
+            }
 
-        string address = app.Urls.Single(url => url.StartsWith("http://127.0.0.1:", StringComparison.Ordinal) ||
-                                                url.StartsWith("http://localhost:", StringComparison.Ordinal));
-        this.Endpoint = new Uri(new Uri(address), "/mcp");
-        this.application = app;
+            this.listener = started;
+            this.stopping = new CancellationTokenSource();
+            this.Endpoint = new Uri($"http://localhost:{port}/mcp");
+            this.acceptLoop = Task.Run(() => this.AcceptLoopAsync(started, this.stopping.Token), CancellationToken.None);
+            return Task.CompletedTask;
+        }
     }
 
     /// <summary>
@@ -123,34 +151,104 @@ public sealed class McpGateway : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        if (this.application is null)
+        HttpListener? running = this.listener;
+        if (running is null)
         {
             return;
         }
 
-        await this.application.StopAsync();
-        await this.application.DisposeAsync();
-        this.application = null;
+        this.listener = null;
+        this.stopping!.Cancel();
+        running.Stop();
+        running.Close();
+        await this.acceptLoop!;
+        Task stopped = Task.WhenAll(this.inFlight.Keys);
+        await Task.WhenAny(stopped, Task.Delay(TimeSpan.FromSeconds(5)));
+        this.stopping.Dispose();
+        this.stopping = null;
+        this.acceptLoop = null;
     }
 
-    private async Task HandleAsync(HttpContext context)
+    private async Task AcceptLoopAsync(HttpListener running, CancellationToken cancellationToken)
     {
-        string authorization = context.Request.Headers.Authorization.ToString();
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            HttpListenerContext context;
+            try
+            {
+                context = await running.GetContextAsync();
+            }
+            catch (Exception ex) when (ex is HttpListenerException or ObjectDisposedException or InvalidOperationException)
+            {
+                // Stop() ends a pending GetContextAsync this way.
+                return;
+            }
+
+            Task handling = Task.Run(() => this.ProcessAsync(context, cancellationToken), CancellationToken.None);
+            this.inFlight.TryAdd(handling, 0);
+            _ = handling.ContinueWith(t => this.inFlight.TryRemove(t, out _), TaskScheduler.Default);
+        }
+    }
+
+    private async Task ProcessAsync(HttpListenerContext context, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await this.HandleAsync(context, cancellationToken);
+            context.Response.Close();
+        }
+        catch (Exception)
+        {
+            // The client went away, the gateway is stopping, or the upstream call failed after
+            // the response started. Nothing more can be sent, so drop the connection.
+            try
+            {
+                if (!cancellationToken.IsCancellationRequested && context.Response.OutputStream.CanWrite)
+                {
+                    context.Response.StatusCode = (int)HttpStatusCode.BadGateway;
+                }
+            }
+            catch (InvalidOperationException)
+            {
+                // Headers were already sent.
+            }
+
+            context.Response.Abort();
+        }
+    }
+
+    private async Task HandleAsync(HttpListenerContext context, CancellationToken cancellationToken)
+    {
+        if (!string.Equals(context.Request.Url?.AbsolutePath, "/mcp", StringComparison.Ordinal))
+        {
+            context.Response.StatusCode = (int)HttpStatusCode.NotFound;
+            return;
+        }
+
+        string httpMethod = context.Request.HttpMethod;
+        if (httpMethod is not ("POST" or "GET" or "DELETE"))
+        {
+            context.Response.StatusCode = (int)HttpStatusCode.MethodNotAllowed;
+            context.Response.Headers["Allow"] = "POST, GET, DELETE";
+            return;
+        }
+
+        string authorization = context.Request.Headers["Authorization"] ?? string.Empty;
         if (!authorization.Equals($"Bearer {this.BearerToken}", StringComparison.Ordinal))
         {
-            context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+            context.Response.StatusCode = (int)HttpStatusCode.Unauthorized;
             context.Response.Headers[GatewayHeader] = "1";
             return;
         }
 
-        if (!HttpMethods.IsPost(context.Request.Method))
+        if (httpMethod != "POST")
         {
-            await this.ProxyAsync(context, body: null);
+            await this.ProxyAsync(context, body: null, cancellationToken);
             return;
         }
 
-        using var reader = new StreamReader(context.Request.Body, Encoding.UTF8);
-        string body = await reader.ReadToEndAsync(context.RequestAborted);
+        using var reader = new StreamReader(context.Request.InputStream, Encoding.UTF8);
+        string body = await reader.ReadToEndAsync(cancellationToken);
         JsonNode? request;
         try
         {
@@ -158,7 +256,7 @@ public sealed class McpGateway : IAsyncDisposable
         }
         catch (System.Text.Json.JsonException)
         {
-            context.Response.StatusCode = StatusCodes.Status400BadRequest;
+            context.Response.StatusCode = (int)HttpStatusCode.BadRequest;
             return;
         }
 
@@ -166,44 +264,46 @@ public sealed class McpGateway : IAsyncDisposable
         string? calledTool = method == "tools/call" ? (string?)request?["params"]?["name"] : null;
         if (calledTool is not null && !ToolSelection.IsAllowed(this.allowedTools, calledTool))
         {
-            await WriteErrorAsync(context, request?["id"], -32602, $"Tool '{calledTool}' is turned off in the D365 F&O MCP extension (Extensions > D365 F&O MCP > Select Tools...).");
+            await WriteErrorAsync(context, request?["id"], cancellationToken, -32602, $"Tool '{calledTool}' is turned off in the D365 F&O MCP extension (Extensions > D365 F&O MCP > Select Tools...).");
             return;
         }
 
         if (calledTool == ContextToolName)
         {
-            await this.WriteContextResultAsync(context, request?["id"]);
+            await this.WriteContextResultAsync(context, request?["id"], cancellationToken);
             return;
         }
 
         if (calledTool == AddToProjectToolName && this.projects is not null)
         {
-            JsonObject result = await this.AddToProjectAsync(request?["params"]?["arguments"], context.RequestAborted);
-            await WriteResultAsync(context, request?["id"], result);
+            JsonObject result = await this.AddToProjectAsync(request?["params"]?["arguments"], cancellationToken);
+            await WriteResultAsync(context, request?["id"], result, cancellationToken);
             return;
         }
 
         if (calledTool == BuildProjectToolName && this.projects is not null)
         {
-            JsonObject result = await this.BuildProjectAsync(request?["params"]?["arguments"], context.RequestAborted);
-            await WriteResultAsync(context, request?["id"], result);
+            JsonObject result = await this.BuildProjectAsync(request?["params"]?["arguments"], cancellationToken);
+            await WriteResultAsync(context, request?["id"], result, cancellationToken);
             return;
         }
 
         await this.ProxyAsync(
             context,
             body,
+            cancellationToken,
             appendContextTool: method == "tools/list",
             appendContextInstructions: method == "initialize");
     }
 
     private async Task ProxyAsync(
-        HttpContext context,
+        HttpListenerContext context,
         string? body,
+        CancellationToken cancellationToken,
         bool appendContextTool = false,
         bool appendContextInstructions = false)
     {
-        using var request = new HttpRequestMessage(new HttpMethod(context.Request.Method), this.upstreamEndpoint);
+        using var request = new HttpRequestMessage(new HttpMethod(context.Request.HttpMethod), this.upstreamEndpoint);
         if (body is not null)
         {
             request.Content = new StringContent(body, Encoding.UTF8, "application/json");
@@ -224,21 +324,20 @@ public sealed class McpGateway : IAsyncDisposable
             appendContextTool || appendContextInstructions
                 ? HttpCompletionOption.ResponseContentRead
                 : HttpCompletionOption.ResponseHeadersRead,
-            context.RequestAborted);
+            cancellationToken);
         context.Response.StatusCode = (int)response.StatusCode;
         if (response.Headers.TryGetValues("Mcp-Session-Id", out IEnumerable<string>? sessions))
         {
-            context.Response.Headers["Mcp-Session-Id"] = sessions.ToArray();
+            context.Response.Headers["Mcp-Session-Id"] = string.Join(",", sessions);
         }
 
         if (!appendContextTool && !appendContextInstructions)
         {
-            context.Response.ContentType = response.Content.Headers.ContentType?.ToString();
-            await response.Content.CopyToAsync(context.Response.Body, context.RequestAborted);
+            await CopyBodyAsync(response, context.Response, cancellationToken);
             return;
         }
 
-        string responseText = await response.Content.ReadAsStringAsync(context.RequestAborted);
+        string responseText = await response.Content.ReadAsStringAsync(cancellationToken);
         JsonNode? responseBody = ConnectionTester.ParseRpcBody(responseText, response.Content.Headers.ContentType?.MediaType);
         if (responseBody?["result"]?["tools"] is JsonArray tools)
         {
@@ -270,7 +369,7 @@ public sealed class McpGateway : IAsyncDisposable
 
         if (appendContextInstructions && responseBody?["result"] is JsonObject initializeResult)
         {
-            WorkspaceContext workspace = await this.contextProvider.GetAsync(context.RequestAborted);
+            WorkspaceContext workspace = await this.contextProvider.GetAsync(cancellationToken);
             string hosted = (string?)initializeResult["instructions"] ?? string.Empty;
             string local =
                 $"Visual Studio workspace context: SDK {workspace.D365SdkVersion ?? "unknown"}; " +
@@ -279,8 +378,48 @@ public sealed class McpGateway : IAsyncDisposable
             initializeResult["instructions"] = string.IsNullOrWhiteSpace(hosted) ? local : $"{hosted}{Environment.NewLine}{Environment.NewLine}{local}";
         }
 
-        context.Response.ContentType = "application/json";
-        await context.Response.WriteAsync(responseBody?.ToJsonString() ?? responseText, context.RequestAborted);
+        await WriteJsonAsync(context.Response, responseBody?.ToJsonString() ?? responseText, cancellationToken);
+    }
+
+    /// <summary>Streams an upstream body as it arrives, so server-sent events reach Visual Studio unbuffered.</summary>
+    private static async Task CopyBodyAsync(HttpResponseMessage upstream, HttpListenerResponse response, CancellationToken cancellationToken)
+    {
+        string? contentType = upstream.Content.Headers.ContentType?.ToString();
+        if (contentType is not null)
+        {
+            response.ContentType = contentType;
+        }
+
+        long? length = upstream.Content.Headers.ContentLength;
+        if (length is long known)
+        {
+            response.ContentLength64 = known;
+        }
+        else if (upstream.StatusCode is HttpStatusCode.NoContent or HttpStatusCode.NotModified)
+        {
+            return;
+        }
+        else
+        {
+            response.SendChunked = true;
+        }
+
+        await using Stream source = await upstream.Content.ReadAsStreamAsync(cancellationToken);
+        byte[] buffer = new byte[16 * 1024];
+        int read;
+        while ((read = await source.ReadAsync(buffer, cancellationToken)) > 0)
+        {
+            await response.OutputStream.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+            await response.OutputStream.FlushAsync(cancellationToken);
+        }
+    }
+
+    private static async Task WriteJsonAsync(HttpListenerResponse response, string json, CancellationToken cancellationToken)
+    {
+        byte[] bytes = Encoding.UTF8.GetBytes(json);
+        response.ContentType = "application/json";
+        response.ContentLength64 = bytes.Length;
+        await response.OutputStream.WriteAsync(bytes, cancellationToken);
     }
 
     /// <summary>
@@ -509,7 +648,7 @@ public sealed class McpGateway : IAsyncDisposable
         ["isError"] = true,
     };
 
-    private static async Task WriteResultAsync(HttpContext context, JsonNode? id, JsonObject result)
+    private static async Task WriteResultAsync(HttpListenerContext context, JsonNode? id, JsonObject result, CancellationToken cancellationToken)
     {
         var response = new JsonObject
         {
@@ -517,13 +656,12 @@ public sealed class McpGateway : IAsyncDisposable
             ["id"] = id?.DeepClone(),
             ["result"] = result,
         };
-        context.Response.ContentType = "application/json";
-        await context.Response.WriteAsync(response.ToJsonString(), context.RequestAborted);
+        await WriteJsonAsync(context.Response, response.ToJsonString(), cancellationToken);
     }
 
-    private async Task WriteContextResultAsync(HttpContext context, JsonNode? id)
+    private async Task WriteContextResultAsync(HttpListenerContext context, JsonNode? id, CancellationToken cancellationToken)
     {
-        WorkspaceContext workspace = await this.contextProvider.GetAsync(context.RequestAborted);
+        WorkspaceContext workspace = await this.contextProvider.GetAsync(cancellationToken);
         var data = new JsonObject
         {
             ["d365SdkVersion"] = workspace.D365SdkVersion,
@@ -545,11 +683,10 @@ public sealed class McpGateway : IAsyncDisposable
                 ["structuredContent"] = data.DeepClone(),
             },
         };
-        context.Response.ContentType = "application/json";
-        await context.Response.WriteAsync(response.ToJsonString(), context.RequestAborted);
+        await WriteJsonAsync(context.Response, response.ToJsonString(), cancellationToken);
     }
 
-    private static async Task WriteErrorAsync(HttpContext context, JsonNode? id, int code, string message)
+    private static async Task WriteErrorAsync(HttpListenerContext context, JsonNode? id, CancellationToken cancellationToken, int code, string message)
     {
         var response = new JsonObject
         {
@@ -557,8 +694,7 @@ public sealed class McpGateway : IAsyncDisposable
             ["id"] = id?.DeepClone(),
             ["error"] = new JsonObject { ["code"] = code, ["message"] = message },
         };
-        context.Response.ContentType = "application/json";
-        await context.Response.WriteAsync(response.ToJsonString(), context.RequestAborted);
+        await WriteJsonAsync(context.Response, response.ToJsonString(), cancellationToken);
     }
 
     private static JsonObject ContextTool() => new()
@@ -658,11 +794,12 @@ public sealed class McpGateway : IAsyncDisposable
         ["type"] = new JsonArray("string", "null"),
     };
 
-    private static void CopyHeader(IHeaderDictionary source, HttpRequestMessage target, string name)
+    private static void CopyHeader(NameValueCollection source, HttpRequestMessage target, string name)
     {
-        if (source.TryGetValue(name, out Microsoft.Extensions.Primitives.StringValues values))
+        string? value = source[name];
+        if (value is not null)
         {
-            target.Headers.TryAddWithoutValidation(name, values.ToArray());
+            target.Headers.TryAddWithoutValidation(name, value);
         }
     }
 }

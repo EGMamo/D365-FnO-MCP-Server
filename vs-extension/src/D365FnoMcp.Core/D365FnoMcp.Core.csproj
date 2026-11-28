@@ -8,7 +8,6 @@
   <ItemGroup>
     <InternalsVisibleTo Include="D365FnoMcp.Core.Tests" />
   </ItemGroup>
-  <ItemGroup>
-    <FrameworkReference Include="Microsoft.AspNetCore.App" />
-  </ItemGroup>
+  <!-- No FrameworkReference to Microsoft.AspNetCore.App: the Visual Studio extension host loads
+       only Microsoft.NETCore.App, so anything from ASP.NET Core fails to load at run time. -->
 </Project>
