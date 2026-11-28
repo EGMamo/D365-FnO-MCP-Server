@@ -203,7 +203,12 @@ These names match the startup materialization in the server configuration (`src/
 
 `.github/workflows/deploy.yml` pushes the image, starts it in the `staging` slot, waits for the slot
 to report healthy (it has then materialized and validated the bundle), smoke-tests `/mcp` and swaps.
-The swap warm-up pings `/health` again and aborts if the slot is not ready. If production is not
+A swap restarts `staging` with production's settings, and the restarted container loads the bundle
+again, which takes minutes, so the workflow swaps in two phases: `--action preview` applies
+production's settings to `staging` (its warm-up accepts the 503 that `/health` answers while the
+bundle loads, `WEBSITE_SWAP_WARMUP_PING_STATUSES=200,503`), the workflow waits until `staging`'s
+`/health` answers 200, and only then completes the swap; if it never does, it cancels the swap
+(`--action reset`) and production is untouched. If production is not
 healthy after the swap, the workflow swaps back. It then stops `staging` while production is
 healthy (otherwise it leaves `staging` running and warns), and the next deployment starts it again.
 
@@ -224,7 +229,9 @@ Rollback paths:
   --body '{"properties":{"linuxFxVersion":"DOCKER|<registry>/d365-fno-mcp-server:<tag>"}}'`, as the
   Deploy workflow does. Avoid `az webapp config container set --slot staging`: it also rewrites
   production's app settings, which restarts production. Then start `staging` (`az webapp start
-  --slot staging`), wait until its `/health` answers 200, swap, and stop `staging` again.
+  --slot staging`), wait until its `/health` answers 200, swap in two phases as the workflow does
+  (`az webapp deployment slot swap --slot staging --target-slot production --action preview`, wait
+  for `/health` 200 again, then `--action swap`), and stop `staging` again.
 - **Index:** run `node F:\worker\app\dist\src\index.js artifact rollback --expected-revision <n>`
   on the worker VM through Run Command (`az vm start`, then `az vm run-command invoke
   --command-id RunPowerShellScript --scripts @rollback.ps1`), with `D365_ARTIFACT_ACCOUNT_URL`,
