@@ -92,8 +92,10 @@ configurations**, stored in `%LOCALAPPDATA%\Microsoft\Dynamics365\XPPConfig\<nam
 It indexes that configuration's "Folder for your own custom metadata" (`ModelStoreFolder`), whatever
 the folder is called, and sends its application version to the hosted server. With several
 configurations it follows the one you selected in **Extensions > D365 F&O MCP > Select XPP
-Configuration...**, or else the most recently saved one (ticking Current saves it). When you switch or
-edit a configuration, the gateway restarts for it. Each configuration keeps its own index under
+Configuration...**, or else the one ticked Current (Visual Studio records it in the registry value
+`HKCU\Software\Microsoft\Dynamics\AX7\Development\Configurations\CurrentMetadataConfig`), or else the
+most recently saved one. When you tick another configuration Current or edit one, the gateway
+restarts for it within a few seconds. Each configuration keeps its own index under
 `%LOCALAPPDATA%\D365FnoMcp\indexes`, so a switch back does not index from scratch. Only the
 configuration in use is served.
 

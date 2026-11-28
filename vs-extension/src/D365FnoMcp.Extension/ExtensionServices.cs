@@ -28,6 +28,10 @@ internal sealed class ExtensionServices : IWorkspaceContextProvider, IVisualStud
     private FileSystemWatcher? xppWatcher;
     private CancellationTokenSource? xppDebounce;
 
+    /// <summary>Checks the registry for a change of Visual Studio's Current XPP configuration.</summary>
+    private Timer? currentConfigurationPoll;
+    private string? lastCurrentConfigurationFile;
+
     public ExtensionServices(VisualStudioExtensibility extensibility)
     {
         this.extensibility = extensibility;
@@ -257,6 +261,10 @@ internal sealed class ExtensionServices : IWorkspaceContextProvider, IVisualStud
         this.logQueue.Writer.TryComplete();
         this.output?.Dispose();
         this.xppWatcher?.Dispose();
+        if (this.currentConfigurationPoll is not null)
+        {
+            await this.currentConfigurationPoll.DisposeAsync();
+        }
         if (this.xppDebounce is not null)
         {
             await this.xppDebounce.CancelAsync();
@@ -479,6 +487,21 @@ internal sealed class ExtensionServices : IWorkspaceContextProvider, IVisualStud
     /// </summary>
     private void WatchXppConfigurations()
     {
+        // Ticking Current in Manage local XPP configurations writes the registry, which raises no file event.
+        this.lastCurrentConfigurationFile = XppConfigurations.CurrentConfigurationFile();
+        this.currentConfigurationPoll = new Timer(
+            _ =>
+            {
+                string? current = XppConfigurations.CurrentConfigurationFile();
+                if (!string.Equals(Interlocked.Exchange(ref this.lastCurrentConfigurationFile, current), current, StringComparison.OrdinalIgnoreCase))
+                {
+                    this.OnXppConfigurationsChanged();
+                }
+            },
+            null,
+            TimeSpan.FromSeconds(5),
+            TimeSpan.FromSeconds(5));
+
         string folder = XppConfigurations.DefaultFolder();
         if (!Directory.Exists(folder))
         {
