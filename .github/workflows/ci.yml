@@ -2,21 +2,83 @@ name: CI
 
 # Branches are tested through their pull request; pushing to master tests the
 # merged result. Running on every branch push as well doubled each PR's runs.
+# A pull request runs only the jobs whose files it changes (see `changes`);
+# master and manual runs run everything. The weekly run re-checks what can go
+# bad without a commit: new advisories against the runtime dependencies and new
+# CVEs in the Docker base image.
 on:
   push:
     branches: [master]
   pull_request:
+  schedule:
+    - cron: '17 5 * * 1'
+  workflow_dispatch:
 
 # The jobs only read the repository; keep the token from writing anything.
 permissions:
   contents: read
 
+# A new push to a pull request supersedes its running checks.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  # Decides which jobs a pull request needs. Every rule is a path rule on the
+  # files the pull request changes; a change to this workflow runs everything.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      server: ${{ steps.filter.outputs.server }}
+      extension: ${{ steps.filter.outputs.extension }}
+      infra: ${{ steps.filter.outputs.infra }}
+      docker: ${{ steps.filter.outputs.docker }}
+      deps: ${{ steps.filter.outputs.deps }}
+    steps:
+      # A pull request is checked out as its merge commit; parent 1 is the base.
+      - uses: actions/checkout@v7
+        if: github.event_name == 'pull_request'
+        with:
+          fetch-depth: 2
+      - id: filter
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          out() { echo "$1=$2" >> "$GITHUB_OUTPUT"; echo "$1=$2"; }
+          if [ "$EVENT" = schedule ]; then
+            for k in server extension infra; do out "$k" false; done
+            out docker true; out deps true
+            exit 0
+          fi
+          if [ "$EVENT" != pull_request ]; then
+            for k in server extension infra docker deps; do out "$k" true; done
+            exit 0
+          fi
+          files="$(git diff --name-only HEAD^1 HEAD)"
+          printf '%s\n' "$files"
+          has() { grep -qE "$1" <<< "$files" && echo true || echo false; }
+          if [ "$(has '^\.github/workflows/ci\.yml$')" = true ]; then
+            for k in server extension infra docker deps; do out "$k" true; done
+            exit 0
+          fi
+          # The Node tests read docs, agents, scripts and infra as well as src,
+          # so only a change confined to the VS extension skips them.
+          out server "$(grep -qvE '^vs-extension/' <<< "$files" && echo true || echo false)"
+          # The extension's end-to-end test runs the built Node gateway.
+          out extension "$(has '^(vs-extension/|src/|package(-lock)?\.json$|tsconfig[^/]*\.json$)')"
+          out infra "$(has '^infra/')"
+          out docker "$(has '^(Dockerfile|\.dockerignore|package(-lock)?\.json|tsconfig(\.build)?\.json)$|^(src|d365-fno-assistant-knowledge)/')"
+          out deps "$(has '^package(-lock)?\.json$')"
+
   build:
+    needs: changes
+    if: needs.changes.outputs.server == 'true'
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest]
         # 26 is what the Docker image runs; 24 is the minimum in package.json engines.
+        # Windows is where the stdio server and the VS extension's gateway run.
         node: ['26']
         include:
           - os: ubuntu-latest
@@ -52,7 +114,11 @@ jobs:
           key: ${{ steps.npm-restore.outputs.cache-primary-key }}
       - run: npm run check
 
+  # The lockfile decides the result, so a pull request runs it only when the
+  # lockfile or package.json changes; the weekly run catches new advisories.
   audit:
+    needs: changes
+    if: needs.changes.outputs.deps == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -63,11 +129,14 @@ jobs:
       # ones are left to Dependabot so an upstream advisory does not block every PR.
       - run: npm audit --omit=dev --audit-level=high
 
+  # Windows only: the extension targets Visual Studio, the VSIX is built there,
+  # and the core tests and the gateway end-to-end test run there too. The name
+  # keeps the check name the matrix gave it.
   vs-extension:
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+    name: vs-extension (windows-latest)
+    needs: changes
+    if: needs.changes.outputs.extension == 'true'
+    runs-on: windows-latest
     defaults:
       run:
         shell: bash
@@ -87,7 +156,6 @@ jobs:
           D365_E2E_NODE_GATEWAY_COMMAND: node "${{ github.workspace }}/dist/src/index.js"
       - run: dotnet build vs-extension/src/D365FnoMcp.Extension -c Release
       - name: Upload the VSIX
-        if: runner.os == 'Windows'
         # The upload is a convenience for trying a build; the job has already
         # proved the extension builds. A full account artifact quota must not
         # turn the check red.
@@ -102,6 +170,8 @@ jobs:
           if-no-files-found: error
 
   infra:
+    needs: changes
+    if: needs.changes.outputs.infra == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -121,6 +191,8 @@ jobs:
           if grep -E 'Warning|Error' build.log; then exit 1; fi
 
   docker:
+    needs: changes
+    if: needs.changes.outputs.docker == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -177,3 +249,18 @@ jobs:
       - name: Cleanup
         if: always()
         run: docker rm -f mcp-empty mcp || true
+
+  # One check that stands for the whole run, for branch protection: a job that
+  # a path rule skips passes, a job that fails or is cancelled fails this one.
+  ci-ok:
+    if: always()
+    needs: [changes, build, audit, vs-extension, infra, docker]
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "$RESULTS"
+          for r in $RESULTS; do
+            case "$r" in success|skipped) ;; *) exit 1 ;; esac
+          done
