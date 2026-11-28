@@ -58,6 +58,8 @@ const gatewayEnvSchema = z.object({
   D365_INDEX_DB_PATH: z.string().trim().default(''),
   /** Optional standard index the custom index is laid over; opened read-only. */
   D365_GATEWAY_STANDARD_INDEX_DB_PATH: z.string().trim().default(''),
+  /** Optional: the compiler's cross-reference database; its references to the custom models are imported for find_usages. */
+  D365_GATEWAY_XREF_CONNECTION_STRING: z.string().trim().default(''),
   D365_GATEWAY_PORT: z.string().trim().default(''),
   D365_GATEWAY_TOKEN: z.string().trim().default(''),
   D365_APP_VERSION: z.string().trim().default(''),
@@ -346,6 +348,7 @@ export const gatewayConfigSchema = gatewayEnvSchema.transform((env, ctx): Valida
     customMetadataDir,
     localIndexDbPath,
     standardIndexDbPath: resolveStandardIndexDbPath(env, localIndexDbPath, issue),
+    xrefConnectionString: env.D365_GATEWAY_XREF_CONNECTION_STRING || null,
     port: parseIntegerSetting(env, 'D365_GATEWAY_PORT', { min: 1, max: 65_535, fallback: DEFAULT_PORT }, issue),
     host: '127.0.0.1',
     token: parseToken(env.D365_GATEWAY_TOKEN, issue),

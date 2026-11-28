@@ -303,6 +303,16 @@ describe('loadGatewayConfig token', () => {
   });
 });
 
+describe('loadGatewayConfig cross-reference import', () => {
+  const withToken = (overrides: NodeJS.ProcessEnv) => validEnv({ D365_GATEWAY_TOKEN: TOKEN, ...overrides });
+
+  it('is off unless a connection string is set', () => {
+    expect(loadGatewayConfig(withToken({})).xrefConnectionString).toBeNull();
+    const value = 'Server=(LocalDB)\\MSSQLLocalDB;Database=XRef_dev;Trusted_Connection=yes';
+    expect(loadGatewayConfig(withToken({ D365_GATEWAY_XREF_CONNECTION_STRING: value })).xrefConnectionString).toBe(value);
+  });
+});
+
 describe('loadGatewayConfig standard index', () => {
   const withToken = (overrides: NodeJS.ProcessEnv) => validEnv({ D365_GATEWAY_TOKEN: TOKEN, ...overrides });
 

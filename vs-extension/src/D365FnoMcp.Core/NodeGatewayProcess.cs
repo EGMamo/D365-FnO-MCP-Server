@@ -17,6 +17,10 @@ namespace D365FnoMcp.Core;
 /// The SQLite file the custom models are indexed into, kept between runs so a restart or a switch back to a
 /// configuration does not index from scratch; null indexes in memory.
 /// </param>
+/// <param name="XrefConnectionString">
+/// The compiler's cross-reference database to import the custom models' references from, or null. It reaches the
+/// child through its environment only.
+/// </param>
 public sealed record NodeGatewayOptions(
     string Command,
     string HostedServerUrl,
@@ -25,7 +29,8 @@ public sealed record NodeGatewayOptions(
     string? PrivatePrefixes,
     string WorkingDirectory,
     string? StandardIndexPath = null,
-    string? LocalIndexPath = null);
+    string? LocalIndexPath = null,
+    string? XrefConnectionString = null);
 
 /// <summary>
 /// Runs the Node hybrid gateway (<c>d365-fno-mcp-server gateway</c>) as a child process on a
@@ -182,6 +187,7 @@ public sealed class NodeGatewayProcess : IAsyncDisposable
         env["D365_GATEWAY_TOKEN"] = token;
         env["D365_GATEWAY_PRIVATE_PREFIXES"] = options.PrivatePrefixes?.Trim() ?? string.Empty;
         env["D365_GATEWAY_STANDARD_INDEX_DB_PATH"] = options.StandardIndexPath?.Trim() ?? string.Empty;
+        env["D365_GATEWAY_XREF_CONNECTION_STRING"] = options.XrefConnectionString ?? string.Empty;
         return startInfo;
     }
 

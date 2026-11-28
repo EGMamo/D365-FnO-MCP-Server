@@ -27,6 +27,19 @@ public class NodeGatewayProcessTests : IDisposable
         ProcessStartInfo info = NodeGatewayProcess.BuildStartInfo(options, 52011, "token-value", windows: false);
 
         Assert.Equal(index, info.Environment["D365_LOCAL_INDEX_DB_PATH"]);
+        Assert.Equal(string.Empty, info.Environment["D365_GATEWAY_XREF_CONNECTION_STRING"]);
+    }
+
+    [Fact]
+    public void PassesTheCrossReferenceDatabaseInTheEnvironmentOnly()
+    {
+        const string xref = @"Server=(LocalDB)\MSSQLLocalDB;Database=XRef_dev;Trusted_Connection=yes";
+        NodeGatewayOptions options = this.Options("d365-fno-mcp-server") with { XrefConnectionString = xref };
+
+        ProcessStartInfo info = NodeGatewayProcess.BuildStartInfo(options, 52011, "token-value", windows: false);
+
+        Assert.Equal(xref, info.Environment["D365_GATEWAY_XREF_CONNECTION_STRING"]);
+        Assert.DoesNotContain("XRef_dev", string.Join(' ', info.ArgumentList) + info.Arguments);
     }
 
     [Fact]
