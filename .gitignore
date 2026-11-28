@@ -25,3 +25,4 @@ infra/*.local.bicepparam
 models/
 # The hybrid gateway keeps its custom index and bearer token here by default
 .d365/
+vs-extension/node-gateway/

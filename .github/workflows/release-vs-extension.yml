@@ -84,7 +84,16 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
+      # The VSIX ships Node.js (this version) and the Node gateway for custom models.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - run: npm ci
+      - run: node scripts/bundle-vs-node-gateway.mjs
+
       - run: dotnet test vs-extension/tests/D365FnoMcp.Core.Tests
+        env:
+          D365_E2E_NODE_GATEWAY_COMMAND: '"${{ github.workspace }}\vs-extension\node-gateway\node.exe" "${{ github.workspace }}\vs-extension\node-gateway\app\src\clientIndex.js"'
 
       - name: Build the VSIX
         env:

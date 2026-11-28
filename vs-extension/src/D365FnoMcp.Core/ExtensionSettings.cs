@@ -38,7 +38,10 @@ public sealed class ExtensionSettings
     /// </summary>
     public bool ImportCrossReferences { get; set; }
 
-    /// <summary>How to run the server's CLI for the Node gateway; "gateway" is appended.</summary>
+    /// <summary>
+    /// How to run the server's CLI for the Node gateway; "gateway" is appended. Left at the default, the extension runs
+    /// the Node gateway it ships with (see <see cref="NodeGatewayCommands"/>); set another command to run your own build.
+    /// </summary>
     public string NodeGatewayCommand { get; set; } = DefaultNodeGatewayCommand;
 
     /// <summary>Comma-separated prefixes of custom object names that must never be sent to the hosted server.</summary>

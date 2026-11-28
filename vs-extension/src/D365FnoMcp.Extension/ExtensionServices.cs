@@ -414,13 +414,16 @@ internal sealed class ExtensionServices : IWorkspaceContextProvider, IVisualStud
                 : $"Importing the custom models' compiler cross-references from {configuration!.CrossReferencesDatabaseName} on {configuration.CrossReferencesDbServerName} once they are indexed.");
         }
 
+        (string command, string commandSource) = NodeGatewayCommands.Resolve(
+            settings.NodeGatewayCommand,
+            Path.GetDirectoryName(typeof(ExtensionServices).Assembly.Location) ?? AppContext.BaseDirectory);
         var node = new NodeGatewayProcess(this.Http, this.Log);
         try
         {
-            this.Log($"Starting the Node gateway for the custom models in {customFolder}; the first index can take a few minutes.");
+            this.Log($"Starting the Node gateway for the custom models in {customFolder} with {commandSource}; the first index can take a few minutes.");
             await node.StartAsync(
                 new NodeGatewayOptions(
-                    string.IsNullOrWhiteSpace(settings.NodeGatewayCommand) ? ExtensionSettings.DefaultNodeGatewayCommand : settings.NodeGatewayCommand,
+                    command,
                     serverUrl,
                     apiKey,
                     customFolder,
