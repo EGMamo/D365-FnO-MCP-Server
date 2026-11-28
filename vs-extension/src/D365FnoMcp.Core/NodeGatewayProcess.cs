@@ -13,6 +13,14 @@ namespace D365FnoMcp.Core;
 /// <param name="PrivatePrefixes">Comma-separated name prefixes that must never be sent to the hosted server, or null.</param>
 /// <param name="WorkingDirectory">The child's working directory, so no stray .env file is read.</param>
 /// <param name="StandardIndexPath">An index of the standard application to lay the custom models over, or null; it is only read.</param>
+/// <param name="LocalIndexPath">
+/// The SQLite file the custom models are indexed into, kept between runs so a restart or a switch back to a
+/// configuration does not index from scratch; null indexes in memory.
+/// </param>
+/// <param name="XrefConnectionString">
+/// The compiler's cross-reference database to import the custom models' references from, or null. It reaches the
+/// child through its environment only.
+/// </param>
 public sealed record NodeGatewayOptions(
     string Command,
     string HostedServerUrl,
@@ -20,7 +28,9 @@ public sealed record NodeGatewayOptions(
     string CustomMetadataDirectory,
     string? PrivatePrefixes,
     string WorkingDirectory,
-    string? StandardIndexPath = null);
+    string? StandardIndexPath = null,
+    string? LocalIndexPath = null,
+    string? XrefConnectionString = null);
 
 /// <summary>
 /// Runs the Node hybrid gateway (<c>d365-fno-mcp-server gateway</c>) as a child process on a
@@ -170,12 +180,14 @@ public sealed class NodeGatewayProcess : IAsyncDisposable
         env["D365_CUSTOM_METADATA_DIR"] = options.CustomMetadataDirectory;
         env["D365_PROJECT_DIR"] = string.Empty;
 
-        // In memory: no token file, and two Visual Studio instances never share a database file.
-        env["D365_LOCAL_INDEX_DB_PATH"] = ":memory:";
+        // A file per configuration when the caller holds its lock (see IndexFileLock); otherwise in memory, so two
+        // Visual Studio instances never share a database file.
+        env["D365_LOCAL_INDEX_DB_PATH"] = string.IsNullOrWhiteSpace(options.LocalIndexPath) ? ":memory:" : options.LocalIndexPath;
         env["D365_GATEWAY_PORT"] = port.ToString(System.Globalization.CultureInfo.InvariantCulture);
         env["D365_GATEWAY_TOKEN"] = token;
         env["D365_GATEWAY_PRIVATE_PREFIXES"] = options.PrivatePrefixes?.Trim() ?? string.Empty;
         env["D365_GATEWAY_STANDARD_INDEX_DB_PATH"] = options.StandardIndexPath?.Trim() ?? string.Empty;
+        env["D365_GATEWAY_XREF_CONNECTION_STRING"] = options.XrefConnectionString ?? string.Empty;
         return startInfo;
     }
 

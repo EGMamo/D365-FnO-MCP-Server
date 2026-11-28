@@ -30,7 +30,9 @@ internal sealed class ExtensionEntrypoint : Microsoft.VisualStudio.Extensibility
         [
             MenuChild.Command<ConfigureConnectionCommand>(),
             MenuChild.Command<SetApiKeyCommand>(),
+            MenuChild.Command<SelectXppConfigurationCommand>(),
             MenuChild.Command<SetCustomModelsCommand>(),
+            MenuChild.Command<CrossReferencesCommand>(),
             MenuChild.Command<SelectToolsCommand>(),
             MenuChild.Command<TestConnectionCommand>(),
         ],

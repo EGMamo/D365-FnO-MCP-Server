@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Visual Studio extension: follows the XPP configuration in use (Manage local XPP configurations). It indexes
+  that configuration's custom metadata folder, whatever its name, and sends its version. It keeps one index
+  per configuration and restarts for a switch. **Select XPP Configuration...** pins one. **Set Custom Models
+  Folder...** now overrides it and is validated whenever it is set or changed.
+- Hybrid gateway: `D365_GATEWAY_XREF_CONNECTION_STRING` imports the compiler references that touch the custom
+  models into the custom index after indexing, so `find_usages` lists call sites in custom code. In Visual Studio
+  this is **Import Cross-References...**, off by default, using the XPP configuration's cross-reference database.
+
 - `D365_ALLOWED_HOSTS` (comma-separated Host header values) for the main server: when set, requests with
   any other Host are refused with 403 before rate limiting and auth, closing the DNS-rebinding window
   the gateway already closed for itself.

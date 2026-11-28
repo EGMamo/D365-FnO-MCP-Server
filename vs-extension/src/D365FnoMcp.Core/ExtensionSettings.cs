@@ -19,10 +19,24 @@ public sealed class ExtensionSettings
     public List<string>? AllowedTools { get; set; }
 
     /// <summary>
-    /// Folder of the custom models to index on this machine. When set, the extension runs the Node
-    /// hybrid gateway and forwards to it, so Copilot sees custom code; empty forwards to the hosted server only.
+    /// Folder of the custom models to index on this machine, overriding the XPP configuration's. Empty follows
+    /// the custom metadata folder of the XPP configuration the extension follows (see <see cref="XppConfigurationName"/>);
+    /// with neither, the gateway forwards to the hosted server only.
     /// </summary>
     public string CustomMetadataDirectory { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The XPP configuration (Manage local XPP configurations) to follow, by name. Empty picks it automatically:
+    /// the only one, else the most recently saved.
+    /// </summary>
+    public string XppConfigurationName { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Developer option, off by default: import the compiler's cross-references for the custom models from the XPP
+    /// configuration's cross-reference database, so find_usages lists call sites in custom code. Needs the msnodesqlv8
+    /// driver and an ODBC driver for SQL Server; the read can hold a compile's writes to that database while it runs.
+    /// </summary>
+    public bool ImportCrossReferences { get; set; }
 
     /// <summary>How to run the server's CLI for the Node gateway; "gateway" is appended.</summary>
     public string NodeGatewayCommand { get; set; } = DefaultNodeGatewayCommand;

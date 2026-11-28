@@ -19,12 +19,25 @@ internal sealed class ExtensionServices : IWorkspaceContextProvider, IVisualStud
     /// <summary>The Node hybrid gateway the extension's gateway forwards to, when a custom models folder is set.</summary>
     private NodeGatewayProcess? nodeGateway;
 
+    /// <summary>The lock on the Node gateway's index file, held while it runs; null when it indexes in memory.</summary>
+    private IndexFileLock? indexLock;
+
+    /// <summary>What the running gateways were started for; a change to it restarts them.</summary>
+    private XppSnapshot? startedFor;
+
+    private FileSystemWatcher? xppWatcher;
+    private CancellationTokenSource? xppDebounce;
+
     public ExtensionServices(VisualStudioExtensibility extensibility)
     {
         this.extensibility = extensibility;
         _ = Task.Run(this.DrainLogAsync);
         _ = Task.Run(this.StartConfiguredGatewayAsync);
+        this.WatchXppConfigurations();
     }
+
+    /// <summary>The parts of the XPP configuration and settings a running gateway depends on.</summary>
+    private sealed record XppSnapshot(string? Name, string? Version, string? CustomFolder);
 
     public SettingsStore Settings { get; } = new(SettingsStore.DefaultPath());
 
@@ -71,17 +84,25 @@ internal sealed class ExtensionServices : IWorkspaceContextProvider, IVisualStud
         {
             McpGateway? previous = this.gateway;
             NodeGatewayProcess? previousNode = this.nodeGateway;
+            IndexFileLock? previousLock = this.indexLock;
+
+            // The previous Node gateway may hold the index file the new one wants (same configuration),
+            // so it is stopped first; the extension's own gateway keeps answering until the new one listens.
+            if (previousNode is not null)
+            {
+                await previousNode.DisposeAsync();
+                this.nodeGateway = null;
+            }
+
+            previousLock?.Dispose();
+            this.indexLock = null;
+
             (McpGateway created, NodeGatewayProcess? createdNode) = await this.StartGatewayAsync(serverUrl, apiKey, cancellationToken);
             this.gateway = created;
             this.nodeGateway = createdNode;
             if (previous is not null)
             {
                 await previous.DisposeAsync();
-            }
-
-            if (previousNode is not null)
-            {
-                await previousNode.DisposeAsync();
             }
 
             return created;
@@ -129,9 +150,43 @@ internal sealed class ExtensionServices : IWorkspaceContextProvider, IVisualStud
     /// <summary>Queues a line for the Output pane; lines keep their order however many threads log.</summary>
     public void Log(string line) => this.logQueue.Writer.TryWrite(line);
 
+    /// <summary>The XPP configuration the extension follows now, and why.</summary>
+    public XppConfigurationChoice ChooseXppConfiguration() =>
+        XppConfigurations.ChooseDefault(this.Settings.Load().XppConfigurationName);
+
+    /// <summary>The custom models folder in effect: the override in the settings, else the XPP configuration's.</summary>
+    public static string? EffectiveCustomFolder(ExtensionSettings settings, XppConfiguration? configuration) =>
+        !string.IsNullOrWhiteSpace(settings.CustomMetadataDirectory)
+            ? settings.CustomMetadataDirectory
+            : configuration?.ModelStoreFolder;
+
+    /// <summary>
+    /// Restarts the gateways for the current settings and XPP configuration and points the managed .mcp.json at
+    /// the new endpoint. Does nothing before Configure Connection has run.
+    /// </summary>
+    public async Task<McpGateway?> RestartAndPublishAsync(CancellationToken cancellationToken)
+    {
+        ExtensionSettings settings = this.Settings.Load();
+        if (string.IsNullOrWhiteSpace(settings.ServerUrl) || string.IsNullOrWhiteSpace(settings.McpConfigurationPath))
+        {
+            return null;
+        }
+
+        string? apiKey = this.Secrets.Read(SecretNames.ApiKey(settings.ServerUrl));
+        if (string.IsNullOrWhiteSpace(apiKey))
+        {
+            return null;
+        }
+
+        McpGateway gateway = await this.RestartGatewayAsync(settings.ServerUrl, apiKey, cancellationToken);
+        McpJsonFile.Write(settings.McpConfigurationPath, settings.McpServerName, gateway.Endpoint!, gateway.BearerToken);
+        return gateway;
+    }
+
     public async Task<WorkspaceContext> GetAsync(CancellationToken cancellationToken)
     {
-        string? sdkVersion = PackagesDirectoryLocator.SdkVersion(PackagesDirectoryLocator.Detect());
+        XppConfiguration? configuration = this.ChooseXppConfiguration().Configuration;
+        string? sdkVersion = configuration?.Version ?? PackagesDirectoryLocator.SdkVersion(PackagesDirectoryLocator.Detect());
         string? solutionDirectory = null;
         try
         {
@@ -145,7 +200,7 @@ internal sealed class ExtensionServices : IWorkspaceContextProvider, IVisualStud
             this.Log($"Workspace context query failed: {ex.Message}");
         }
 
-        return WorkspaceContextResolver.Resolve(solutionDirectory, sdkVersion);
+        return WorkspaceContextResolver.Resolve(solutionDirectory, sdkVersion) with { XppConfiguration = configuration?.Name };
     }
 
     public async Task<string> FindProjectAsync(string? projectName, CancellationToken cancellationToken)
@@ -201,6 +256,11 @@ internal sealed class ExtensionServices : IWorkspaceContextProvider, IVisualStud
     {
         this.logQueue.Writer.TryComplete();
         this.output?.Dispose();
+        this.xppWatcher?.Dispose();
+        if (this.xppDebounce is not null)
+        {
+            await this.xppDebounce.CancelAsync();
+        }
         await this.gatewayLock.WaitAsync();
         try
         {
@@ -246,6 +306,9 @@ internal sealed class ExtensionServices : IWorkspaceContextProvider, IVisualStud
             await this.nodeGateway.DisposeAsync();
             this.nodeGateway = null;
         }
+
+        this.indexLock?.Dispose();
+        this.indexLock = null;
     }
 
     /// <summary>
@@ -255,13 +318,19 @@ internal sealed class ExtensionServices : IWorkspaceContextProvider, IVisualStud
     /// </summary>
     private async Task<(McpGateway Gateway, NodeGatewayProcess? Node)> StartGatewayAsync(string serverUrl, string apiKey, CancellationToken cancellationToken)
     {
-        string? sdkVersion = PackagesDirectoryLocator.SdkVersion(PackagesDirectoryLocator.Detect());
         ExtensionSettings settings = this.Settings.Load();
-        NodeGatewayProcess? node = await this.StartNodeGatewayAsync(settings, serverUrl, apiKey, cancellationToken);
+        XppConfigurationChoice choice = XppConfigurations.ChooseDefault(settings.XppConfigurationName);
+        XppConfiguration? configuration = choice.Configuration;
+        this.Log($"Following {choice.Reason}");
+        string? sdkVersion = configuration?.Version ?? PackagesDirectoryLocator.SdkVersion(PackagesDirectoryLocator.Detect());
+        string? customFolder = EffectiveCustomFolder(settings, configuration);
+        this.startedFor = new XppSnapshot(configuration?.Name, configuration?.Version, customFolder);
+
+        NodeGatewayProcess? node = await this.StartNodeGatewayAsync(settings, customFolder, configuration, serverUrl, apiKey, cancellationToken);
         var created = new McpGateway(this.GatewayHttp, this, this)
         {
             AllowedTools = ToolSelection.ToSet(settings.AllowedTools),
-            CustomMetadataDirectory = string.IsNullOrWhiteSpace(settings.CustomMetadataDirectory) ? null : settings.CustomMetadataDirectory,
+            CustomMetadataDirectory = node is null || string.IsNullOrWhiteSpace(customFolder) ? null : customFolder,
         };
         try
         {
@@ -286,32 +355,80 @@ internal sealed class ExtensionServices : IWorkspaceContextProvider, IVisualStud
         return (created, node);
     }
 
-    private async Task<NodeGatewayProcess?> StartNodeGatewayAsync(ExtensionSettings settings, string serverUrl, string apiKey, CancellationToken cancellationToken)
+    private async Task<NodeGatewayProcess?> StartNodeGatewayAsync(
+        ExtensionSettings settings,
+        string? customFolder,
+        XppConfiguration? configuration,
+        string serverUrl,
+        string apiKey,
+        CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(settings.CustomMetadataDirectory))
+        if (string.IsNullOrWhiteSpace(customFolder))
         {
             return null;
+        }
+
+        string source = string.IsNullOrWhiteSpace(settings.CustomMetadataDirectory)
+            ? $"the custom metadata folder of XPP configuration '{configuration?.Name}'"
+            : "the custom models folder set in Extensions > D365 F&O MCP > Set Custom Models Folder...";
+        CustomModelsFolderReport report = CustomModelsFolder.Inspect(customFolder);
+        if (!report.IsValid)
+        {
+            this.Log($"Custom models are not indexed: {source} is not usable. {report.Summary}");
+            return null;
+        }
+
+        this.Log($"Custom models from {source} ({customFolder}): {report.Summary}");
+        if (configuration is not null && !string.IsNullOrWhiteSpace(settings.CustomMetadataDirectory) &&
+            !CustomModelsFolder.SameFolder(settings.CustomMetadataDirectory, configuration.ModelStoreFolder))
+        {
+            this.Log($"Note: this differs from XPP configuration '{configuration.Name}', whose custom metadata folder is {configuration.ModelStoreFolder}.");
+        }
+
+        // One index file per configuration (or per override folder), so each is indexed once and a switch back is quick.
+        string indexes = Path.Combine(Path.GetDirectoryName(this.Settings.Path)!, "indexes");
+        string indexPath = string.IsNullOrWhiteSpace(settings.CustomMetadataDirectory) && configuration is not null
+            ? IndexFileLock.PathFor(indexes, configuration)
+            : Path.Combine(indexes, "custom-" + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+                System.Text.Encoding.UTF8.GetBytes(Path.GetFullPath(customFolder).ToUpperInvariant())))[..16] + ".db");
+        IndexFileLock? fileLock = IndexFileLock.TryAcquire(indexPath);
+        if (fileLock is null)
+        {
+            this.Log("Another Visual Studio instance is using the saved index for these custom models; indexing them in memory instead.");
+        }
+
+        string? xref = null;
+        if (settings.ImportCrossReferences)
+        {
+            xref = configuration is null ? null : XppConfigurations.CrossReferencesConnectionString(configuration);
+            this.Log(xref is null
+                ? "Cross-reference import is on, but the XPP configuration names no cross-reference database; find_usages stays hosted-only for custom code."
+                : $"Importing the custom models' compiler cross-references from {configuration!.CrossReferencesDatabaseName} on {configuration.CrossReferencesDbServerName} once they are indexed.");
         }
 
         var node = new NodeGatewayProcess(this.Http, this.Log);
         try
         {
-            this.Log($"Starting the Node gateway for the custom models in {settings.CustomMetadataDirectory}; the first index can take a few minutes.");
+            this.Log($"Starting the Node gateway for the custom models in {customFolder}; the first index can take a few minutes.");
             await node.StartAsync(
                 new NodeGatewayOptions(
                     string.IsNullOrWhiteSpace(settings.NodeGatewayCommand) ? ExtensionSettings.DefaultNodeGatewayCommand : settings.NodeGatewayCommand,
                     serverUrl,
                     apiKey,
-                    settings.CustomMetadataDirectory,
+                    customFolder,
                     settings.PrivatePrefixes,
                     Path.Combine(Path.GetDirectoryName(this.Settings.Path)!, "node-gateway"),
-                    settings.StandardIndexPath),
+                    settings.StandardIndexPath,
+                    fileLock?.IndexPath,
+                    xref),
                 cancellationToken);
             this.Log($"Node gateway for custom models listening at {node.BaseUrl}.");
+            this.indexLock = fileLock;
             return node;
         }
         catch (Exception ex) when (ex is IOException or InvalidOperationException or TimeoutException or ArgumentException or FormatException or System.ComponentModel.Win32Exception)
         {
+            fileLock?.Dispose();
             await node.DisposeAsync();
             this.Log($"Could not start the Node gateway for custom models: {ex.Message} Copilot gets the hosted index only until it starts (Extensions > D365 F&O MCP > Set Custom Models Folder...).");
             return null;
@@ -353,5 +470,80 @@ internal sealed class ExtensionServices : IWorkspaceContextProvider, IVisualStud
         {
             this.Log($"Could not start the configured workspace gateway: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// Watches Visual Studio's XPP configurations. When the one the extension follows changes (another is
+    /// selected, or its custom metadata folder or version is edited), the gateways restart for it, so the
+    /// custom models served are always those of the configuration in use.
+    /// </summary>
+    private void WatchXppConfigurations()
+    {
+        string folder = XppConfigurations.DefaultFolder();
+        if (!Directory.Exists(folder))
+        {
+            return;
+        }
+
+        try
+        {
+            this.xppWatcher = new FileSystemWatcher(folder, "*.json")
+            {
+                NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite,
+                IncludeSubdirectories = false,
+            };
+            this.xppWatcher.Changed += (_, _) => this.OnXppConfigurationsChanged();
+            this.xppWatcher.Created += (_, _) => this.OnXppConfigurationsChanged();
+            this.xppWatcher.Deleted += (_, _) => this.OnXppConfigurationsChanged();
+            this.xppWatcher.Renamed += (_, _) => this.OnXppConfigurationsChanged();
+            this.xppWatcher.EnableRaisingEvents = true;
+        }
+        catch (Exception ex) when (ex is IOException or ArgumentException or UnauthorizedAccessException)
+        {
+            this.Log($"Could not watch the XPP configurations in {folder}: {ex.Message} A configuration switch takes effect when Visual Studio restarts.");
+        }
+    }
+
+    /// <summary>A save fires several events; act once the folder has been quiet for two seconds.</summary>
+    private void OnXppConfigurationsChanged()
+    {
+        var debounce = new CancellationTokenSource();
+        Interlocked.Exchange(ref this.xppDebounce, debounce)?.Cancel();
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(2), debounce.Token);
+                await this.RestartIfXppChangedAsync(debounce.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                // A later change superseded this one.
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                this.Log($"Could not restart the gateway for the changed XPP configuration: {ex.Message}");
+            }
+        });
+    }
+
+    /// <summary>Restarts the gateways when the configuration, version or custom folder they serve has changed.</summary>
+    public async Task RestartIfXppChangedAsync(CancellationToken cancellationToken)
+    {
+        if (this.gateway is null)
+        {
+            return;
+        }
+
+        ExtensionSettings settings = this.Settings.Load();
+        XppConfiguration? configuration = XppConfigurations.ChooseDefault(settings.XppConfigurationName).Configuration;
+        var now = new XppSnapshot(configuration?.Name, configuration?.Version, EffectiveCustomFolder(settings, configuration));
+        if (now == this.startedFor)
+        {
+            return;
+        }
+
+        this.Log($"The XPP configuration changed ({this.startedFor?.Name ?? "none"} -> {now.Name ?? "none"}); restarting the gateway for it.");
+        await this.RestartAndPublishAsync(cancellationToken);
     }
 }

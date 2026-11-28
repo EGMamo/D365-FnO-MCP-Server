@@ -30,6 +30,12 @@ export interface GatewayConfig {
    * the hosted server would otherwise answer alone run on this machine and see custom objects.
    */
   standardIndexDbPath: string | null;
+  /**
+   * Connection string of the compiler's cross-reference database (DynamicsXrefDB, or a UDE's XRef_<config> on
+   * LocalDB), or null. When set, the references that touch the custom models are imported into the custom index
+   * after it is built, so find_usages answers call sites in custom code locally. Never logged.
+   */
+  xrefConnectionString?: string | null;
   port: number;
   host: '127.0.0.1';
   /** Bearer token agents must present to the loopback gateway. */

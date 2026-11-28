@@ -20,6 +20,7 @@ import { GatewayConfigError, loadGatewayConfig } from './config.js';
 import { openLayeredIndex, type LayeredIndex } from './layeredIndex.js';
 import { openLocalIndex } from './localIndex.js';
 import { captureLocalTools } from './localTools.js';
+import { startCustomXrefImport } from './xrefImport.js';
 import { sanitizeReason } from './merge.js';
 import {
   LOCAL_ONLY_TOOL_NAMES,
@@ -656,12 +657,17 @@ export async function launchGateway(config: GatewayConfig): Promise<RunningGatew
   }
 
   let stopping: Promise<void> | null = null;
+  const xrefImport = new AbortController();
+  let xrefImported: Promise<void> = Promise.resolve();
   const stop = (): Promise<void> => {
     stopping ??= (async () => {
+      xrefImport.abort();
       http.closeAllSessions();
       const closed = new Promise<void>((resolve) => http.server.close(() => resolve()));
       http.server.closeAllConnections();
       await closed;
+      // The import writes to the custom index; let its cancellation land before the index closes.
+      await settleWithin(xrefImported, UPSTREAM_CLOSE_GRACE_MS);
       // The local indexes first: closing them is quick and must not wait for a hosted server that does not answer.
       standardIndex?.close();
       localIndex.close();
@@ -674,6 +680,9 @@ export async function launchGateway(config: GatewayConfig): Promise<RunningGatew
     await http.listening;
     if (!localMode) await warmCatalog(config, runtime);
     ready = true;
+    if (config.xrefConnectionString) {
+      xrefImported = startCustomXrefImport(localIndex.db, config.xrefConnectionString, xrefImport.signal);
+    }
   } catch (error) {
     await stop();
     if ((error as NodeJS.ErrnoException).code === 'EADDRINUSE') {
