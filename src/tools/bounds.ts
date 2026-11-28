@@ -24,3 +24,15 @@ export function capLists<T extends object>(value: T, keys: readonly (keyof T & s
   if (Object.keys(truncated).length > 0) out.truncated = truncated;
   return out as T & { truncated?: Record<string, TruncationInfo> };
 }
+
+/**
+ * Caps a name/value map at `max` entries (in key order), reporting the cut the same way capLists does.
+ * Used for an object's `properties`, which a large table can carry many of.
+ */
+export function capRecord(value: Record<string, string>, max: number): { kept: Record<string, string>; truncation?: TruncationInfo } {
+  const keys = Object.keys(value);
+  if (keys.length <= max) return { kept: value };
+  const kept: Record<string, string> = {};
+  for (const key of keys.slice(0, max)) kept[key] = value[key];
+  return { kept, truncation: { returned: max, total: keys.length } };
+}

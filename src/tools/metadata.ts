@@ -5,7 +5,7 @@ import * as dbUtils from '../indexer/db.js';
 import { getIndexStats } from '../indexer/buildIndex.js';
 import { loadObjectXml, sourceFileReadsAllowed } from '../indexer/sourceFiles.js';
 import { findUsageRefs, getUsageSnapshotStatus } from '../indexer/xrefUsage.js';
-import { capLists, DEFAULT_MAX_ITEMS } from './bounds.js';
+import { capLists, capRecord, DEFAULT_MAX_ITEMS } from './bounds.js';
 import { READ_ONLY_TOOL } from './annotations.js';
 import type { ArtifactDescription } from '../server/serverStatus.js';
 import { analyzeImpact, explainSearchHits } from './impact.js';
@@ -111,14 +111,14 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
 
   server.tool(
     'get_table_schema',
-    'Full table details. Each list is capped at maxItems (default 1000); clipped lists are reported under "truncated".',
-    { tableName: z.string(), xrefLimit: z.number().int().min(1).max(500).default(100), maxItems: z.number().int().min(10).max(10_000).default(1000).describe('Maximum items returned per list (fields, methods, controls, ...); a clipped list is reported under "truncated".') },
+    'Table details: fields, methods, properties and incoming references (the XML itself is left out; use get_element_xml for it). Each list is capped at maxItems (default 1000); clipped lists are reported under "truncated".',
+    { tableName: z.string(), xrefLimit: z.number().int().min(1).max(500).default(100), maxItems: z.number().int().min(1).max(10_000).default(1000).describe('Maximum items returned per list (fields, methods, controls, ...); a clipped list is reported under "truncated".') },
     READ_ONLY_TOOL,
     async ({ tableName, xrefLimit, maxItems = DEFAULT_MAX_ITEMS }) => {
       const obj = dbUtils.getObjectByName(db, tableName, 'Table');
       if (!obj) return { content: [{ type: 'text', text: dbUtils.notFoundMessage(db, 'Table', tableName, 'Table') }] };
       const xrefs = dbUtils.getXrefsTo(db, obj.name, 'Table', xrefLimit);
-      return { content: [{ type: 'text', text: JSON.stringify(capLists({ ...obj, xrefs }, ['fields', 'methods', 'xrefs'], maxItems)) }] };
+      return { content: [{ type: 'text', text: JSON.stringify(tableSchemaView(obj, xrefs, maxItems)) }] };
     }
   );
 
@@ -211,7 +211,7 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
   server.tool(
     'get_enum_values',
     'Enum details. The values list is capped at maxItems (default 1000); a clipped list is reported under "truncated".',
-    { enumName: z.string(), maxItems: z.number().int().min(10).max(10_000).default(1000).describe('Maximum items returned per list; a clipped list is reported under "truncated".') },
+    { enumName: z.string(), maxItems: z.number().int().min(1).max(10_000).default(1000).describe('Maximum items returned per list; a clipped list is reported under "truncated".') },
     READ_ONLY_TOOL,
     async ({ enumName, maxItems = DEFAULT_MAX_ITEMS }) => {
       const obj = dbUtils.getObjectByName(db, enumName, 'Enum');
@@ -251,7 +251,7 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
   server.tool(
     'get_form_datasources',
     'Form datasource and control info. Each list is capped at maxItems (default 1000); clipped lists are reported under "truncated".',
-    { formName: z.string(), maxItems: z.number().int().min(10).max(10_000).default(1000).describe('Maximum items returned per list (fields, methods, controls, ...); a clipped list is reported under "truncated".') },
+    { formName: z.string(), maxItems: z.number().int().min(1).max(10_000).default(1000).describe('Maximum items returned per list (fields, methods, controls, ...); a clipped list is reported under "truncated".') },
     READ_ONLY_TOOL,
     async ({ formName, maxItems = DEFAULT_MAX_ITEMS }) => {
       const obj = dbUtils.getObjectByName(db, formName, 'Form');
@@ -271,7 +271,7 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
   server.tool(
     'get_query_datasources',
     'Query datasource info. The list is capped at maxItems (default 1000); a clipped list is reported under "truncated".',
-    { queryName: z.string(), maxItems: z.number().int().min(10).max(10_000).default(1000).describe('Maximum items returned per list; a clipped list is reported under "truncated".') },
+    { queryName: z.string(), maxItems: z.number().int().min(1).max(10_000).default(1000).describe('Maximum items returned per list; a clipped list is reported under "truncated".') },
     READ_ONLY_TOOL,
     async ({ queryName, maxItems = DEFAULT_MAX_ITEMS }) => {
       const obj = dbUtils.getObjectByName(db, queryName, 'Query');
@@ -289,7 +289,7 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
   server.tool(
     'get_data_entity_details',
     'Data entity fields and datasources. Each list is capped at maxItems (default 1000); clipped lists are reported under "truncated".',
-    { entityName: z.string(), maxItems: z.number().int().min(10).max(10_000).default(1000).describe('Maximum items returned per list (fields, methods, controls, ...); a clipped list is reported under "truncated".') },
+    { entityName: z.string(), maxItems: z.number().int().min(1).max(10_000).default(1000).describe('Maximum items returned per list (fields, methods, controls, ...); a clipped list is reported under "truncated".') },
     READ_ONLY_TOOL,
     async ({ entityName, maxItems = DEFAULT_MAX_ITEMS }) => {
       const obj = dbUtils.getObjectByName(db, entityName, 'DataEntity');
@@ -419,4 +419,37 @@ export function registerMetadataTools(server: McpServer, db: Database, options: 
       return { content: [{ type: 'text', text: JSON.stringify(body) }] };
     }
   );
+}
+
+/** Lists of a table's detail that maxItems caps. */
+const TABLE_SCHEMA_LISTS = ['fields', 'methods', 'xrefs', 'enumValues', 'dataSources', 'controls'] as const;
+
+/**
+ * What get_table_schema returns for an indexed table: the parsed detail without the stored XML, the
+ * file timestamp or the index's own row ids, every list and the properties capped at `maxItems`.
+ * The XML alone can be megabytes for a large table and is what get_element_xml is for.
+ */
+export function tableSchemaView(obj: dbUtils.ObjectDetails, xrefs: dbUtils.Xref[], maxItems: number): Record<string, unknown> {
+  const header: Record<string, unknown> = { ...obj };
+  for (const key of ['id', 'raw_xml', 'file_mtime', 'properties', 'fields', 'methods']) delete header[key];
+  const withoutRowIds = (rows: object[]) =>
+    rows.map((row) => {
+      const copy: Record<string, unknown> = { ...row };
+      delete copy.id;
+      delete copy.object_id;
+      return copy;
+    });
+  const { properties } = obj;
+  const capped = capLists<Record<string, unknown>>(
+    { ...header, fields: withoutRowIds(obj.fields), methods: withoutRowIds(obj.methods), xrefs },
+    TABLE_SCHEMA_LISTS,
+    maxItems
+  ) as Record<string, unknown> & { truncated?: Record<string, { returned: number; total: number }> };
+  const { kept, truncation } = capRecord(properties, maxItems);
+  const truncated = { ...(capped.truncated ?? {}) };
+  if (truncation) truncated.properties = truncation;
+  const result: Record<string, unknown> = { ...capped, properties: kept };
+  if (Object.keys(truncated).length > 0) result.truncated = truncated;
+  else delete result.truncated;
+  return result;
 }
