@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Visual Studio extension: ships Node.js and the Node gateway for custom models inside the VSIX, so custom
+  objects reach Copilot without installing `d365-fno-mcp-server` (before, a missing command left Copilot with the
+  hosted index only). `NodeGatewayCommand` still runs your own build.
 - Visual Studio extension: follows the XPP configuration ticked Current (Manage local XPP configurations, read
   from the registry value `CurrentMetadataConfig`). It indexes
   that configuration's custom metadata folder, whatever its name, and sends its version. It keeps one index

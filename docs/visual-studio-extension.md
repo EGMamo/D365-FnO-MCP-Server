@@ -110,7 +110,7 @@ configuration again.
 When it is on, each time the gateway starts it imports the compiler references that touch your custom
 models from the XPP configuration's cross-reference database (for example `XRef_<config>` on
 `(LocalDB)\MSSQLLocalDB`). `find_usages` then lists call sites in custom code ahead of the hosted ones.
-It needs the `msnodesqlv8` driver (`npm install -g msnodesqlv8`) and an ODBC driver for SQL Server. A
+It needs an ODBC driver for SQL Server (the `msnodesqlv8` driver ships with the extension). A
 database without snapshot isolation is read with locks, which can hold a compile's writes until the
 read ends. Progress and errors go to the Output pane.
 
@@ -150,15 +150,17 @@ Azure MCP API
   generators) run in the Node gateway over the standard and custom models together, and are not
   sent to Azure. The file is only read. See [Standard index](hybrid-gateway.md#standard-index).
 - **Select Tools...** also lists `local_index_status`, the Node gateway's report on the custom index.
-- If the Node gateway does not start (no Node.js, command not found, an invalid folder), the
+- If the Node gateway does not start (command not found, an invalid folder), the
   extension forwards to Azure as before and writes the reason to the **D365 F&O MCP** Output pane.
   If the Node gateway stops later, the next connection starts both gateways again.
 
-The extension needs Node.js 24 or later and the server's CLI on the `PATH` (`npm link` in a clone of
-this repository; the package is not on npm yet). To run it another way, set `NodeGatewayCommand` in
+The extension ships its own Node.js and Node gateway (in the VSIX, under `node-gateway`), so nothing has
+to be installed. To run your own build instead, set `NodeGatewayCommand` in
 `%LOCALAPPDATA%\D365FnoMcp\settings.json`, for example
 `"\"C:\\Program Files\\nodejs\\node.exe\" C:\\tools\\d365\\dist\\src\\index.js"`; the
-extension appends `gateway`.
+extension appends `gateway`. Left at its default, `d365-fno-mcp-server`, the shipped copy is used; a VSIX
+built without the bundle (a local `dotnet build` that skipped `node scripts/bundle-vs-node-gateway.mjs`)
+runs `d365-fno-mcp-server` from the `PATH`.
 
 You can still run the Node gateway by hand for other clients on the same machine, such as Claude
 Code, Copilot CLI or VS Code: it is a separate process with its own port and token (see

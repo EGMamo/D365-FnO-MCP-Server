@@ -18,6 +18,14 @@
     <None Remove="UI\ToolSelectionControl.xaml" />
     <EmbeddedResource Include="UI\ToolSelectionControl.xaml" LogicalName="D365FnoMcp.Extension.UI.ToolSelectionControl.xaml" />
   </ItemGroup>
+  <!-- Node.js and the Node gateway for custom models (scripts/bundle-vs-node-gateway.mjs), so a developer installs
+       nothing. Packed only when the bundle has been built; without it the extension runs d365-fno-mcp-server from the PATH. -->
+  <PropertyGroup>
+    <NodeGatewayBundle>$(MSBuildThisFileDirectory)..\..\node-gateway\</NodeGatewayBundle>
+  </PropertyGroup>
+  <ItemGroup Condition="Exists('$(NodeGatewayBundle)node.exe')">
+    <Content Include="$(NodeGatewayBundle)**\*" Link="node-gateway\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" IncludeInVSIX="true" />
+  </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\D365FnoMcp.Core\D365FnoMcp.Core.csproj" />
   </ItemGroup>
