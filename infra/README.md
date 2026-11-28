@@ -206,7 +206,9 @@ to report healthy (it has then materialized and validated the bundle), smoke-tes
 The swap runs in two phases because a swap restarts the staging container with production's settings
 and it downloads the bundle again, which takes minutes and exceeds a plain swap's warm-up: `--action
 preview` first, then the workflow waits up to 20 minutes for the staging slot's `/health`, then `--action
-swap` completes it (or `--action reset` cancels it if the slot never becomes ready). If production is not
+swap` completes it (or `--action reset` cancels it if the slot never becomes ready). The preview's own
+warm-up accepts the 503 that `/health` answers while the bundle loads
+(`WEBSITE_SWAP_WARMUP_PING_STATUSES=200,503`); with only 200 it would abort on the first 503. If production is not
 healthy after the swap, the workflow swaps back. It then stops `staging` while production is
 healthy (otherwise it leaves `staging` running and warns), and the next deployment starts it again.
 

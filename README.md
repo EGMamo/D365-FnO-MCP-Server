@@ -202,8 +202,8 @@ be hard-linked (one mount) the active database is a link to the bundle's file, s
 a single copy; otherwise it is copied and needs room for a second one.
 A promotion takes effect when a replica restarts; for App Service, warm a staging slot running the
 same image against
-`/health` (`WEBSITE_SWAP_WARMUP_PING_PATH=/health`, `WEBSITE_SWAP_WARMUP_PING_STATUSES=200`) and
-swap, and roll back by promoting the previous pointer and restarting.
+`/health` (`WEBSITE_SWAP_WARMUP_PING_PATH=/health`, `WEBSITE_SWAP_WARMUP_PING_STATUSES=200,503`) and
+swap in two phases (preview, wait for `/health` 200, complete), and roll back by promoting the previous pointer and restarting.
 
 ## CLI reference
 
