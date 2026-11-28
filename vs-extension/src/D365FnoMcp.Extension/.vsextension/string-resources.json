@@ -5,5 +5,6 @@
   "D365FnoMcp.SelectTools.DisplayName": "Select Tools...",
   "D365FnoMcp.SetCustomModels.DisplayName": "Set Custom Models Folder...",
   "D365FnoMcp.TestConnection.DisplayName": "Test Connection",
-  "D365FnoMcp.SelectXppConfiguration.DisplayName": "Select XPP Configuration..."
+  "D365FnoMcp.SelectXppConfiguration.DisplayName": "Select XPP Configuration...",
+  "D365FnoMcp.CrossReferences.DisplayName": "Import Cross-References..."
 }

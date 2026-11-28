@@ -112,6 +112,21 @@ public sealed class XppConfigurationTests : IDisposable
         Assert.Contains("no longer exists", gone.Reason, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void BuildsAWindowsAuthenticationConnectionStringForTheCrossReferenceDatabase()
+    {
+        WriteConfig("zelesta-dev", "10.0.2790.105", @"C:\custom");
+        XppConfiguration config = Assert.Single(XppConfigurations.List(this.root));
+
+        Assert.Equal(
+            @"Server=(LocalDB)\MSSQLLocalDB;Database=XRef_zelesta-dev;Trusted_Connection=yes",
+            XppConfigurations.CrossReferencesConnectionString(config));
+        Assert.Equal(
+            "Server={a;b};Database=X;Trusted_Connection=yes",
+            XppConfigurations.CrossReferencesConnectionString(config with { CrossReferencesDbServerName = "a;b", CrossReferencesDatabaseName = "X" }));
+        Assert.Null(XppConfigurations.CrossReferencesConnectionString(config with { CrossReferencesDatabaseName = null }));
+    }
+
     [Theory]
     [InlineData("zelesta-dev__10.0.2790.105", "zelesta-dev", "10.0.2790.105")]
     [InlineData("my__config__10.0.1", "my__config", "10.0.1")]

@@ -104,6 +104,14 @@ packages found and warns when the folder differs from the XPP configuration's. T
 your private name prefixes, for example `Contoso,Fabrikam`. Leave the folder empty to follow the XPP
 configuration again.
 
+**Extensions > D365 F&O MCP > Import Cross-References...** is a developer option and is off by default.
+When it is on, each time the gateway starts it imports the compiler references that touch your custom
+models from the XPP configuration's cross-reference database (for example `XRef_<config>` on
+`(LocalDB)\MSSQLLocalDB`). `find_usages` then lists call sites in custom code ahead of the hosted ones.
+It needs the `msnodesqlv8` driver (`npm install -g msnodesqlv8`) and an ODBC driver for SQL Server. A
+database without snapshot isolation is read with locks, which can hold a compile's writes until the
+read ends. Progress and errors go to the Output pane.
+
 With a folder set, the extension starts the Node hybrid gateway described in
 [Hybrid gateway](hybrid-gateway.md) as a child process and forwards to it instead of to Azure:
 

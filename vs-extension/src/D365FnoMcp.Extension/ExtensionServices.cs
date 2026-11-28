@@ -397,6 +397,15 @@ internal sealed class ExtensionServices : IWorkspaceContextProvider, IVisualStud
             this.Log("Another Visual Studio instance is using the saved index for these custom models; indexing them in memory instead.");
         }
 
+        string? xref = null;
+        if (settings.ImportCrossReferences)
+        {
+            xref = configuration is null ? null : XppConfigurations.CrossReferencesConnectionString(configuration);
+            this.Log(xref is null
+                ? "Cross-reference import is on, but the XPP configuration names no cross-reference database; find_usages stays hosted-only for custom code."
+                : $"Importing the custom models' compiler cross-references from {configuration!.CrossReferencesDatabaseName} on {configuration.CrossReferencesDbServerName} once they are indexed.");
+        }
+
         var node = new NodeGatewayProcess(this.Http, this.Log);
         try
         {
@@ -410,7 +419,8 @@ internal sealed class ExtensionServices : IWorkspaceContextProvider, IVisualStud
                     settings.PrivatePrefixes,
                     Path.Combine(Path.GetDirectoryName(this.Settings.Path)!, "node-gateway"),
                     settings.StandardIndexPath,
-                    fileLock?.IndexPath),
+                    fileLock?.IndexPath,
+                    xref),
                 cancellationToken);
             this.Log($"Node gateway for custom models listening at {node.BaseUrl}.");
             this.indexLock = fileLock;

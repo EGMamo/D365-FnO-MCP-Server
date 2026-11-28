@@ -142,6 +142,23 @@ public static class XppConfigurations
     /// <summary>Choose over the configurations in this user's folder.</summary>
     public static XppConfigurationChoice ChooseDefault(string? pinnedName) => Choose(List(DefaultFolder()), pinnedName);
 
+    /// <summary>
+    /// A Windows-authentication connection string for the configuration's cross-reference database, or null when
+    /// the configuration names none.
+    /// </summary>
+    public static string? CrossReferencesConnectionString(XppConfiguration configuration)
+    {
+        if (string.IsNullOrWhiteSpace(configuration.CrossReferencesDbServerName) || string.IsNullOrWhiteSpace(configuration.CrossReferencesDatabaseName))
+        {
+            return null;
+        }
+
+        // Braces quote a value that holds a separator; a closing brace inside one is doubled.
+        static string Value(string value) =>
+            value.IndexOfAny([';', '{', '}', '=']) >= 0 ? "{" + value.Replace("}", "}}", StringComparison.Ordinal) + "}" : value;
+        return $"Server={Value(configuration.CrossReferencesDbServerName)};Database={Value(configuration.CrossReferencesDatabaseName)};Trusted_Connection=yes";
+    }
+
     /// <summary>A file-name-safe key for a configuration, used to keep one custom index per configuration.</summary>
     public static string IndexKey(XppConfiguration configuration)
     {

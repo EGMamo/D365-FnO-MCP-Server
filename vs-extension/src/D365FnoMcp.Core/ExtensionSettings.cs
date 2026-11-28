@@ -31,6 +31,13 @@ public sealed class ExtensionSettings
     /// </summary>
     public string XppConfigurationName { get; set; } = string.Empty;
 
+    /// <summary>
+    /// Developer option, off by default: import the compiler's cross-references for the custom models from the XPP
+    /// configuration's cross-reference database, so find_usages lists call sites in custom code. Needs the msnodesqlv8
+    /// driver and an ODBC driver for SQL Server; the read can hold a compile's writes to that database while it runs.
+    /// </summary>
+    public bool ImportCrossReferences { get; set; }
+
     /// <summary>How to run the server's CLI for the Node gateway; "gateway" is appended.</summary>
     public string NodeGatewayCommand { get; set; } = DefaultNodeGatewayCommand;
 
