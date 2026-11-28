@@ -10,7 +10,7 @@ public class McpGatewayTests
     private sealed class ContextProvider : IWorkspaceContextProvider
     {
         public Task<WorkspaceContext> GetAsync(CancellationToken cancellationToken) =>
-            Task.FromResult(new WorkspaceContext("10.0.2095.13", "Sales", "SalesProject", "SalesModel"));
+            Task.FromResult(new WorkspaceContext("10.0.2095.13", "Sales", "SalesProject", "SalesModel", "sales-dev"));
     }
 
     private sealed class Upstream : HttpMessageHandler
@@ -50,6 +50,63 @@ public class McpGatewayTests
         public Task AddFilesAsync(string projectPath, IReadOnlyList<string> paths, CancellationToken cancellationToken) => throw new NotSupportedException();
 
         public Task BuildAsync(string projectPath, CancellationToken cancellationToken) => throw new NotSupportedException();
+    }
+
+    /// <summary>Answers every request with a server-sent event stream of unknown length.</summary>
+    private sealed class StreamingUpstream : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var content = new StreamContent(new MemoryStream(Encoding.UTF8.GetBytes("event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{}}\n\n")));
+            content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("text/event-stream");
+            content.Headers.ContentLength = null;
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = content });
+        }
+    }
+
+    [Fact]
+    public void ReferencesNothingTheVisualStudioExtensionHostCannotLoad()
+    {
+        // The extension host loads only Microsoft.NETCore.App and the VSIX's own files. ASP.NET Core
+        // (Kestrel, Microsoft.Extensions.Hosting) is not part of it, and referencing it made the
+        // gateway fail at start with "Could not load file or assembly
+        // 'Microsoft.Extensions.Hosting.Abstractions'".
+        string[] unavailable = typeof(McpGateway).Assembly.GetReferencedAssemblies()
+            .Select(name => name.Name ?? string.Empty)
+            .Where(name => name.StartsWith("Microsoft.AspNetCore", StringComparison.Ordinal) ||
+                           name.StartsWith("Microsoft.Extensions", StringComparison.Ordinal))
+            .ToArray();
+        Assert.Empty(unavailable);
+    }
+
+    [Fact]
+    public async Task StreamsAnUpstreamEventStreamOfUnknownLength()
+    {
+        await using var gateway = new McpGateway(new HttpClient(new StreamingUpstream()), new ContextProvider());
+        await gateway.StartAsync("https://app.example.net", "upstream-secret", null, CancellationToken.None);
+        using var client = new HttpClient();
+        client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", gateway.BearerToken);
+
+        using HttpResponseMessage response = await client.PostAsync(
+            gateway.Endpoint,
+            new StringContent("""{"jsonrpc":"2.0","id":7,"method":"resources/list"}""", Encoding.UTF8, "application/json"));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("text/event-stream", response.Content.Headers.ContentType?.MediaType);
+        Assert.Contains("\"id\":7", await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AnswersOnlyTheMcpPath()
+    {
+        await using var gateway = new McpGateway(new HttpClient(new Upstream()), new ContextProvider());
+        await gateway.StartAsync("https://app.example.net", "upstream-secret", null, CancellationToken.None);
+        using var client = new HttpClient();
+
+        using HttpResponseMessage response = await client.GetAsync(new Uri(gateway.Endpoint!, "/other"));
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Equal("localhost", gateway.Endpoint!.Host);
     }
 
     [Fact]
@@ -163,6 +220,7 @@ public class McpGatewayTests
 
         Assert.Equal("10.0.2095.13", (string?)body["result"]!["structuredContent"]!["d365SdkVersion"]);
         Assert.Equal("SalesModel", (string?)body["result"]!["structuredContent"]!["model"]);
+        Assert.Equal("sales-dev", (string?)body["result"]!["structuredContent"]!["xppConfiguration"]);
         Assert.Equal(0, upstream.RequestCount);
     }
 
