@@ -170,7 +170,9 @@ const tableSchema: MergeFn = async (args, ctx, raw) => {
     truncated.localExtensions = { returned: shownExtensions.length, total: localExtensions.length };
   }
 
+  // An older hosted server still sends the table's stored XML; it is never part of the schema answer.
   const result: Record<string, unknown> = { ...base, xrefs, localExtensions: shownExtensions };
+  delete result.raw_xml;
   if (Object.keys(truncated).length > 0) result.truncated = truncated;
   else delete result.truncated;
   return jsonResult(result, hosted.kind === 'answer' ? hosted.extras : [], legWarnings(hosted));

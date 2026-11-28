@@ -334,6 +334,37 @@ describe('detail tool response budgets', () => {
   });
 });
 
+describe('get_table_schema output', () => {
+  it('leaves out the stored XML, the file timestamp and the index row ids', async () => {
+    const d = seedDb([{ type: 'Table', name: 'Xmly', package: 'P', model: 'M', raw_xml: `<AxTable><Name>Xmly</Name>${'<F/>'.repeat(5000)}</AxTable>`, fields: [{ name: 'A', type: 'String' }] }]);
+    try {
+      const text = (await collectMetadataTools(d).get('get_table_schema')!({ tableName: 'Xmly', xrefLimit: 100, maxItems: 1000 })).content[0].text;
+      const table = JSON.parse(text);
+      expect(table).not.toHaveProperty('raw_xml');
+      expect(table).not.toHaveProperty('file_mtime');
+      expect(table).not.toHaveProperty('id');
+      expect(table.fields[0]).not.toHaveProperty('object_id');
+      expect(table.fields[0].name).toBe('A');
+      expect(text).not.toContain('<F/>');
+      expect(text.length).toBeLessThan(2000);
+    } finally {
+      d.close();
+    }
+  });
+
+  it('honours a maxItems below 10 on every list', async () => {
+    const fields = Array.from({ length: 8 }, (_, i) => ({ name: `F${i}`, type: 'String', edt: '', labelId: '', mandatory: false, allowEdit: true }));
+    const d = seedDb([{ type: 'Table', name: 'Small', fields }]);
+    try {
+      const clipped = JSON.parse((await collectMetadataTools(d).get('get_table_schema')!({ tableName: 'Small', xrefLimit: 100, maxItems: 3 })).content[0].text);
+      expect(clipped.fields).toHaveLength(3);
+      expect(clipped.truncated.fields).toEqual({ returned: 3, total: 8 });
+    } finally {
+      d.close();
+    }
+  });
+});
+
 describe('enum and query response budgets', () => {
   it('clips enum values and reports it', async () => {
     const d = seedDb([{ type: 'Enum', name: 'Big' }]);
