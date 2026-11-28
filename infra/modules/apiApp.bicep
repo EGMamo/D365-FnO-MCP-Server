@@ -56,7 +56,9 @@ var appSettings = [
   // Bundle download, hashing and SQLite validation run before the server listens.
   { name: 'WEBSITES_CONTAINER_START_TIME_LIMIT', value: '1800' }
   { name: 'WEBSITE_SWAP_WARMUP_PING_PATH', value: '/health' }
-  { name: 'WEBSITE_SWAP_WARMUP_PING_STATUSES', value: '200' }
+  // 503 is /health while the bundle loads. A swap restarts the source slot, so its warm-up must
+  // accept 503; the Deploy workflow completes a swap only after /health answers 200.
+  { name: 'WEBSITE_SWAP_WARMUP_PING_STATUSES', value: '200,503' }
   { name: 'MCP_TRANSPORT', value: 'http' }
   { name: 'MCP_PORT', value: '8080' }
   { name: 'TRUST_PROXY_HOPS', value: '1' }
